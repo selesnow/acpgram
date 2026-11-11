@@ -52,23 +52,59 @@ function readSecretRaw(question) {
  */
 export function prompter() {
   let rl = null;
-  const open = () => (rl ??= readline.createInterface({ input: stdin, output: stdout, terminal: Boolean(stdin.isTTY), historySize: 0 }));
+  let ended = false; // ввод закончился (конвейер исчерпан, терминала нет)
+  const open = () => {
+    if (rl) return rl;
+    rl = readline.createInterface({ input: stdin, output: stdout, terminal: Boolean(stdin.isTTY), historySize: 0 });
+    const mine = rl;
+    // закрытие не нами (конец ввода): иначе ожидающий вопрос не завершится никогда, а Node упадёт
+    // с «unsettled top-level await»
+    mine.on('close', () => {
+      if (rl === mine) {
+        ended = true;
+        rl = null;
+        mine.abort?.abort();
+      }
+    });
+    return mine;
+  };
   const closeRl = () => {
-    rl?.close();
+    const r = rl;
     rl = null;
+    r?.close();
+  };
+  /** Вопрос, который завершается ошибкой, если ввод закрылся, а не повисает. */
+  const question = async (text) => {
+    if (ended) throw new InputClosedError();
+    const r = open();
+    const ac = new AbortController();
+    r.abort = ac;
+    try {
+      return await r.question(text, { signal: ac.signal });
+    } catch (e) {
+      if (ended || e?.name === 'AbortError') throw new InputClosedError();
+      throw e;
+    }
   };
   return {
-    ask: async (q, def) => ((await open().question(def ? `${q} [${def}]: ` : `${q}: `)).trim() || def || ''),
+    ask: async (q, def) => ((await question(def ? `${q} [${def}]: ` : `${q}: `)).trim() || def || ''),
     /** Секрет: в терминале ввод скрыт; без терминала (ответы подаются конвейером) — обычное чтение строки. */
     secret: async (q) => {
-      if (!stdin.isTTY) return (await open().question(`${q}: `)).trim();
+      if (!stdin.isTTY) return (await question(`${q}: `)).trim();
       closeRl();
       return readSecretRaw(`${q}: `);
     },
     yes: async (q, def = true) => {
-      const a = (await open().question(`${q} [${def ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
+      const a = (await question(`${q} [${def ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
       return a ? ['y', 'yes', 'д', 'да'].includes(a) : def;
     },
     close: closeRl,
   };
+}
+
+/** Ввод закончился раньше, чем мастер получил ответы. */
+export class InputClosedError extends Error {
+  constructor() {
+    super('нет ввода: запустите настройку в терминале — acpgram setup');
+  }
 }

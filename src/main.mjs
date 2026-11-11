@@ -13,7 +13,7 @@ if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
 if (configured()) await import('./bot.mjs');
 else if (process.stdin.isTTY && process.stdout.isTTY) {
   const { runSetup } = await import('./setup.mjs');
-  const r = await runSetup({ fromStart: true });
+  const r = await runSetup({ fromStart: true }).catch((e) => (console.error(`\nНастройка не завершена: ${e.message}`), { ok: false }));
   if (!r.ok) process.exitCode = 1;
   else if (!r.service) {
     // Бот — отдельным процессом: модули настроек (движок по умолчанию, корень проектов, токен) читают окружение

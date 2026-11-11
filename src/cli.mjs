@@ -5,7 +5,8 @@
 //   acpgram update             обновить до последнего релиза (повторный запуск установщика)
 //   acpgram version | help
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const version = () => JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version;
@@ -55,11 +56,14 @@ export function route(argv) {
  * На Linux / macOS установщик сначала скачивается целиком: при ошибке загрузки обновление завершается с ошибкой,
  * а не «успешно» (в `curl | bash` код выхода curl теряется).
  */
-export function updateCommand(platform = process.platform) {
+export function updateCommand(platform = process.platform, env = process.env) {
   const base = `https://raw.githubusercontent.com/${REPO}/main`;
-  return platform === 'win32'
-    ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${base}/install.ps1 | iex`]]
-    : ['sh', ['-c', `f="$(mktemp)" && curl -fsSL ${base}/install.sh -o "$f" && bash "$f"; r=$?; rm -f "$f"; exit $r`]];
+  if (platform !== 'win32') return ['sh', ['-c', `f="$(mktemp)" && curl -fsSL ${base}/install.sh -o "$f" && bash "$f"; r=$?; rm -f "$f"; exit $r`]];
+  // Windows PowerShell — по полному пути: папки WindowsPowerShell может не быть в PATH, а терминал при этом открыт
+  // из меню «Пуск» и работает (так было на ноутбуке: `acpgram update` молча завершался с кодом 1)
+  const root = env.SystemRoot || env.SYSTEMROOT || env.windir || 'C:\\Windows';
+  const ps = win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return [existsSync(ps) ? ps : 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${base}/install.ps1 | iex`]];
 }
 
 /** Окружение для обновления: установщик обновляет именно эту установку (ACPGRAM_HOME), а не папку по умолчанию. */
@@ -85,8 +89,18 @@ if (isMain()) {
     process.exitCode = 2;
   } else {
     // отдельный процесс: так у мастера и службы честный терминал и свой код выхода
+    const before = version();
+    if (r.update) console.log(`Обновляю AcpGram (сейчас ${before}) до последней версии…`);
     const [cmd, args] = r.update ? updateCommand() : [process.execPath, [...NODE_FLAGS, fileURLToPath(new URL(`./${r.run}`, import.meta.url)), ...r.args]];
     const res = spawnSync(cmd, args, { stdio: 'inherit', env: r.update ? updateEnv() : process.env });
+    // никогда не молчим: если процесс не удалось запустить — говорим почему и что делать
+    if (res.error) {
+      console.error(`Не удалось запустить ${cmd}: ${res.error.message}`);
+      if (r.update) console.error(`Обновите вручную:\n  ${process.platform === 'win32' ? `irm https://raw.githubusercontent.com/${REPO}/main/install.ps1 | iex` : `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash`}`);
+    } else if (r.update) {
+      const after = version();
+      console.log(res.status === 0 ? `\nAcpGram: ${before} → ${after}${before === after ? ' (уже последняя версия)' : ''}` : `\nОбновление не завершилось (код ${res.status}), версия ${after}`);
+    }
     process.exitCode = res.status ?? 1;
   }
 }

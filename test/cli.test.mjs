@@ -21,8 +21,10 @@ test('route: команды acpgram', () => {
 });
 
 test('updateCommand / updateEnv: тот же установщик, эта же установка, ошибка загрузки не маскируется', () => {
-  const [win, winArgs] = updateCommand('win32');
-  assert.equal(win, 'powershell');
+  // Windows PowerShell по полному пути: папки WindowsPowerShell может не быть в PATH
+  const [win, winArgs] = updateCommand('win32', { SystemRoot: process.env.SystemRoot || String.raw`C:\Windows` });
+  assert.ok(/powershell(\.exe)?$/i.test(win), win);
+  if (process.platform === 'win32') assert.ok(/System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i.test(win), win);
   assert.ok(winArgs.at(-1).includes('raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex'));
   const [sh, shArgs] = updateCommand('linux');
   assert.equal(sh, 'sh');

@@ -291,7 +291,8 @@ export async function runSetup({ fromStart = false } = {}) {
 
 // запуск напрямую: node src/setup.mjs
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const r = await runSetup().catch((e) => (console.error(e), { ok: false }));
+  // понятная ошибка вместо трассировки (например, ввод закрылся раньше времени)
+  const r = await runSetup().catch((e) => (console.error(`\nНастройка не завершена: ${e.message}`), { ok: false }));
   // без process.exit(): на Windows выход сразу после закрытия readline роняет Node (UV_HANDLE_CLOSING) — даём завершиться самому
   process.exitCode = r.ok ? 0 : 1;
 }
