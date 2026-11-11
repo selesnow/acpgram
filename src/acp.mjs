@@ -55,7 +55,9 @@ export function checkCommand(command, args = ['--version'], timeoutMs = 60_000) 
       clearTimeout(timer);
       resolve({ ok: false, error: e.message });
     });
-    proc.on('exit', (code) => {
+    // 'close', а не 'exit': к 'exit' вывод процесса может быть ещё не дочитан — версия оказалась бы пустой
+    // (и проверка минимальной версии движка пропустила бы старый), так изредка случалось на Linux
+    proc.on('close', (code) => {
       clearTimeout(timer);
       resolve(code === 0 ? { ok: true, version: out.trim() } : { ok: false, error: (err || out).trim().split(/\r?\n/).slice(-3).join(' | ') || `код ${code}` });
     });
