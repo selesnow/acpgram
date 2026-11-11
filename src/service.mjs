@@ -130,11 +130,12 @@ const oemCodePage = () => {
 
 // Вывод читается как байты и декодируется по кодовой странице консоли — только для показа пользователю:
 // логика (есть ли служба, состояние, причина отказа) от текста не зависит, см. winsvc.mjs
-const run = (cmd, args, { dry = false, secretAt = -1, quiet = false } = {}) => {
+// timeout: ни одна команда не должна подвешивать acpgram навсегда (nssm stop ждёт остановки службы сколько придётся)
+const run = (cmd, args, { dry = false, secretAt = -1, quiet = false, timeout = 30_000 } = {}) => {
   const shown = args.map((a, i) => (i === secretAt ? '********' : /\s/.test(a) ? `"${a}"` : a)).join(' ');
   if (!quiet) console.log(`  $ ${cmd} ${shown}`);
   if (dry) return { status: 0, stdout: '', stderr: '' };
-  const r = spawnSync(cmd, args, { windowsHide: true });
+  const r = spawnSync(cmd, args, { windowsHide: true, timeout });
   const text = (b) => decodeOutput(b, PLATFORM === 'win32' ? oemCodePage() : 0).trim();
   return { status: r.status, error: r.error?.code, stdout: text(r.stdout), stderr: text(r.stderr) || r.error?.message || '' };
 };
@@ -207,9 +208,19 @@ async function stopService(nssm, name) {
     const p = probe(name);
     return p.exists === false || p.state === 'STOPPED';
   };
-  run(nssm, ['stop', name], { quiet: true }); // у зависшей службы ответит «не может принимать команды» — это нормально
+  const t0 = Date.now();
+  const secs = () => Math.round((Date.now() - t0) / 1000);
+  if (stopped()) return true;
+  console.log(`  Останавливаю службу ${name}…`);
+  // у зависшей службы nssm ответит «не может принимать команды» — это нормально; ждать его дольше 20 с не будем
+  const s = run(nssm, ['stop', name], { quiet: true, timeout: 20_000 });
+  if (s.error === 'ETIMEDOUT') console.log(`  nssm не вернул управление за 20 с (${secs()} с с начала) — продолжаю сам`);
   for (let i = 0; i < 15; i++) {
-    if (stopped()) return true;
+    if (stopped()) {
+      console.log(`  Служба остановлена за ${secs()} с.`);
+      return true;
+    }
+    if (i === 5 || i === 10) console.log(`  …жду остановки (${secs()} с, состояние: ${probe(name).state ?? 'неизвестно'})`);
     await sleep(1000);
   }
   const pid = servicePid(name);
