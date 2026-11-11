@@ -104,7 +104,10 @@ export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = APP_
     ['set', name, 'AppStdout', log],
     ['set', name, 'AppStderr', log],
     ['set', name, 'AppRotateFiles', '1'],
-    ['set', name, 'AppRotateOnline', '1'],
+    // Ротация лога только при запуске службы. AppRotateOnline=1 заставляет nssm читать вывод бота через pipe своими потоками,
+    // и при остановке nssm.exe зависает в STOP_PENDING (воспроизведено на ноутбуке: служба не останавливается ни штатно,
+    // ни через nssm stop; с 0 — 0,8 с). От AppKillProcessTree и учётной записи это не зависит.
+    ['set', name, 'AppRotateOnline', '0'],
     ['set', name, 'AppRotateBytes', '10485760'],
     // остановка не должна зависать: Ctrl+C боту (он сам завершает агентов), затем окну и потокам — по 2–3 с,
     // после этого nssm завершает процесс вместе со всеми дочерними (зависший движок не держит службу)
@@ -264,6 +267,9 @@ export async function restartService({ name = APP.id } = {}) {
     const p = probe(name);
     if (p.exists === null) return console.log(unknownHint(p)), { ok: false };
     if (p.exists === false) return console.log(`  ❌ Служба ${name} не установлена: acpgram service install`), { ok: false };
+    // службы, установленные до 1.10.9, созданы с AppRotateOnline=1 (из-за него остановка зависает): чиним без переустановки,
+    // новое значение nssm прочитает при запуске
+    run(nssm, ['set', name, 'AppRotateOnline', '0'], { quiet: true });
     if (!(await stopService(nssm, name))) console.log(`  ⚠️ Служба ${name} не остановилась (завис процесс или сама служба). Если запуск не получится — перезагрузите компьютер.`);
     const r = await startAndWait(nssm, name);
     if (r.running) console.log(`  ✅ Служба ${name} перезапущена. ${logHint()}`);

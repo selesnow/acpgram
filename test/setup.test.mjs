@@ -123,6 +123,7 @@ test('nssmCommands: программа отдельно, аргументы в �
   assert.deepEqual(byKey.AppExit, ['Default', 'Restart']);
   assert.deepEqual(byKey.Start, ['SERVICE_AUTO_START']);
   assert.ok(byKey.AppStdout[0].endsWith('service.log') && byKey.AppRotateFiles[0] === '1');
+  assert.deepEqual(byKey.AppRotateOnline, ['0'], 'онлайн-ротация (чтение вывода через pipe) подвешивает nssm.exe при остановке');
   assert.deepEqual(byKey.ObjectName, ['.\\u', 'p@ss']);
   assert.ok(!nssmCommands({ name: 'svc', node: 'n' }).some((c) => c[2] === 'ObjectName'), 'без учётной записи — LocalSystem');
 });
