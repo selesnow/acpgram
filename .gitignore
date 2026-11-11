@@ -1,0 +1,7 @@
+node_modules/
+# настройки с секретами (токен, ключи API) и их копии — никогда в git
+.env
+.env.*
+!.env.example
+*.log
+data/
