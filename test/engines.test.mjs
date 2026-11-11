@@ -28,6 +28,7 @@ test('реестр: у каждого движка полный контракт
   assert.deepEqual(Object.values(ENGINES).filter(isRequired).map((e) => e.id), ['gemini']);
   assert.deepEqual(ENGINES.gemini.args, ['--acp']);
   assert.deepEqual(ENGINES.agy.args, ['acp']);
+  assert.deepEqual(ENGINES.codex.args, []);
 });
 
 test('engineMode: уровни Gemini, неизвестный уровень — чтение, администратор — свой режим', () => {
@@ -44,6 +45,10 @@ test('engineMode: уровни Gemini, неизвестный уровень —
   assert.equal(engineMode(ENGINES.claude, { level: 'неизвестный' }), 'plan');
   assert.equal(engineMode(ENGINES.claude, { admin: true }), 'bypassPermissions');
   assert.equal(engineMode(ENGINES.agy, { admin: true }), 'accept-edits');
+  // codex-acp 2.6.0: режимы из ответа session/new
+  assert.deepEqual(ENGINES.codex.modes, { read: 'read-only', normal: 'workspace-write', full: 'agent-full-access' });
+  assert.equal(engineMode(ENGINES.codex, { level: 'неизвестный' }), 'read-only');
+  assert.equal(engineMode(ENGINES.codex, { admin: true }), 'agent-full-access');
 });
 
 test('доступность: недоступный движок не выбирается, пользователь откатывается на движок по умолчанию', () => {
@@ -52,6 +57,7 @@ test('доступность: недоступный движок не выби�
       { engine: ENGINES.gemini, ok: true },
       { engine: ENGINES.claude, ok: false, error: 'not found' },
       { engine: ENGINES.agy, ok: false, timeout: true }, // медленный, но установлен — считаем доступным
+      { engine: ENGINES.codex, ok: false, error: 'not found' },
     ]);
     assert.equal(isAvailable('claude'), false);
     assert.equal(isAvailable('agy'), true);
@@ -150,6 +156,8 @@ test('modeAllowed: выше режима уровня доступа не пус
   assert.equal(modeAllowed(c, 'что-то-новое', 'bypassPermissions'), false);
   assert.equal(modeAllowed(ENGINES.gemini, 'yolo', 'autoEdit'), false);
   assert.equal(modeAllowed(ENGINES.agy, 'accept-edits', 'default'), false);
+  assert.equal(modeAllowed(ENGINES.codex, 'agent-full-access', 'workspace-write'), false);
+  assert.equal(modeAllowed(ENGINES.codex, 'read-only', 'workspace-write'), true);
 });
 
 test('permissionOptions: без постоянных правил и без выхода из плана выше уровня доступа', () => {

@@ -33,6 +33,19 @@ const AGY_NEW = {
   ],
 };
 
+test('parseCatalog: Codex (codex-acp 2.6.0) — модель и reasoning_effort из configOptions', () => {
+  const res = { configOptions: [
+    { id: 'model', currentValue: 'gpt-6.1-sol', options: [{ value: 'gpt-6.1-sol', name: '6.1 Sol' }, { value: 'gpt-6-luna', name: '6 Luna' }] },
+    { id: 'reasoning_effort', currentValue: 'low', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] },
+  ] };
+  const c = parseCatalog(ENGINES.codex, res);
+  assert.deepEqual(c.models.map((m) => m.id), ['gpt-6.1-sol', 'gpt-6-luna']);
+  assert.deepEqual(c.efforts.map((e) => e.id), ['low', 'high']);
+  assert.equal(c.defaultModel, 'gpt-6.1-sol');
+  assert.equal(autoValue(ENGINES.codex, c, 'model'), 'gpt-6.1-sol');
+  assert.deepEqual(selectionRequest(ENGINES.codex, 's1', 'effort', 'high'), ['session/set_config_option', { sessionId: 's1', configId: 'reasoning_effort', value: 'high' }]);
+});
+
 test('parseCatalog: модели и уровни рассуждений каждого движка, «Авто» агента — не в списке', () => {
   const g = parseCatalog(ENGINES.gemini, GEMINI_NEW);
   assert.deepEqual(g.models.map((m) => m.id), ['gemini-3.1-pro-preview-customtools', 'gemini-3.8-flash']);

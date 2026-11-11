@@ -1,4 +1,4 @@
-// Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI) через ACP.
+// Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex) через ACP.
 // Доступ: главный администратор (ALLOWED_USER_ID) и сотрудники, которым он выдал доступ. Остальным бот не отвечает,
 // кроме запроса доступа администратору.
 import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './engines.mjs';
@@ -78,7 +78,7 @@ async function handleText(st, text) {
 async function setupCommands() {
   const common = [
     { command: 'project', description: 'Выбрать проект (папку), в которой работает агент' },
-    { command: 'engine', description: 'Выбрать движок: Gemini CLI, Claude Code, Antigravity CLI' },
+    { command: 'engine', description: 'Выбрать движок: Gemini CLI, Claude Code, Antigravity CLI, Codex' },
     { command: 'model', description: 'Выбрать модель и уровень рассуждений' },
     { command: 'new', description: 'Начать новый диалог (новая сессия агента)' },
     { command: 'sessions', description: 'Вернуться к прошлой сессии в этом проекте' },
@@ -140,7 +140,7 @@ async function handleUpdate(u) {
 async function main() {
   // все движки проверяем параллельно; без движка по умолчанию (DEFAULT_ENGINE) бот не запускается, остальные — по возможности
   const asked = process.env.DEFAULT_ENGINE?.trim().toLowerCase();
-  if (asked && asked !== DEFAULT_ENGINE) log(`⚠️ DEFAULT_ENGINE=${asked} не распознан (gemini | claude | agy), используется ${DEFAULT_ENGINE}`);
+  if (asked && asked !== DEFAULT_ENGINE) log(`⚠️ DEFAULT_ENGINE=${asked} не распознан (gemini | claude | agy | codex), используется ${DEFAULT_ENGINE}`);
   const checks = await checkEngines();
   setAvailability(checks);
   for (const r of checks) {

@@ -2,7 +2,7 @@
 
 **English** · [Русский](README.ru.md)
 
-A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code** and **Antigravity CLI**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
+A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI** and **OpenAI Codex**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
 
 - No npm dependencies — plain Node.js 24 (built-in `node:sqlite`, `fetch`).
 - Windows, Linux and macOS. Tested on Windows Server and Linux (Ubuntu in WSL); macOS uses the same code as Linux.
@@ -14,7 +14,7 @@ A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code** and *
 
 - **Streaming replies** in a Telegram draft with a stop button: the agent's thoughts, the steps it takes (reading files, running commands, searching, editing) and the elapsed time, then the answer itself.
 - **Rich final answer** — headings, lists, tables, code blocks — with a collapsible "work log" of every step and a footer showing the engine, the actual model, reasoning level, tokens, cost (Claude Code) and time.
-- **Three engines, one interface** — `/engine` switches between Gemini CLI, Claude Code and Antigravity CLI; the default engine is set in `.env`.
+- **Four engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI and Codex; the default engine is set in `.env`.
 - **Model and reasoning level** — `/model` lists the models the agent itself reports (plus `effort` for Claude Code and `thought_level` for Antigravity); the choice is remembered per user and per engine.
 - **Permission requests as buttons** — "Allow", "Allow for this session", "Reject". Options that would persist a rule forever or raise the session above the user's access level are never shown.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
@@ -29,6 +29,7 @@ A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code** and *
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini --acp` | `npm i -g @google/gemini-cli` | `GEMINI_API_KEY` or Gemini CLI login |
 | [Claude Code](https://www.anthropic.com/claude-code) | `claude-agent-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)) | `npm i -g @agentclientprotocol/claude-agent-acp` | `ANTHROPIC_API_KEY` or Claude Code login |
 | [Antigravity CLI](https://antigravity.google/docs/cli/acp/) 1.5+ | `agy acp` | see Antigravity docs | Google sign-in once: `agy acp --login` |
+| [OpenAI Codex](https://github.com/openai/codex) | `codex-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)) | `npm i -g @agentclientprotocol/codex-acp` (Codex CLI required) | `OPENAI_API_KEY` or `codex login`; on Windows `read-only`/`workspace-write` need a working Codex sandbox |
 
 Only the default engine (`DEFAULT_ENGINE`, Gemini CLI unless set) is required; the others are optional — engines that are not installed are simply not offered.
 
@@ -100,7 +101,7 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 |---|---|---|
 | `/start` | everyone | welcome screen: engine, model, access level, project |
 | `/project [name or path]` | everyone | choose the working folder |
-| `/engine [gemini, claude, agy]` | everyone | choose the engine |
+| `/engine [gemini, claude, agy, codex]` | everyone | choose the engine |
 | `/model` | everyone | choose the model and reasoning level |
 | `/new` | everyone | new session |
 | `/sessions` | everyone | resume a previous session in this project |
@@ -114,12 +115,12 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 
 The main admin is set by `ALLOWED_USER_ID`. Everyone else gets access through an invite link or by asking (the request goes to the admin with buttons).
 
-| Level | Gemini CLI | Claude Code | Antigravity CLI | Meaning |
-|---|---|---|---|---|
-| Read | `plan` | `plan` | `plan` | the agent only reads and analyzes |
-| Normal | `default` | `default` | `default` | permission requests go to the user |
-| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | edits without confirmation (Claude Code: no confirmations at all) |
-| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE` |
+| Level | Gemini CLI | Claude Code | Antigravity CLI | Codex | Meaning |
+|---|---|---|---|---|---|
+| Read | `plan` | `plan` | `plan` | `read-only` | the agent only reads and analyzes |
+| Normal | `default` | `default` | `default` | `workspace-write` | permission requests go to the user |
+| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | edits without confirmation (Claude Code: no confirmations at all) |
+| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE` |
 
 New teammates get only the default engine; the admin grants other engines and can restrict models per user and per engine. At most `MAX_AGENTS` (3) teammate agents run at once across all engines (the admin is not counted); idle sessions close after `IDLE_MINUTES` (30).
 
@@ -132,11 +133,11 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `TELEGRAM_BOT_TOKEN` | yes | bot token |
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
-| `DEFAULT_ENGINE` | no | `gemini` (default), `claude` or `agy`; the bot does not start if this engine is not installed |
+| `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy` or `codex`; the bot does not start if this engine is not installed |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
-| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
-| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE` | no | admin session mode per engine |
+| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
+| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE` | no | admin session mode per engine |
 | `MAX_AGENTS` | no | concurrent teammate agents (3) |
 | `IDLE_MINUTES` | no | idle session timeout, minutes (30) |
 | `ANIMATED_ICONS` | no | `0` — plain emoji instead of animated icons in drafts |

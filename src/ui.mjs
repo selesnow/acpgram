@@ -61,6 +61,8 @@ const TOOLS = {
   Agent: { label: 'Подагент', icon: '🤖', anim: 'tool' },
   // Antigravity CLI
   run_command: T.shell,
+  // Codex
+  exec_command: T.shell,
   view_file: T.read,
   list_dir: T.folder,
   find_by_name: T.find,
@@ -356,7 +358,7 @@ const button = (text, data) => `<tg-button type="callback_data" data="${data}">$
 export function startView({ level, project, engine, model = 'Авто', isAdmin, note }) {
   const commands = [
     '- /project — выбрать проект (папку), в которой работает агент',
-    '- /engine — выбрать движок: Gemini CLI, Claude Code, Antigravity CLI',
+    '- /engine — выбрать движок: Gemini CLI, Claude Code, Antigravity CLI, Codex',
     '- /model — выбрать модель и уровень рассуждений',
     '- /new — новая сессия',
     '- /sessions — вернуться к прошлой сессии в этом проекте',

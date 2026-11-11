@@ -38,12 +38,14 @@ const LAYOUT = [
   ['TELEGRAM_BOT_TOKEN', 'Токен бота от @BotFather (секрет: файл не публикуйте и не коммитьте)'],
   ['ALLOWED_USER_ID', 'Telegram ID главного администратора'],
   ['PROJECTS_ROOT', 'Корень проектов (необязательно): без него проектом может быть любая папка, по умолчанию домашняя'],
-  ['DEFAULT_ENGINE', 'Движок по умолчанию: gemini | claude | agy'],
+  ['DEFAULT_ENGINE', 'Движок по умолчанию: gemini | claude | agy | codex'],
   ['GEMINI_COMMAND', null],
   ['CLAUDE_COMMAND', null],
   ['AGY_COMMAND', null],
+  ['CODEX_COMMAND', null],
   ['GEMINI_API_KEY', 'Ключи API передаются агентам через окружение бота'],
   ['ANTHROPIC_API_KEY', null],
+  ['OPENAI_API_KEY', null],
 ];
 
 /**
@@ -254,6 +256,7 @@ export async function runSetup({ fromStart = false } = {}) {
     };
     if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
     if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', ' — Claude Code по API, без него по подписке');
+    if (available.includes('codex')) await askKey('OPENAI_API_KEY', ' — Codex по API, без него по входу ChatGPT (codex login)');
     if (available.includes('agy')) console.log('  Antigravity CLI: ключа API нет — войдите один раз: agy acp --login');
 
     // 6. запись

@@ -129,10 +129,30 @@ export const ENGINES = Object.assign(Object.create(null), {
     toolName: genericToolName,
     toolDescription: (u) => u.rawInput?.toolSummary || u.args?.toolSummary || '',
   },
+  codex: {
+    id: 'codex',
+    label: 'OpenAI Codex',
+    short: 'Codex',
+    envVar: 'CODEX_COMMAND',
+    defaultCommand: IS_WIN ? 'codex-acp.cmd' : 'codex-acp', // мост ACP: npm i -g @agentclientprotocol/codex-acp
+    args: [],
+    versionArgs: ['--version'],
+    install: 'npm i -g @agentclientprotocol/codex-acp (нужен установленный Codex CLI и вход: codex login)',
+    // «Полный» — доступ ко всему без подтверждений; «workspace-write» — правки в рабочей папке, остальное по запросу
+    modes: { read: 'read-only', normal: 'workspace-write', full: 'agent-full-access' },
+    modeRank: ['read-only', 'workspace-write', 'agent', 'agent-full-access'],
+    // модель и уровень рассуждений — configOptions model / reasoning_effort, смена — session/set_config_option
+    modelSource: 'config',
+    effortConfig: 'reasoning_effort',
+    adminMode: process.env.CODEX_ADMIN_MODE || 'agent-full-access',
+    cleanText: (s) => s,
+    toolName: genericToolName,
+    toolDescription: (u) => u.rawInput?.description || '',
+  },
 });
 Object.freeze(ENGINES);
 
-/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy), иначе Gemini. */
+/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy | codex), иначе Gemini. */
 export const DEFAULT_ENGINE = ENGINES[process.env.DEFAULT_ENGINE?.trim().toLowerCase()] ? process.env.DEFAULT_ENGINE.trim().toLowerCase() : 'gemini';
 
 /** Движок по умолчанию обязателен: без него бот не запускается. Остальные — по возможности. */

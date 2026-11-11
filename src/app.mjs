@@ -7,7 +7,7 @@ export const APP = {
   /** Название для людей. */
   label: 'AcpGram',
   /** Описание службы. */
-  description: 'Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI) по Agent Client Protocol',
+  description: 'Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex) по Agent Client Protocol',
   /** Метка launchd (macOS). */
   launchdLabel: 'io.github.acpgram',
 };

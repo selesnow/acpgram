@@ -13,7 +13,7 @@ const version = () => JSON.parse(readFileSync(fileURLToPath(new URL('../package.
 const REPO = 'selesnow/acpgram';
 const NODE_FLAGS = ['--disable-warning=ExperimentalWarning'];
 
-export const HELP = `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI)
+export const HELP = `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex)
 
   acpgram [start]          запустить бота (первый запуск без настроек откроет мастер)
   acpgram setup            мастер настройки

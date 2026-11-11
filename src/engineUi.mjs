@@ -6,7 +6,7 @@ import { endAgent, engineOf, isAdmin, saveEngine } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { engineMenu } from './ui.mjs';
 
-/** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity». */
+/** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity», «codex». */
 export const findEngine = (q) => {
   const s = q.trim().toLowerCase();
   return Object.values(ENGINES).find((e) => [e.id, e.short.toLowerCase(), e.label.toLowerCase()].includes(s)) ?? null;
