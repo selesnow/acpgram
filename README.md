@@ -81,7 +81,9 @@ Autostart with the system and restart on failure — one command:
 
 Also: `npm run service:status`, `npm run service:uninstall`. Options go after `--` (otherwise npm takes them for itself): `npm run service:install -- --dry-run` prints the commands without running them, `-- --name <name>` sets another service name (default `acpgram`; Windows and Linux), `-- --system` installs a Windows service under LocalSystem without a terminal. Logs: `data/service.log` (Linux: `journalctl --user -u acpgram -f`).
 
-> On Windows the account password is passed to `nssm` as a command-line argument — this is how nssm grants the "Log on as a service" right. It is never printed or stored by the bot and is visible in the process list only to administrators and the same user for the fraction of a second the command runs. Without a terminal the service can only be installed with `--system` (LocalSystem).
+> On Windows the service needs your account's **password**: if you sign in with a Microsoft account, that is the Microsoft account password, not the Windows PIN (with a PIN the service fails to log on — the wizard detects this and asks again). Accounts without a password cannot run services.
+>
+> The account password is passed to `nssm` as a command-line argument — this is how nssm grants the "Log on as a service" right. It is never printed or stored by the bot and is visible in the process list only to administrators and the same user for the fraction of a second the command runs. Without a terminal the service can only be installed with `--system` (LocalSystem).
 
 ### Docker
 

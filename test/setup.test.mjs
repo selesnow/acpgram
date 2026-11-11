@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { envValue, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
-import { launchdPlist, nssmCommands, systemdUnit, windowsAccount } from '../src/service.mjs';
+import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, systemdUnit, windowsAccount } from '../src/service.mjs';
+import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 
 test('serializeEnv: порядок, комментарии, прочие ранее заданные, пустые не пишутся; Node читает обратно то же', () => {
   const values = {
@@ -138,4 +139,24 @@ test('windowsAccount: локальная учётная запись — «.\\us
   assert.equal(windowsAccount({ USERDOMAIN: 'srv1', COMPUTERNAME: 'SRV1' }, 'jdoe'), String.raw`.\jdoe`, 'регистр не важен');
   assert.equal(windowsAccount({ USERDOMAIN: 'CORP', COMPUTERNAME: 'SRV1' }, 'jdoe'), String.raw`CORP\jdoe`);
   assert.equal(windowsAccount({}, 'jdoe'), String.raw`.\jdoe`);
+});
+
+test('serviceErrorCode: код ошибки запуска службы из вывода sc.exe на любом языке Windows', () => {
+  assert.equal(serviceErrorCode('[SC] StartService FAILED 1069:\r\n\r\nThe service did not start due to a logon failure.'), LOGON_FAILURE);
+  assert.equal(serviceErrorCode('[SC] StartService: ОШИБКА 1069:\r\n\r\nСлужба не запущена из-за ошибки входа в систему.'), 1069);
+  assert.equal(serviceErrorCode('[SC] StartService FAILED 1056:\r\n\r\nAn instance of the service is already running.'), 1056);
+  assert.equal(serviceErrorCode('        STATE              : 1  STOPPED\r\n        WIN32_EXIT_CODE    : 1077  (0x435)'), 1077);
+  assert.equal(serviceErrorCode('        WIN32_EXIT_CODE    : 0  (0x0)'), null, 'ноль — не ошибка');
+  assert.equal(serviceErrorCode(''), null);
+});
+
+test('версии движков: Antigravity младше 1.5 не подходит (нет agy acp)', () => {
+  assert.deepEqual(parseVersion('1.0.13'), [1, 0, 13]);
+  assert.deepEqual(parseVersion('agy version 1.5.5 (abc)'), [1, 5, 5]);
+  assert.deepEqual(parseVersion('v24.1'), [24, 1, 0]);
+  assert.equal(parseVersion('нет версии'), null);
+  assert.equal(versionAtLeast('1.0.13', '1.5.0'), false);
+  assert.equal(versionAtLeast('1.5.0', '1.5.0'), true);
+  assert.equal(versionAtLeast('1.10.2', '1.5.0'), true, 'сравнение чисел, а не строк');
+  assert.equal(versionAtLeast('что-то', '1.5.0'), true, 'неизвестная версия не мешает запуску');
 });

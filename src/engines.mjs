@@ -115,6 +115,9 @@ export const ENGINES = Object.assign(Object.create(null), {
     args: ['acp'],
     versionArgs: ['--version'],
     install: 'Antigravity CLI 1.5+ (с подкомандой acp); войдите один раз: agy acp --login',
+    // подкоманда `agy acp` появилась в 1.5: более старая версия запускается, но работать с ботом не может
+    minVersion: '1.5.0',
+    update: 'agy update',
     // режима без подтверждений в ACP у agy нет, «Полный» — правки файлов без подтверждений
     modes: { read: 'plan', normal: 'default', full: 'accept-edits' },
     modeRank: ['plan', 'default', 'accept-edits'],
@@ -275,15 +278,35 @@ export function createAgent(engine, opts) {
   return agent;
 }
 
+/** Номер версии x.y.z из вывода `--version` («1.5.5», «agy 1.0.13», «v24.1.0») или null. */
+export function parseVersion(text) {
+  const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text ?? ''));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null;
+}
+
+/** a >= b для версий x.y.z (строки или массивы). Неизвестная версия считается подходящей — не мешаем запуску. */
+export function versionAtLeast(a, b) {
+  const x = Array.isArray(a) ? a : parseVersion(a);
+  const y = Array.isArray(b) ? b : parseVersion(b);
+  if (!x || !y) return true;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return true;
+}
+
 /**
  * Проверяет при старте, какие движки запускаются (`<команда> --version`), параллельно.
- * @returns {Promise<Array<{engine: Engine, command: string} & Awaited<ReturnType<typeof checkCommand>>>>}
+ * Движок с версией ниже minVersion — недоступен (ok: false, tooOld: true): он запускается, но по ACP работать не может.
+ * @returns {Promise<Array<{engine: Engine, command: string, tooOld?: boolean} & Awaited<ReturnType<typeof checkCommand>>>>}
  */
 export function checkEngines(engines = Object.values(ENGINES), timeoutMs) {
   return Promise.all(
     engines.map(async (engine) => {
       const command = engineCommand(engine);
-      return { engine, command, ...(await checkCommand(command, engine.versionArgs, timeoutMs)) };
+      const r = { engine, command, ...(await checkCommand(command, engine.versionArgs, timeoutMs)) };
+      if (r.ok && engine.minVersion && !versionAtLeast(r.version, engine.minVersion)) {
+        return { ...r, ok: false, tooOld: true, error: `версия ${r.version}, нужна ${engine.minVersion}+${engine.update ? ` — обновите: ${engine.update}` : ''}` };
+      }
+      return r;
     }),
   );
 }

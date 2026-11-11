@@ -1,6 +1,6 @@
 // Регистрация бота как службы: автозапуск с системой и перезапуск при сбое.
 //   Windows — служба через nssm (нужны права администратора), Linux — systemd --user, macOS — launchd (LaunchAgent).
-// npm run service:install | service:uninstall | service:status   (флаги: --name <имя>, --dry-run)
+// acpgram service install | uninstall | status  (или npm run service:…; флаги: --name <имя>, --dry-run, --system)
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join, posix } from 'node:path';
@@ -108,9 +108,9 @@ export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = APP_
 
 // ---------- выполнение ----------
 
-const run = (cmd, args, { dry = false, secretAt = -1 } = {}) => {
+const run = (cmd, args, { dry = false, secretAt = -1, quiet = false } = {}) => {
   const shown = args.map((a, i) => (i === secretAt ? '********' : /\s/.test(a) ? `"${a}"` : a)).join(' ');
-  console.log(`  $ ${cmd} ${shown}`);
+  if (!quiet) console.log(`  $ ${cmd} ${shown}`);
   if (dry) return { status: 0, stdout: '', stderr: '' };
   const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true });
   // nssm пишет в UTF-16
@@ -134,6 +134,42 @@ export function windowsAccount(env = process.env, username = userInfo().username
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Код Windows «служба не запущена из-за ошибки входа» (неверный пароль, PIN вместо пароля, вход без пароля запрещён). */
+export const LOGON_FAILURE = 1069;
+
+/**
+ * Код ошибки запуска службы из вывода sc.exe (не переводится ни на одном языке Windows):
+ * `sc start` → «[SC] StartService FAILED 1069:», `sc query` → «WIN32_EXIT_CODE : 1077».
+ * Ошибку входа (1069) возвращает именно вызов запуска: процесс службы при ней не стартует вовсе.
+ */
+export function serviceErrorCode(scOutput) {
+  // «FAILED» на локализованной Windows может быть переведено — берём число после StartService
+  const m = /StartService\D{0,40}?(\d{3,5})\s*:/.exec(scOutput ?? '') ?? /WIN32_EXIT_CODE\s*:\s*(\d+)/.exec(scOutput ?? '');
+  const code = m ? Number(m[1]) : null;
+  return code || null;
+}
+
+/** Учётная запись Microsoft (вход по почте Microsoft) или локальная — от этого зависит, какой пароль нужен службе. */
+function isMicrosoftAccount(username = userInfo().username) {
+  const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-LocalUser -Name '${username.replace(/'/g, "''")}').PrincipalSource`], { encoding: 'utf8', windowsHide: true });
+  return /MicrosoftAccount/i.test(r.stdout ?? '');
+}
+
+/** Запускает службу (sc.exe — ради кода ошибки) и ждёт до 10 с, пока nssm не покажет RUNNING. */
+async function startAndWait(nssm, name) {
+  const s = run('sc.exe', ['start', name]);
+  const startCode = serviceErrorCode(`${s.stdout}\n${s.stderr}`);
+  let state = '';
+  // при ошибке запуска (кроме «уже запущена» — 1056) ждать нечего
+  for (let i = 0; i < 10 && !/RUNNING/.test(state) && (!startCode || startCode === 1056); i++) {
+    await sleep(1000);
+    state = run(nssm, ['status', name], { quiet: true }).stdout;
+  }
+  const running = /RUNNING/.test(state);
+  const code = running ? 0 : startCode ?? serviceErrorCode(run('sc.exe', ['query', name], { quiet: true }).stdout);
+  return { running, state: state || 'SERVICE_STOPPED', code };
+}
+
 /**
  * Регистрирует и запускает службу. prompt — диалог (prompt.mjs): учётная запись Windows, переустановка существующей службы.
  * Без диалога на Windows служба ставится от LocalSystem только с allowSystem, иначе — ошибка с подсказкой.
@@ -150,13 +186,13 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       return { ok: false };
     }
     if (!dry && !isWinAdmin()) {
-      console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора» и выполните npm run service:install.');
+      console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора» и выполните acpgram service install.');
       return { ok: false };
     }
     // служба уже есть — переустанавливаем только с подтверждения
     if (!dry && run(nssm, ['status', name]).status === 0) {
       if (!prompt || !(await prompt.yes(`  Служба ${name} уже установлена. Переустановить (она будет остановлена и создана заново)?`, false))) {
-        console.log(`  Оставляю как есть. Перезапуск: nssm restart ${name}; удалить: npm run service:uninstall`);
+        console.log(`  Оставляю как есть. Перезапуск: nssm restart ${name}; удалить: acpgram service uninstall`);
         return { ok: false };
       }
       run(nssm, ['stop', name]);
@@ -201,19 +237,34 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       console.log('  (пробный прогон: команды показаны, но не выполнены)');
       return { ok: true };
     }
-    const s = run(nssm, ['start', name]);
-    // убеждаемся, что служба действительно работает (бот мог сразу упасть: нет .env, движок не запускается)
-    let state = '';
-    for (let i = 0; i < 10 && !/RUNNING/.test(state); i++) {
-      await sleep(1000);
-      state = run(nssm, ['status', name]).stdout;
+    // убеждаемся, что служба действительно работает (бот мог сразу упасть, Windows мог не пустить учётную запись)
+    let r = await startAndWait(nssm, name);
+    // Ошибка входа: чаще всего это PIN вместо пароля учётной записи Microsoft. Пароль можно ввести заново —
+    // служба уже установлена, меняем только учётную запись.
+    for (let attempt = 1; !r.running && r.code === LOGON_FAILURE && account && prompt && attempt <= 3; attempt++) {
+      const msa = isMicrosoftAccount();
+      console.log(`  ❌ Windows не пустил службу под ${account.user}: неверное имя пользователя или пароль.`);
+      if (msa) console.log('     Вы входите через учётную запись Microsoft: нужен пароль от неё (от почты Microsoft), а не PIN-код для входа в Windows.');
+      else console.log('     Нужен пароль учётной записи Windows. Если у учётной записи нет пароля, служба под ней работать не может — задайте пароль.');
+      const password = await prompt.secret(`  Пароль для ${account.user} (Enter — не повторять)`);
+      if (!password) break;
+      const set = run(nssm, ['set', name, 'ObjectName', account.user, password], { secretAt: 4 });
+      if (set.status !== 0) {
+        console.log(`  ❌ ${set.stderr || set.stdout}`);
+        continue;
+      }
+      r = await startAndWait(nssm, name);
     }
-    if (!/RUNNING/.test(state)) {
-      console.log(`  ❌ Служба ${name} установлена, но не запущена (${state || s.stderr || s.stdout}). Лог: ${join(APP_DIR, 'data', 'service.log')}`);
-      return { ok: false };
+    const log = join(APP_DIR, 'data', 'service.log');
+    if (!r.running) {
+      console.log(`  ❌ Служба ${name} установлена, но не запущена (${r.state}${r.code ? `, код Windows ${r.code}` : ''}).`);
+      if (r.code === LOGON_FAILURE) {
+        console.log(`     Задайте верный пароль и запустите (терминал от имени администратора):\n       nssm set ${name} ObjectName ${account?.user ?? windowsAccount()} "<пароль>"\n       nssm start ${name}`);
+      } else console.log(`     Подробности — в логе бота: ${log}`);
+      return { ok: false, installed: true };
     }
-    console.log(`  ✅ Служба ${name} работает. Лог: ${join(APP_DIR, 'data', 'service.log')}. Управление: nssm restart|stop ${name}`);
-    return { ok: true };
+    console.log(`  ✅ Служба ${name} работает. Лог: ${log}. Управление: nssm restart|stop ${name}`);
+    return { ok: true, installed: true };
   }
 
   if (PLATFORM === 'linux') {

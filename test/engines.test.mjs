@@ -176,3 +176,15 @@ test('ENGINES без прототипа: id из кнопки вроде constru
   assert.equal(engineMode(ENGINES.claude, { level: 'constructor' }), 'plan');
   assert.throws(() => { ENGINES.evil = {}; });
 });
+
+test('checkEngines: слишком старая версия движка — недоступен, с подсказкой обновления', async () => {
+  // «движок» — node: его версия v24 «старше» минимальной 99 не будет
+  const old = { id: 'old', label: 'Old', envVar: 'TEST_OLD_CMD', defaultCommand: process.execPath, versionArgs: ['--version'], minVersion: '99.0.0', update: 'old update' };
+  const fresh = { ...old, id: 'fresh', minVersion: '1.0.0' };
+  const [a, b] = await checkEngines([old, fresh]);
+  assert.equal(a.ok, false);
+  assert.equal(a.tooOld, true);
+  assert.match(a.error, /нужна 99\.0\.0\+ — обновите: old update/);
+  assert.equal(b.ok, true);
+  assert.equal(ENGINES.agy.minVersion, '1.5.0');
+});

@@ -226,6 +226,10 @@ export async function runSetup({ fromStart = false } = {}) {
         // полный путь: под службой PATH пользователя может быть недоступен
         env[e.envVar] = found[e.id];
         ok(`${e.label} ${c.version ?? ''} — ${found[e.id]}`);
+      } else if (c?.tooOld) {
+        // запускается, но слишком старый (у Antigravity до 1.5 нет `agy acp`) — бот его не предложит
+        env[e.envVar] = found[e.id];
+        warn(`${e.label}: ${c.error}. Пока не обновите, бот этот движок не предложит`);
       } else console.log(`  ❌ ${e.label} не найден. Установка: ${e.install}`);
     }
     if (!available.length) warn('ни один движок не найден — установите хотя бы один и запустите npm run setup ещё раз');
@@ -239,14 +243,15 @@ export async function runSetup({ fromStart = false } = {}) {
 
     // 5. ключи API
     step(5, 'Ключи API (необязательно: Enter — пропустить или оставить текущий)');
-    if (available.includes('gemini')) {
-      const v = await p.secret(`  GEMINI_API_KEY${env.GEMINI_API_KEY ? ' (задан)' : process.env.GEMINI_API_KEY ? ' (есть в окружении)' : ''}`);
-      if (v) env.GEMINI_API_KEY = v;
-    }
-    if (available.includes('claude')) {
-      const v = await p.secret(`  ANTHROPIC_API_KEY — Claude Code по API, без него по подписке${env.ANTHROPIC_API_KEY ? ' (задан)' : process.env.ANTHROPIC_API_KEY ? ' (есть в окружении)' : ''}`);
-      if (v) env.ANTHROPIC_API_KEY = v;
-    }
+    const askKey = async (name, hint) => {
+      const v = await p.secret(`  ${name}${hint}${env[name] ? ' (задан)' : process.env[name] ? ' (есть в окружении)' : ''}`);
+      if (v) env[name] = v;
+      // Ключ есть только в переменных окружения пользователя: служба (Windows) их не видит, даже работая от этого
+      // пользователя, — предлагаем сохранить в .env.
+      else if (!env[name] && process.env[name] && (await p.yes(`    Сохранить ${name} из окружения в .env (служба не видит переменные окружения пользователя)?`))) env[name] = process.env[name];
+    };
+    if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
+    if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', ' — Claude Code по API, без него по подписке');
     if (available.includes('agy')) console.log('  Antigravity CLI: ключа API нет — войдите один раз: agy acp --login');
 
     // 6. запись
@@ -276,8 +281,8 @@ export async function runSetup({ fromStart = false } = {}) {
       const { installService } = await import('./service.mjs');
       const r = await installService({ prompt: p });
       if (r.ok) return { ok: true, service: true };
-      warn('служба не зарегистрирована — бот можно запустить вручную: npm start');
-    } else console.log(`  Запуск вручную: npm start   ·   служба позже: npm run service:install`);
+      warn(r.installed ? 'служба зарегистрирована, но не запустилась (см. выше) — бот можно запустить вручную: acpgram' : 'служба не зарегистрирована — бот можно запустить вручную: acpgram');
+    } else console.log('  Запуск вручную: acpgram   ·   служба позже: acpgram service install');
     return { ok: true, service: false };
   } finally {
     p.close();
