@@ -1,0 +1,83 @@
+# Release on a version tag (v1.10.0): tests on all OSes -> archives + SHA256SUMS -> GitHub Release ->
+# both installers are checked on real Windows / Linux / macOS against the release just published.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm test
+
+  release:
+    name: Publish release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package.json version
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$GITHUB_REF_NAME" ]; then echo "::error::tag $GITHUB_REF_NAME != package.json $VERSION"; exit 1; fi
+      - name: Build archives
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix=acpgram/ -o "dist/acpgram-$GITHUB_REF_NAME.tar.gz" "$GITHUB_REF_NAME"
+          git archive --format=zip --prefix=acpgram/ -o "dist/acpgram-$GITHUB_REF_NAME.zip" "$GITHUB_REF_NAME"
+          cd dist && sha256sum acpgram-* > SHA256SUMS && cat SHA256SUMS
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git log -1 --format=%B "$GITHUB_REF_NAME" | grep -v '^Co-Authored-By:' > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "AcpGram $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+
+  installers:
+    name: Installer (${{ matrix.os }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ACPGRAM_VERSION: ${{ github.ref_name }}
+      ACPGRAM_NO_SETUP: '1'
+      ACPGRAM_YES: '1'
+    steps:
+      - name: install.sh (fresh install, then update)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh"
+          curl -fsSL "$URL" | bash
+          echo 'KEEP=1' > "$HOME/.local/share/acpgram/.env"
+          curl -fsSL "$URL" | bash
+          grep -q 'KEEP=1' "$HOME/.local/share/acpgram/.env"
+          test "$("$HOME/.local/bin/acpgram" version)" = "${GITHUB_REF_NAME#v}"
+      - name: install.ps1 (fresh install, then update)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $url = "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.ps1"
+          irm $url | iex
+          Set-Content -Path "$env:LOCALAPPDATA\acpgram\.env" -Value 'KEEP=1'
+          irm $url | iex
+          if (-not (Select-String -Path "$env:LOCALAPPDATA\acpgram\.env" -Pattern 'KEEP=1' -Quiet)) { throw '.env was not kept on update' }
+          $v = & "$env:LOCALAPPDATA\acpgram\bin\acpgram.cmd" version
+          if ($v -ne $env:GITHUB_REF_NAME.TrimStart('v')) { throw "version $v != $env:GITHUB_REF_NAME" }

@@ -34,15 +34,32 @@ Only the default engine (`DEFAULT_ENGINE`, Gemini CLI unless set) is required; t
 
 ## Quick start
 
-Requirements: **Node.js 24+**, at least one engine from the table above, and a Telegram bot token from [@BotFather](https://t.me/BotFather) (Bot API 10.1+ — rich messages and drafts).
+You need at least one engine from the table above and a Telegram bot token from [@BotFather](https://t.me/BotFather) (Bot API 10.1+ — rich messages and drafts). Install with one command:
 
-```bash
-git clone https://github.com/selesnow/acpgram.git
-cd acpgram
-npm start          # the first start without .env opens the setup wizard
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
 ```
 
-The **setup wizard** (`npm run setup`, safe to re-run — current values are suggested):
+**Linux / macOS**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
+```
+
+The installer downloads the latest [release](https://github.com/selesnow/acpgram/releases) (checksum verified) into `%LOCALAPPDATA%\acpgram` or `~/.local/share/acpgram`, installs a private Node.js 24 if yours is missing or older (official build, checksum verified, no admin rights), adds the `acpgram` command to your PATH and starts the setup wizard. Run it again — or `acpgram update` — to update; your settings and data are kept.
+
+```text
+acpgram                    start the bot
+acpgram setup              settings wizard
+acpgram service install    run as a service (also: status, uninstall)
+acpgram update             update to the latest release
+```
+
+From source instead (Node.js 24+): `git clone https://github.com/selesnow/acpgram.git && cd acpgram && npm start` — npm scripts mirror the commands: `npm run setup`, `npm run service:install`.
+
+The **setup wizard** (`acpgram setup` / `npm run setup`, safe to re-run — current values are suggested):
 
 1. bot token — checked right away with `getMe`;
 2. main admin — just send any message to your bot, the wizard picks up your Telegram ID;
@@ -131,7 +148,10 @@ npm test     # node:test, no dependencies, no Telegram
 ```
 
 ```
+install.ps1       one-line installer for Windows
+install.sh        one-line installer for Linux and macOS
 src/
+  cli.mjs         the acpgram command: start, setup, service, update, version
   main.mjs        entry point: loads .env, runs the setup wizard on first start
   setup.mjs       setup wizard
   service.mjs     service: nssm (Windows), systemd --user (Linux), launchd (macOS)
@@ -148,7 +168,10 @@ src/
   telegram.mjs    Bot API calls, rich messages, long text splitting
   db.mjs          SQLite: sessions, requests, tool calls, permissions, users, usage
 test/             node:test tests and a fake ACP agent
+.github/workflows CI (tests on Windows / Linux / macOS) and releases (archives, checksums, installer checks)
 ```
+
+Releases are built by GitHub Actions on a version tag: tests on all three OSes, `.zip` / `.tar.gz` archives with `SHA256SUMS`, then both installers are verified on Windows, Linux and macOS against the published release. Installers can be tested against a local build with `ACPGRAM_RELEASE_URL=file:///path/to/dist`, `ACPGRAM_VERSION`, `ACPGRAM_NO_SETUP=1`, `ACPGRAM_YES=1`, `ACPGRAM_HOME`.
 
 ## License
 

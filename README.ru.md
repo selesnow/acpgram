@@ -75,6 +75,20 @@ Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Cl
 
 ## Установка и запуск
 
+**Одной командой** (нужен хотя бы один движок и токен бота от @BotFather):
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
+```
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
+```
+
+Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 (официальная сборка, с проверкой контрольной суммы, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | status | uninstall`, `acpgram update`.
+
 Два способа, выбирайте под машину:
 
 | | Напрямую (Node + Gemini CLI) | Docker |
@@ -211,6 +225,7 @@ npm test
 
 ```
 src/
+  cli.mjs         команда acpgram: start, setup, service, update, version
   main.mjs        точка входа (npm start, служба): .env из папки бота, мастер настройки при первом запуске
   setup.mjs       мастер настройки (npm run setup)
   service.mjs     служба: nssm (Windows), systemd --user (Linux), launchd (macOS)

@@ -1,0 +1,8 @@
+# Переводы строк: скрипт для Linux/macOS — только LF (иначе bash не выполнит его), для Windows — CRLF
+*.sh text eol=lf
+*.ps1 text eol=crlf
+
+# Не входят в архивы релизов (git archive): только для разработки и CI
+.github/ export-ignore
+test/ export-ignore
+.gitattributes export-ignore
