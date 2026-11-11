@@ -9,6 +9,7 @@ import { parseEnv } from 'node:util';
 import { APP, APP_DIR, ENV_PATH } from './app.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';
+import { findOnPath } from './winsvc.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -129,11 +130,12 @@ async function waitForAdmin(token, timeoutMs = 180_000) {
 /** Полный путь к команде через PATH (where / command -v), или null. */
 export function resolveCommandPath(cmd) {
   if (isAbsolute(cmd)) return existsSync(cmd) ? cmd : null;
-  const r = IS_WIN ? spawnSync('where', [cmd], { encoding: 'utf8', windowsHide: true }) : spawnSync('sh', ['-c', `command -v "${cmd.replace(/"/g, '')}"`], { encoding: 'utf8' });
+  // Windows: поиск по PATH средствами Node — `where` печатает пути в OEM-кодировке (cp866), и в профиле с кириллицей они портятся.
+  // Для npm-пакетов нужен .cmd, а не одноимённый скрипт без расширения.
+  if (IS_WIN) return findOnPath(cmd, { exists: existsSync });
+  const r = spawnSync('sh', ['-c', `command -v "${cmd.replace(/"/g, '')}"`], { encoding: 'utf8' });
   if (r.status !== 0) return null;
-  const lines = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  // на Windows для npm-пакетов нужен .cmd, а не одноимённый скрипт без расширения
-  return (IS_WIN ? lines.find((l) => /\.(cmd|exe|bat)$/i.test(l)) : null) ?? lines[0] ?? null;
+  return r.stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null;
 }
 
 // ---------- диалог (prompt.mjs) ----------

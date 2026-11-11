@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { envValue, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
-import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, servicePid, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
+import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 
 test('serializeEnv: порядок, комментарии, прочие ранее заданные, пустые не пишутся; Node читает обратно то же', () => {
@@ -165,8 +165,6 @@ test('serviceState / servicePid / winMessage: разбор sc.exe и нечит�
   assert.equal(serviceState('SERVICE_NAME: acpgram\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n        STATE              : 3  STOP_PENDING\r\n'), 'STOP_PENDING');
   assert.equal(serviceState('        STATE              : 4  RUNNING \r\n'), 'RUNNING');
   assert.equal(serviceState('[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.'), null, 'службы нет');
-  assert.equal(servicePid('        PID                : 5128\r\n        FLAGS              :'), 5128);
-  assert.equal(servicePid('        PID                : 0\r\n'), null, 'остановлена — процесса нет');
   assert.match(winMessage('Error creating service!\r\nCreateService(): ????????? ?????? ???? ???????? ??? ????????.'), /не отображается в этой кодировке/);
   assert.equal(winMessage('Access is denied.'), 'Access is denied.');
 });

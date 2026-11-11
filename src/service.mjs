@@ -7,6 +7,10 @@ import { join, posix } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { APP, APP_DIR, MAIN_PATH } from './app.mjs';
+import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from './winsvc.mjs';
+
+// разбор вывода sc.exe — в winsvc.mjs (не зависит от языка Windows); отсюда экспортируется для совместимости
+export { serviceErrorCode, serviceState } from './winsvc.mjs';
 
 const PLATFORM = process.platform;
 const NODE_ARGS = ['--disable-warning=ExperimentalWarning'];
@@ -114,20 +118,33 @@ export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = APP_
 
 // ---------- выполнение ----------
 
+/** Кодовая страница OEM (cp866 на русской Windows): в ней консольные программы пишут в канал. Читается из реестра один раз. */
+let oemCp = null;
+const oemCodePage = () => {
+  if (oemCp == null) {
+    const r = PLATFORM === 'win32' ? spawnSync('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'OEMCP'], { encoding: 'latin1', windowsHide: true }) : null;
+    oemCp = parseOemCp(r?.stdout);
+  }
+  return oemCp;
+};
+
+// Вывод читается как байты и декодируется по кодовой странице консоли — только для показа пользователю:
+// логика (есть ли служба, состояние, причина отказа) от текста не зависит, см. winsvc.mjs
 const run = (cmd, args, { dry = false, secretAt = -1, quiet = false } = {}) => {
   const shown = args.map((a, i) => (i === secretAt ? '********' : /\s/.test(a) ? `"${a}"` : a)).join(' ');
   if (!quiet) console.log(`  $ ${cmd} ${shown}`);
   if (dry) return { status: 0, stdout: '', stderr: '' };
-  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true });
-  // nssm пишет в UTF-16
-  const clean = (s) => (s || '').replace(/\0/g, '').trim();
-  return { status: r.status, stdout: clean(r.stdout), stderr: clean(r.stderr) || r.error?.message || '' };
+  const r = spawnSync(cmd, args, { windowsHide: true });
+  const text = (b) => decodeOutput(b, PLATFORM === 'win32' ? oemCodePage() : 0).trim();
+  return { status: r.status, error: r.error?.code, stdout: text(r.stdout), stderr: text(r.stderr) || r.error?.message || '' };
 };
 
+const WINGET_LINKS = process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links')] : [];
+
+/** nssm: NSSM_PATH, затем PATH (поиск средствами Node — `where` портит пути с кириллицей), затем ссылки WinGet. */
 function findNssm() {
   if (process.env.NSSM_PATH && existsSync(process.env.NSSM_PATH)) return process.env.NSSM_PATH;
-  const r = spawnSync('where', ['nssm'], { encoding: 'utf8', windowsHide: true });
-  return r.status === 0 ? r.stdout.split(/\r?\n/)[0].trim() : null;
+  return findOnPath('nssm', { exists: existsSync, exts: ['.exe'], extra: WINGET_LINKS });
 }
 
 const isWinAdmin = () => spawnSync('net', ['session'], { windowsHide: true, stdio: 'ignore' }).status === 0;
@@ -143,28 +160,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Код Windows «служба не запущена из-за ошибки входа» (неверный пароль, PIN вместо пароля, вход без пароля запрещён). */
 export const LOGON_FAILURE = 1069;
 
-/**
- * Код ошибки запуска службы из вывода sc.exe (не переводится ни на одном языке Windows):
- * `sc start` → «[SC] StartService FAILED 1069:», `sc query` → «WIN32_EXIT_CODE : 1077».
- * Ошибку входа (1069) возвращает именно вызов запуска: процесс службы при ней не стартует вовсе.
- */
-export function serviceErrorCode(scOutput) {
-  // «FAILED» на локализованной Windows может быть переведено — берём число после StartService
-  const m = /StartService\D{0,40}?(\d{3,5})\s*:/.exec(scOutput ?? '') ?? /WIN32_EXIT_CODE\s*:\s*(\d+)/.exec(scOutput ?? '');
-  const code = m ? Number(m[1]) : null;
-  return code || null;
-}
-
-/** Учётная запись Microsoft (вход по почте Microsoft) или локальная — от этого зависит, какой пароль нужен службе. */
-function isMicrosoftAccount(username = userInfo().username) {
-  const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-LocalUser -Name '${username.replace(/'/g, "''")}').PrincipalSource`], { encoding: 'utf8', windowsHide: true });
-  return /MicrosoftAccount/i.test(r.stdout ?? '');
-}
-
 /** Запускает службу (sc.exe — ради кода ошибки) и ждёт до 10 с, пока nssm не покажет RUNNING. */
 async function startAndWait(nssm, name) {
   const s = run('sc.exe', ['start', name]);
-  const startCode = serviceErrorCode(`${s.stdout}\n${s.stderr}`);
+  // код выхода sc.exe — это код ошибки Windows (1069 вход, 1056 уже запущена, 1072 помечена для удаления), от языка не зависит;
+  // разбор текста — запасной вариант
+  const startCode = s.status > 0 ? s.status : serviceErrorCode(`${s.stdout}\n${s.stderr}`);
   let state = '';
   // при ошибке запуска (кроме «уже запущена» — 1056) ждать нечего
   for (let i = 0; i < 10 && !/RUNNING/.test(state) && (!startCode || startCode === 1056); i++) {
@@ -176,53 +177,61 @@ async function startAndWait(nssm, name) {
   return { running, state: state || 'SERVICE_STOPPED', code };
 }
 
-/** Состояние службы из `sc query` («STATE : 4 RUNNING» → RUNNING); null — службы нет (sc: 1060). */
-export function serviceState(scQueryOutput) {
-  const m = /STATE\s*:\s*\d+\s+([A-Z_]+)/.exec(scQueryOutput ?? '');
-  return m ? m[1] : null;
-}
+/**
+ * Что известно о службе: exists — true / false / null (не удалось спросить: sc.exe запрещён, нет прав), state — по значению
+ * из закрытого списка (RUNNING, STOP_PENDING…). Решения «службы нет» и «остановлена» принимаются только по этим данным.
+ */
+const probe = (name) => {
+  const r = run('sc.exe', ['query', name], { quiet: true });
+  const exists = serviceExists(r);
+  return { exists, state: exists ? serviceState(r.stdout) : null, error: r.error ?? (exists === null ? r.status : null) };
+};
 
-/** PID процесса службы из `sc queryex` («PID : 1234»); null — процесса нет. */
-export function servicePid(scQueryExOutput) {
-  const m = /PID\s*:\s*(\d+)/.exec(scQueryExOutput ?? '');
-  return m && Number(m[1]) ? Number(m[1]) : null;
-}
+/** Помечена ли служба для удаления (DeleteFlag в реестре): Windows удалит её, когда закроются все дескрипторы или после перезагрузки. */
+const isMarkedForDelete = (name) => parseDeleteFlag(run('reg', deleteFlagArgs(name), { quiet: true }));
 
-const queryState = (name) => serviceState(run('sc.exe', ['query', name], { quiet: true }).stdout);
+/** PID процесса службы (tasklist: столбцы CSV одинаковы на любом языке); null — процесса нет. */
+const servicePid = (name) => parseTasklistPid(run('tasklist', ['/svc', '/fi', `SERVICES eq ${name}`, '/fo', 'csv', '/nh'], { quiet: true }).stdout);
 
-/** Сообщение Windows, которое nssm вывел знаками «?» (кириллица в чужой кодировке), — честно говорим, что его не видно. */
-export const winMessage = (text) => (/\?{4,}/.test(text ?? '') ? `${String(text).replace(/[?\s.]{6,}$/, '').trim()} (текст ошибки Windows не отображается в этой кодировке консоли)` : text ?? '');
+const unknownHint = (p) => `  ❌ Не удалось узнать, есть ли служба (sc.exe: ${p.error ?? 'нет ответа'}). Запустите терминал «от имени администратора»; если защита Windows блокирует sc.exe — проверьте службу в «Службах» (services.msc).`;
+
+/** Сообщение Windows, которое не прочитать в этой кодировке (nssm выводит «?», OEM-текст в UTF-8 даёт U+FFFD), — честно говорим об этом. */
+export const winMessage = (text) => (isGarbled(text) ? `${String(text).replace(/[?�\s.]{6,}$/, '').trim()} (текст ошибки Windows не отображается в этой кодировке консоли)`.trim() : text ?? '');
 
 /**
  * Останавливает службу и ждёт остановки. Зависшую (STOP_PENDING: процесс бота или агента не завершается) —
- * добивает: завершает процесс службы вместе со всеми дочерними.
+ * добивает: завершает процесс службы вместе со всеми дочерними. Служба, о которой ничего не известно, остановленной не считается.
  */
 async function stopService(nssm, name) {
+  const stopped = () => {
+    const p = probe(name);
+    return p.exists === false || p.state === 'STOPPED';
+  };
   run(nssm, ['stop', name], { quiet: true }); // у зависшей службы ответит «не может принимать команды» — это нормально
   for (let i = 0; i < 15; i++) {
-    const s = queryState(name);
-    if (!s || s === 'STOPPED') return true;
+    if (stopped()) return true;
     await sleep(1000);
   }
-  const pid = servicePid(run('sc.exe', ['queryex', name], { quiet: true }).stdout);
+  const pid = servicePid(name);
   if (pid) {
     console.log(`  Служба ${name} не останавливается — завершаю её процесс (PID ${pid}) вместе с дочерними`);
     run('taskkill', ['/PID', String(pid), '/T', '/F'], { quiet: true });
+  } else {
+    run('taskkill', ['/F', '/T', '/FI', `SERVICES eq ${name}`], { quiet: true });
   }
   for (let i = 0; i < 10; i++) {
-    const s = queryState(name);
-    if (!s || s === 'STOPPED') return true;
+    if (stopped()) return true;
     await sleep(1000);
   }
   return false;
 }
 
-/** Удаляет службу и ждёт, пока Windows её действительно удалит: иначе создать её заново нельзя (ошибка 1072). */
+/** Удаляет службу и ждёт, пока Windows её действительно удалит (sc.exe: 1060): иначе создать её заново нельзя (ошибка 1072). */
 async function removeService(nssm, name) {
   await stopService(nssm, name);
   run(nssm, ['remove', name, 'confirm']);
   for (let i = 0; i < 15; i++) {
-    if (!queryState(name)) return true;
+    if (probe(name).exists === false) return true;
     await sleep(1000);
   }
   return false;
@@ -241,10 +250,13 @@ export async function restartService({ name = APP.id } = {}) {
     const nssm = findNssm();
     if (!nssm) return console.log('  ❌ Не найден nssm.'), { ok: false };
     if (!isWinAdmin()) return console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора».'), { ok: false };
-    if (!queryState(name)) return console.log(`  ❌ Служба ${name} не установлена: acpgram service install`), { ok: false };
-    await stopService(nssm, name);
+    const p = probe(name);
+    if (p.exists === null) return console.log(unknownHint(p)), { ok: false };
+    if (p.exists === false) return console.log(`  ❌ Служба ${name} не установлена: acpgram service install`), { ok: false };
+    if (!(await stopService(nssm, name))) console.log(`  ⚠️ Служба ${name} не остановилась (завис процесс или сама служба). Если запуск не получится — перезагрузите компьютер.`);
     const r = await startAndWait(nssm, name);
     if (r.running) console.log(`  ✅ Служба ${name} перезапущена. ${logHint()}`);
+    else if (r.code === 1072) console.log(markedForDeleteHint(name));
     else if (r.code === LOGON_FAILURE) console.log(`  ❌ Windows не пустил службу под её учётной записью (неверный пароль; при входе через учётную запись Microsoft нужен её пароль, а не PIN). Переустановите службу: acpgram service install`);
     else console.log(`  ❌ Служба ${name} не запустилась (${r.state}${r.code ? `, код Windows ${r.code}` : ''}). ${logHint()}`);
     return { ok: r.running };
@@ -275,18 +287,33 @@ export async function installService({ name = APP.id, dry = false, prompt = null
     }
     // служба уже есть: обычно её достаточно перезапустить (новые настройки и код подхватятся); переустановка —
     // только если нужно сменить учётную запись или что-то сломалось
-    if (!dry && queryState(name)) {
-      if (prompt && (await prompt.yes(`  Служба ${name} уже установлена. Перезапустить её с новыми настройками?`))) {
-        const r = await restartService({ name });
-        return { ok: r.ok, installed: true };
-      }
-      if (!prompt || !(await prompt.yes(`  Переустановить службу ${name} заново (например, чтобы сменить учётную запись)?`, false))) {
-        console.log(`  Оставляю как есть. Перезапуск: acpgram service restart; удалить: acpgram service uninstall`);
-        return { ok: false, installed: true };
-      }
-      if (!(await removeService(nssm, name))) {
-        console.log(markedForDeleteHint(name));
+    // Всё проверяется ДО вопроса о пароле: нельзя спрашивать пароль, если службу всё равно не создать.
+    if (!dry) {
+      const p = probe(name);
+      if (p.exists === null) {
+        console.log(unknownHint(p));
         return { ok: false };
+      }
+      if (p.exists && isMarkedForDelete(name)) {
+        // прежняя служба уже удалена, но завис её процесс — завершаем его, и Windows дорабатывает удаление
+        console.log(`  Служба ${name} помечена для удаления (ошибка Windows 1072) — завершаю её процесс, чтобы Windows закончил удаление…`);
+        if (!(await removeService(nssm, name))) {
+          console.log(markedForDeleteHint(name));
+          return { ok: false };
+        }
+      } else if (p.exists) {
+        if (prompt && (await prompt.yes(`  Служба ${name} уже установлена. Перезапустить её с новыми настройками?`))) {
+          const r = await restartService({ name });
+          return { ok: r.ok, installed: true };
+        }
+        if (!prompt || !(await prompt.yes(`  Переустановить службу ${name} заново (например, чтобы сменить учётную запись)?`, false))) {
+          console.log(`  Оставляю как есть. Перезапуск: acpgram service restart; удалить: acpgram service uninstall`);
+          return { ok: false, installed: true };
+        }
+        if (!(await removeService(nssm, name))) {
+          console.log(markedForDeleteHint(name));
+          return { ok: false };
+        }
       }
     }
     // служба должна работать от пользователя, у которого авторизованы агенты (Gemini, Claude Code, Antigravity)
@@ -294,6 +321,7 @@ export async function installService({ name = APP.id, dry = false, prompt = null
     const user = windowsAccount();
     if (prompt) {
       if (await prompt.yes(`  Запускать службу от вашей учётной записи ${user} (рекомендуется: там авторизованы агенты)?`)) {
+        console.log('  Нужен пароль учётной записи Windows. Если вы входите через учётную запись Microsoft — пароль от неё (от почты Microsoft), а не PIN-код.');
         const password = await prompt.secret(`  Пароль Windows для ${user} (ввод скрыт)`);
         if (!password) {
           console.log('  ❌ Пароль не введён — служба не установлена.');
@@ -314,9 +342,14 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       const r = run(nssm, args, { dry, secretAt: isAccount ? 4 : -1 });
       if (r.status === 0) continue;
       console.log(`  ❌ ${winMessage(r.stderr || r.stdout)}`);
-      // служба с этим именем ещё не удалена до конца (прежняя зависла) — объясняем, что делать
-      if (args[0] === 'install' && queryState(name)) {
-        console.log(markedForDeleteHint(name));
+      // nssm не называет причину (номера нет, текст на русской Windows нечитаем) — определяем её сами по состоянию службы
+      if (args[0] === 'install') {
+        const p = probe(name);
+        const marked = p.exists === true && isMarkedForDelete(name);
+        const keyNameTaken = p.exists === false && run('sc.exe', ['GetKeyName', APP.label], { quiet: true }).status === 0;
+        const d = diagnoseCreate({ exists: p.exists, marked, keyNameTaken, nssmStatus: r.status, name });
+        console.log(`  ❌ Не удалось создать службу: ${d.text}.`);
+        if (d.code === 1072) console.log(markedForDeleteHint(name));
         return { ok: false };
       }
       // без нужной учётной записи (неверный пароль) служба не будет видеть авторизацию агентов — откатываем
@@ -338,10 +371,10 @@ export async function installService({ name = APP.id, dry = false, prompt = null
     // Ошибка входа: чаще всего это PIN вместо пароля учётной записи Microsoft. Пароль можно ввести заново —
     // служба уже установлена, меняем только учётную запись.
     for (let attempt = 1; !r.running && r.code === LOGON_FAILURE && account && prompt && attempt <= 3; attempt++) {
-      const msa = isMicrosoftAccount();
       console.log(`  ❌ Windows не пустил службу под ${account.user}: неверное имя пользователя или пароль.`);
-      if (msa) console.log('     Вы входите через учётную запись Microsoft: нужен пароль от неё (от почты Microsoft), а не PIN-код для входа в Windows.');
-      else console.log('     Нужен пароль учётной записи Windows. Если у учётной записи нет пароля, служба под ней работать не может — задайте пароль.');
+      // определять тип учётной записи не нужно (это требовало PowerShell, а защита Windows может не пускать его из Node) — даём обе подсказки
+      console.log('     Если вы входите через учётную запись Microsoft: нужен пароль от неё (от почты Microsoft), а не PIN-код для входа в Windows.');
+      console.log('     Если учётная запись локальная: нужен её пароль; без пароля служба под ней работать не может — задайте пароль.');
       const password = await prompt.secret(`  Пароль для ${account.user} (Enter — не повторять)`);
       if (!password) break;
       const set = run(nssm, ['set', name, 'ObjectName', account.user, password], { secretAt: 4 });
@@ -421,8 +454,10 @@ export async function uninstallService({ name = APP.id, dry = false } = {}) {
       return { ok: true };
     }
     if (!isWinAdmin()) return console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора».'), { ok: false };
-    if (!queryState(name)) return console.log(`  Служба ${name} не установлена.`), { ok: true };
-    // зависшую службу добиваем и ждём, пока Windows её действительно удалит
+    const p = probe(name);
+    if (p.exists === null) return console.log(unknownHint(p)), { ok: false };
+    if (p.exists === false) return console.log(`  Служба ${name} не установлена.`), { ok: true };
+    // зависшую службу (и помеченную для удаления) добиваем и ждём, пока Windows её действительно удалит
     const ok = await removeService(nssm, name);
     console.log(ok ? `  ✅ Служба ${name} удалена.` : markedForDeleteHint(name));
     return { ok };
@@ -445,7 +480,11 @@ export async function uninstallService({ name = APP.id, dry = false } = {}) {
 export function serviceStatus({ name = APP.id } = {}) {
   if (PLATFORM === 'win32') {
     const nssm = findNssm();
-    return nssm ? run(nssm, ['status', name]) : { status: 1, stdout: '', stderr: 'nssm не найден' };
+    if (!nssm) return { status: 1, stdout: '', stderr: 'nssm не найден' };
+    const r = run(nssm, ['status', name]);
+    // служба помечена для удаления: nssm покажет обычное состояние — предупреждаем отдельно
+    if (probe(name).exists && isMarkedForDelete(name)) return { ...r, stdout: `${r.stdout}\n${markedForDeleteHint(name)}`.trim() };
+    return r;
   }
   if (PLATFORM === 'linux') return run('systemctl', ['--user', 'status', name, '--no-pager']);
   if (PLATFORM === 'darwin') return run('launchctl', ['print', `gui/${process.getuid?.() ?? ''}/${APP.launchdLabel}`]);
