@@ -42,6 +42,13 @@ export function saveCatalog(engine, res) {
 }
 
 const probes = new Map(); // движок → идущий запрос каталога (не запускаем агента повторно)
+const probeAgents = new Set(); // запущенные для этого агенты — при остановке бота завершаются вместе с ним
+
+/** Завершает агентов, запущенных за списком моделей (при остановке бота: зависший движок не должен держать службу). */
+export function killProbes() {
+  for (const a of probeAgents) a.close();
+  probeAgents.clear();
+}
 const probeFailedAt = new Map(); // движок → время неудачи (пауза перед повтором)
 const PROBE_RETRY_MS = 5 * 60_000;
 
@@ -54,6 +61,7 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
   if (Date.now() - (probeFailedAt.get(engine.id) ?? 0) < PROBE_RETRY_MS) return Promise.reject(new Error('недавняя попытка не удалась, повтор позже'));
   const run = (async () => {
     const a = createAgent(engine, { cwd: tmpdir(), onPermission: async () => ({ outcome: 'cancelled' }) });
+    probeAgents.add(a);
     let timer;
     try {
       const res = await Promise.race([a.init(null), new Promise((_, rej) => (timer = setTimeout(() => rej(new Error('нет ответа')), timeoutMs)))]);
@@ -64,7 +72,8 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
       throw e;
     } finally {
       clearTimeout(timer);
-      a.close();
+      a.close(); // завершает агента вместе с дочерними процессами — и при ответе, и при тайм-ауте
+      probeAgents.delete(a);
       probes.delete(engine.id);
     }
   })();

@@ -12,6 +12,7 @@ test('route: команды acpgram', () => {
   assert.deepEqual(route([]), { run: 'main.mjs', args: [] }, 'без команды — запуск бота');
   assert.deepEqual(route(['start']), { run: 'main.mjs', args: [] });
   assert.deepEqual(route(['setup']), { run: 'setup.mjs', args: [] });
+  assert.deepEqual(route(['service', 'restart']), { run: 'service.mjs', args: ['restart'] });
   assert.deepEqual(route(['service', 'install', '--name', 'x', '--dry-run']), { run: 'service.mjs', args: ['install', '--name', 'x', '--dry-run'] });
   assert.ok(route(['service']).error && route(['service', 'bogus']).error, 'service без действия — ошибка');
   assert.deepEqual(route(['update']), { update: true });

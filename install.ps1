@@ -137,7 +137,7 @@
       # PowerShell 5.1 with ErrorActionPreference=Stop throws on native stderr, hence try/catch
       if ($nssm) { try { $svc = ((& $nssm.Source status acpgram 2>&1) | Out-String) -replace "`0", '' } catch { $svc = '' } }
       if ($svc -match 'SERVICE_') {
-        Write-Host "Restart the service to apply the update (as administrator): nssm restart acpgram"
+        Write-Host "Restart the service to apply the update (terminal as administrator): acpgram service restart"
       }
     }
     if (-not (Test-Path (Join-Path $AppHome '.env')) -and $env:ACPGRAM_NO_SETUP -ne '1') {

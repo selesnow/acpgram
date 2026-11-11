@@ -53,7 +53,7 @@ The installer downloads the latest [release](https://github.com/selesnow/acpgram
 ```text
 acpgram                    start the bot
 acpgram setup              settings wizard
-acpgram service install    run as a service (also: status, uninstall)
+acpgram service install    run as a service (also: restart, status, uninstall)
 acpgram update             update to the latest release
 ```
 
@@ -79,7 +79,7 @@ Autostart with the system and restart on failure — one command:
 | Linux | `systemd --user` (to keep it running without a login session: `sudo loginctl enable-linger $USER`) | `npm run service:install` |
 | macOS | LaunchAgent (`launchd`) | `npm run service:install` |
 
-Also: `npm run service:status`, `npm run service:uninstall`. Options go after `--` (otherwise npm takes them for itself): `npm run service:install -- --dry-run` prints the commands without running them, `-- --name <name>` sets another service name (default `acpgram`; Windows and Linux), `-- --system` installs a Windows service under LocalSystem without a terminal. Logs: `data/service.log` (Linux: `journalctl --user -u acpgram -f`).
+Also: `acpgram service restart` (after an update; a hung service is force-stopped), `acpgram service status`, `acpgram service uninstall` (npm: `npm run service:status`, `npm run service:uninstall`). Options go after `--` (otherwise npm takes them for itself): `npm run service:install -- --dry-run` prints the commands without running them, `-- --name <name>` sets another service name (default `acpgram`; Windows and Linux), `-- --system` installs a Windows service under LocalSystem without a terminal. Logs: `data/service.log` (Linux: `journalctl --user -u acpgram -f`; Windows PowerShell 5.1: `Get-Content <path>\data\service.log -Tail 30 -Encoding UTF8`, otherwise non-English text looks garbled).
 
 > On Windows the service needs your account's **password**: if you sign in with a Microsoft account, that is the Microsoft account password, not the Windows PIN (with a PIN the service fails to log on — the wizard detects this and asks again). Accounts without a password cannot run services.
 >

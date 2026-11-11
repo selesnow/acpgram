@@ -102,6 +102,12 @@ export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = APP_
     ['set', name, 'AppRotateFiles', '1'],
     ['set', name, 'AppRotateOnline', '1'],
     ['set', name, 'AppRotateBytes', '10485760'],
+    // остановка не должна зависать: Ctrl+C боту (он сам завершает агентов), затем окну и потокам — по 2–3 с,
+    // после этого nssm завершает процесс вместе со всеми дочерними (зависший движок не держит службу)
+    ['set', name, 'AppStopMethodConsole', '3000'],
+    ['set', name, 'AppStopMethodWindow', '2000'],
+    ['set', name, 'AppStopMethodThreads', '2000'],
+    ['set', name, 'AppKillProcessTree', '1'],
     ...(account ? [['set', name, 'ObjectName', account.user, account.password]] : []),
   ];
 }
@@ -170,6 +176,84 @@ async function startAndWait(nssm, name) {
   return { running, state: state || 'SERVICE_STOPPED', code };
 }
 
+/** Состояние службы из `sc query` («STATE : 4 RUNNING» → RUNNING); null — службы нет (sc: 1060). */
+export function serviceState(scQueryOutput) {
+  const m = /STATE\s*:\s*\d+\s+([A-Z_]+)/.exec(scQueryOutput ?? '');
+  return m ? m[1] : null;
+}
+
+/** PID процесса службы из `sc queryex` («PID : 1234»); null — процесса нет. */
+export function servicePid(scQueryExOutput) {
+  const m = /PID\s*:\s*(\d+)/.exec(scQueryExOutput ?? '');
+  return m && Number(m[1]) ? Number(m[1]) : null;
+}
+
+const queryState = (name) => serviceState(run('sc.exe', ['query', name], { quiet: true }).stdout);
+
+/** Сообщение Windows, которое nssm вывел знаками «?» (кириллица в чужой кодировке), — честно говорим, что его не видно. */
+export const winMessage = (text) => (/\?{4,}/.test(text ?? '') ? `${String(text).replace(/[?\s.]{6,}$/, '').trim()} (текст ошибки Windows не отображается в этой кодировке консоли)` : text ?? '');
+
+/**
+ * Останавливает службу и ждёт остановки. Зависшую (STOP_PENDING: процесс бота или агента не завершается) —
+ * добивает: завершает процесс службы вместе со всеми дочерними.
+ */
+async function stopService(nssm, name) {
+  run(nssm, ['stop', name], { quiet: true }); // у зависшей службы ответит «не может принимать команды» — это нормально
+  for (let i = 0; i < 15; i++) {
+    const s = queryState(name);
+    if (!s || s === 'STOPPED') return true;
+    await sleep(1000);
+  }
+  const pid = servicePid(run('sc.exe', ['queryex', name], { quiet: true }).stdout);
+  if (pid) {
+    console.log(`  Служба ${name} не останавливается — завершаю её процесс (PID ${pid}) вместе с дочерними`);
+    run('taskkill', ['/PID', String(pid), '/T', '/F'], { quiet: true });
+  }
+  for (let i = 0; i < 10; i++) {
+    const s = queryState(name);
+    if (!s || s === 'STOPPED') return true;
+    await sleep(1000);
+  }
+  return false;
+}
+
+/** Удаляет службу и ждёт, пока Windows её действительно удалит: иначе создать её заново нельзя (ошибка 1072). */
+async function removeService(nssm, name) {
+  await stopService(nssm, name);
+  run(nssm, ['remove', name, 'confirm']);
+  for (let i = 0; i < 15; i++) {
+    if (!queryState(name)) return true;
+    await sleep(1000);
+  }
+  return false;
+}
+
+const markedForDeleteHint = (name) =>
+  `  ❌ Windows ещё не удалил прежнюю службу ${name} (ошибка 1072 «служба помечена для удаления»).\n` +
+  '     Закройте «Службы» (services.msc) и вкладку «Службы» Диспетчера задач и повторите: acpgram service install\n' +
+  '     Если не поможет — перезагрузите компьютер: после перезагрузки Windows удалит её окончательно.';
+
+const logHint = () => `Лог: ${join(APP_DIR, 'data', 'service.log')}${PLATFORM === 'win32' ? ` (в PowerShell: Get-Content "${join(APP_DIR, 'data', 'service.log')}" -Tail 30 -Encoding UTF8)` : ''}`;
+
+/** Перезапуск службы: после обновления или смены настроек. Зависшую службу добивает. */
+export async function restartService({ name = APP.id } = {}) {
+  if (PLATFORM === 'win32') {
+    const nssm = findNssm();
+    if (!nssm) return console.log('  ❌ Не найден nssm.'), { ok: false };
+    if (!isWinAdmin()) return console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора».'), { ok: false };
+    if (!queryState(name)) return console.log(`  ❌ Служба ${name} не установлена: acpgram service install`), { ok: false };
+    await stopService(nssm, name);
+    const r = await startAndWait(nssm, name);
+    if (r.running) console.log(`  ✅ Служба ${name} перезапущена. ${logHint()}`);
+    else if (r.code === LOGON_FAILURE) console.log(`  ❌ Windows не пустил службу под её учётной записью (неверный пароль; при входе через учётную запись Microsoft нужен её пароль, а не PIN). Переустановите службу: acpgram service install`);
+    else console.log(`  ❌ Служба ${name} не запустилась (${r.state}${r.code ? `, код Windows ${r.code}` : ''}). ${logHint()}`);
+    return { ok: r.running };
+  }
+  if (PLATFORM === 'linux') return { ok: run('systemctl', ['--user', 'restart', name]).status === 0 };
+  if (PLATFORM === 'darwin') return { ok: run('launchctl', ['kickstart', '-k', `gui/${process.getuid?.() ?? ''}/${APP.launchdLabel}`]).status === 0 };
+  return { ok: false };
+}
+
 /**
  * Регистрирует и запускает службу. prompt — диалог (prompt.mjs): учётная запись Windows, переустановка существующей службы.
  * Без диалога на Windows служба ставится от LocalSystem только с allowSystem, иначе — ошибка с подсказкой.
@@ -189,14 +273,21 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора» и выполните acpgram service install.');
       return { ok: false };
     }
-    // служба уже есть — переустанавливаем только с подтверждения
-    if (!dry && run(nssm, ['status', name]).status === 0) {
-      if (!prompt || !(await prompt.yes(`  Служба ${name} уже установлена. Переустановить (она будет остановлена и создана заново)?`, false))) {
-        console.log(`  Оставляю как есть. Перезапуск: nssm restart ${name}; удалить: acpgram service uninstall`);
+    // служба уже есть: обычно её достаточно перезапустить (новые настройки и код подхватятся); переустановка —
+    // только если нужно сменить учётную запись или что-то сломалось
+    if (!dry && queryState(name)) {
+      if (prompt && (await prompt.yes(`  Служба ${name} уже установлена. Перезапустить её с новыми настройками?`))) {
+        const r = await restartService({ name });
+        return { ok: r.ok, installed: true };
+      }
+      if (!prompt || !(await prompt.yes(`  Переустановить службу ${name} заново (например, чтобы сменить учётную запись)?`, false))) {
+        console.log(`  Оставляю как есть. Перезапуск: acpgram service restart; удалить: acpgram service uninstall`);
+        return { ok: false, installed: true };
+      }
+      if (!(await removeService(nssm, name))) {
+        console.log(markedForDeleteHint(name));
         return { ok: false };
       }
-      run(nssm, ['stop', name]);
-      run(nssm, ['remove', name, 'confirm']);
     }
     // служба должна работать от пользователя, у которого авторизованы агенты (Gemini, Claude Code, Antigravity)
     let account = null;
@@ -222,7 +313,12 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       const isAccount = args[2] === 'ObjectName';
       const r = run(nssm, args, { dry, secretAt: isAccount ? 4 : -1 });
       if (r.status === 0) continue;
-      console.log(`  ❌ ${r.stderr || r.stdout}`);
+      console.log(`  ❌ ${winMessage(r.stderr || r.stdout)}`);
+      // служба с этим именем ещё не удалена до конца (прежняя зависла) — объясняем, что делать
+      if (args[0] === 'install' && queryState(name)) {
+        console.log(markedForDeleteHint(name));
+        return { ok: false };
+      }
       // без нужной учётной записи (неверный пароль) служба не будет видеть авторизацию агентов — откатываем
       if (args[0] === 'install' || isAccount) {
         if (isAccount) {
@@ -250,20 +346,19 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       if (!password) break;
       const set = run(nssm, ['set', name, 'ObjectName', account.user, password], { secretAt: 4 });
       if (set.status !== 0) {
-        console.log(`  ❌ ${set.stderr || set.stdout}`);
+        console.log(`  ❌ ${winMessage(set.stderr || set.stdout)}`);
         continue;
       }
       r = await startAndWait(nssm, name);
     }
-    const log = join(APP_DIR, 'data', 'service.log');
     if (!r.running) {
       console.log(`  ❌ Служба ${name} установлена, но не запущена (${r.state}${r.code ? `, код Windows ${r.code}` : ''}).`);
       if (r.code === LOGON_FAILURE) {
-        console.log(`     Задайте верный пароль и запустите (терминал от имени администратора):\n       nssm set ${name} ObjectName ${account?.user ?? windowsAccount()} "<пароль>"\n       nssm start ${name}`);
-      } else console.log(`     Подробности — в логе бота: ${log}`);
+        console.log(`     Задайте верный пароль и запустите (терминал от имени администратора):\n       nssm set ${name} ObjectName ${account?.user ?? windowsAccount()} "<пароль>"\n       acpgram service restart`);
+      } else console.log(`     Подробности — ${logHint()}`);
       return { ok: false, installed: true };
     }
-    console.log(`  ✅ Служба ${name} работает. Лог: ${log}. Управление: nssm restart|stop ${name}`);
+    console.log(`  ✅ Служба ${name} работает. ${logHint()}\n     Перезапуск: acpgram service restart · состояние: acpgram service status`);
     return { ok: true, installed: true };
   }
 
@@ -316,13 +411,21 @@ export async function installService({ name = APP.id, dry = false, prompt = null
   return { ok: false };
 }
 
-export function uninstallService({ name = APP.id, dry = false } = {}) {
+export async function uninstallService({ name = APP.id, dry = false } = {}) {
   if (PLATFORM === 'win32') {
     const nssm = findNssm();
     if (!nssm) return console.log('  ❌ Не найден nssm.'), { ok: false };
-    run(nssm, ['stop', name], { dry });
-    const r = run(nssm, ['remove', name, 'confirm'], { dry });
-    return { ok: r.status === 0 };
+    if (dry) {
+      run(nssm, ['stop', name], { dry });
+      run(nssm, ['remove', name, 'confirm'], { dry });
+      return { ok: true };
+    }
+    if (!isWinAdmin()) return console.log('  ❌ Нужны права администратора: запустите терминал «от имени администратора».'), { ok: false };
+    if (!queryState(name)) return console.log(`  Служба ${name} не установлена.`), { ok: true };
+    // зависшую службу добиваем и ждём, пока Windows её действительно удалит
+    const ok = await removeService(nssm, name);
+    console.log(ok ? `  ✅ Служба ${name} удалена.` : markedForDeleteHint(name));
+    return { ok };
   }
   if (PLATFORM === 'linux') {
     run('systemctl', ['--user', 'disable', '--now', name], { dry });
@@ -365,13 +468,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     } finally {
       prompt?.close();
     }
-  } else if (cmd === 'uninstall') r = uninstallService({ name, dry });
+  } else if (cmd === 'uninstall') r = await uninstallService({ name, dry });
+  else if (cmd === 'restart') r = await restartService({ name });
   else if (cmd === 'status') {
     r = serviceStatus({ name });
     console.log(r.stdout || r.stderr);
     r = { ok: r.status === 0 };
   } else {
-    console.log('Использование: node src/service.mjs install|uninstall|status [--name <имя>] [--dry-run] [--system]');
+    console.log('Использование: node src/service.mjs install|restart|status|uninstall [--name <имя>] [--dry-run] [--system]');
     r = { ok: false };
   }
   // без process.exit(): на Windows выход сразу после закрытия readline роняет Node — процесс завершится сам

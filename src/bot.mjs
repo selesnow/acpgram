@@ -3,7 +3,7 @@
 // кроме запроса доступа администратору.
 import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './engines.mjs';
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
-import { choiceName, effectiveSelection, refreshCatalogs } from './access.mjs';
+import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, IDLE_MINUTES, LEVELS, MAX_AGENTS, botInfo, db, log, say } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, WELCOME_NOTE } from './admin.mjs';
@@ -187,11 +187,16 @@ async function main() {
   }
 }
 
+let stopping = false;
 function shutdown() {
-  shutdownAll('shutdown');
+  if (stopping) return;
+  stopping = true;
+  shutdownAll('shutdown'); // сессии пользователей: процессы агентов вместе с дочерними
+  killProbes(); // и агенты, запущенные за списком моделей
   db.close();
 }
-for (const sig of ['SIGINT', 'SIGTERM']) {
+// SIGBREAK / SIGHUP — так Windows останавливает консольную программу (служба nssm, закрытие окна)
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
   process.on(sig, () => {
     shutdown();
     process.exit(0);

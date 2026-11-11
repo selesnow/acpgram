@@ -87,7 +87,7 @@ irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
 ```
 
-Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 (официальная сборка, с проверкой контрольной суммы, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | status | uninstall`, `acpgram update`.
+Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 (официальная сборка, с проверкой контрольной суммы, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | restart | status | uninstall`, `acpgram update`.
 
 Два способа, выбирайте под машину:
 
@@ -140,7 +140,7 @@ npm start            # первый запуск без .env сам открое
 | Linux | `systemd --user` (для работы без входа в систему: `sudo loginctl enable-linger $USER`) | `npm run service:install` |
 | macOS | LaunchAgent (`launchd`) | `npm run service:install` |
 
-Ещё: `npm run service:status`, `npm run service:uninstall`. Параметры пишутся после `--` (иначе их заберёт себе npm): `npm run service:install -- --dry-run` показывает команды без выполнения, `-- --name <имя>` — другое имя службы (Windows и Linux), `-- --system` — служба Windows от LocalSystem без терминала. Лог — `data/service.log` (Linux — `journalctl --user -u acpgram -f`). Служба называется `acpgram`.
+Ещё: `acpgram service restart` (после обновления; зависшую службу добивает), `acpgram service status`, `acpgram service uninstall` (или `npm run service:status`, `npm run service:uninstall`). Параметры пишутся после `--` (иначе их заберёт себе npm): `npm run service:install -- --dry-run` показывает команды без выполнения, `-- --name <имя>` — другое имя службы (Windows и Linux), `-- --system` — служба Windows от LocalSystem без терминала. Лог — `data/service.log` (Linux — `journalctl --user -u acpgram -f`; в Windows PowerShell 5.1 читайте с `-Encoding UTF8`: `Get-Content <папка>\data\service.log -Tail 30 -Encoding UTF8`, иначе кириллица превратится в кракозябры). Служба называется `acpgram`.
 
 > Windows: службе нужен **пароль** вашей учётной записи. Если вы входите через учётную запись Microsoft — это пароль от неё, а не PIN-код Windows (с PIN служба не сможет войти — мастер это распознает и попросит пароль ещё раз). Учётная запись без пароля службу запустить не может.
 >

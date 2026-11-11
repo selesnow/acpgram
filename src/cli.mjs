@@ -1,7 +1,7 @@
 // Команда acpgram (устанавливается install.ps1 / install.sh):
 //   acpgram [start]            запустить бота (первый запуск без .env — мастер настройки)
 //   acpgram setup              мастер настройки
-//   acpgram service <install|uninstall|status> [--name <имя>] [--dry-run] [--system]
+//   acpgram service <install|restart|status|uninstall> [--name <имя>] [--dry-run] [--system]
 //   acpgram update             обновить до последнего релиза (повторный запуск установщика)
 //   acpgram version | help
 import { spawnSync } from 'node:child_process';
@@ -18,6 +18,7 @@ export const HELP = `AcpGram — Telegram-шлюз к AI-агентам разр
   acpgram [start]          запустить бота (первый запуск без настроек откроет мастер)
   acpgram setup            мастер настройки
   acpgram service install  зарегистрировать службу (автозапуск, перезапуск при сбое)
+  acpgram service restart  перезапустить службу (после обновления; зависшую — добивает)
   acpgram service status | uninstall
   acpgram update           обновить до последней версии
   acpgram version          версия
@@ -34,7 +35,7 @@ export function route(argv) {
     case 'setup':
       return { run: 'setup.mjs', args: rest };
     case 'service':
-      if (!['install', 'uninstall', 'status'].includes(rest[0])) return { error: 'acpgram service install | uninstall | status' };
+      if (!['install', 'restart', 'uninstall', 'status'].includes(rest[0])) return { error: 'acpgram service install | restart | status | uninstall' };
       return { run: 'service.mjs', args: rest };
     case 'update':
       return { update: true };
