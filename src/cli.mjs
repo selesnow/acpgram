@@ -93,10 +93,23 @@ if (isMain()) {
     const before = version();
     if (r.update) console.log(`Обновляю AcpGram (сейчас ${before}) до последней версии…`);
     const [cmd, args] = r.update ? updateCommand() : [process.execPath, [...NODE_FLAGS, fileURLToPath(new URL(`./${r.run}`, import.meta.url)), ...r.args]];
-    const res = spawnSync(cmd, args, { stdio: 'inherit', env: r.update ? updateEnv() : process.env });
+    const env = r.update ? updateEnv() : process.env;
+    let res = spawnSync(cmd, args, { stdio: 'inherit', env });
+    // Защита Windows (правила ASR Защитника, антивирус) может запрещать node.exe запускать PowerShell — EPERM / EACCES.
+    // Тогда — через cmd.exe: родителем PowerShell будет cmd.exe, а не node.exe. (Новый acpgram.cmd вообще обновляет
+    // сам, без Node — этот путь для старых копий команды и прямого запуска cli.mjs.)
+    if (r.update && res.error && process.platform === 'win32') {
+      console.log(`Не удалось запустить PowerShell из Node (${res.error.code}) — пробую через cmd.exe…`);
+      res = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${[cmd, ...args].map((a) => (/[\s|]/.test(a) ? `"${a}"` : a)).join(' ')}"`], {
+        stdio: 'inherit',
+        env,
+        windowsVerbatimArguments: true,
+      });
+    }
     // никогда не молчим: если процесс не удалось запустить — говорим почему и что делать
     if (res.error) {
       console.error(`Не удалось запустить ${cmd}: ${res.error.message}`);
+      if (/EPERM|EACCES/.test(res.error.code ?? '')) console.error('Запуск, похоже, блокирует защита Windows или антивирус.');
       if (r.update) console.error(`Обновите вручную:\n  ${process.platform === 'win32' ? `irm https://raw.githubusercontent.com/${REPO}/main/install.ps1 | iex` : `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash`}`);
     } else if (r.update) {
       const after = version();

@@ -108,7 +108,23 @@
     # (non-ASCII folder names would break in the console code page) and the same on every update.
     # ACPGRAM_HOME is passed so that `acpgram update` updates this very installation.
     $nodeRef = if ($node -eq $private) { '"%~dp0..\node\node.exe"' } else { 'node' }
-    $cmd = "@echo off`r`nrem AcpGram command (created by install.ps1)`r`nsetlocal`r`nif not defined ACPGRAM_HOME set `"ACPGRAM_HOME=%~dp0..`"`r`n$nodeRef --disable-warning=ExperimentalWarning `"%~dp0..\src\cli.mjs`" %*`r`n"
+    # `acpgram update` runs the installer right from this batch file, not from node.exe: security software
+    # (Defender ASR rules, antivirus) may forbid node.exe to start PowerShell (EPERM). The update branch is a single
+    # parenthesized block ending with `exit /b`: cmd.exe parses it whole before running, so the installer may
+    # rewrite this very file meanwhile.
+    $lines = @(
+      '@echo off',
+      'rem AcpGram command (created by install.ps1)',
+      'setlocal',
+      'if not defined ACPGRAM_HOME set "ACPGRAM_HOME=%~dp0.."',
+      'if /i "%~1"=="update" (',
+      '  echo Updating AcpGram to the latest release...',
+      '  "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex"',
+      '  exit /b',
+      ')',
+      "$nodeRef --disable-warning=ExperimentalWarning `"%~dp0..\src\cli.mjs`" %*"
+    )
+    $cmd = ($lines -join "`r`n") + "`r`n"
     $cmdFile = Join-Path $bin 'acpgram.cmd'
     # rewrite only when changed: `acpgram update` runs from this very file, and cmd.exe reads a batch file as it goes
     if (-not (Test-Path $cmdFile) -or [IO.File]::ReadAllText($cmdFile) -ne $cmd) {

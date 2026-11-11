@@ -37,6 +37,18 @@ test('updateCommand / updateEnv: тот же установщик, эта же �
   assert.equal(updateEnv({ ACPGRAM_HOME: '/x' }, '/opt/acpgram').ACPGRAM_HOME, '/x', 'явно заданный путь важнее');
 });
 
+test('install.ps1: acpgram.cmd обновляет сам, без node.exe (защита Windows может запрещать node → PowerShell)', () => {
+  const ps = readFileSync(new URL('../install.ps1', import.meta.url), 'utf8');
+  assert.ok(!/[^\x00-\x7f]/.test(ps), 'установщик — только ASCII (PowerShell 5.1 читает его в кодировке консоли)');
+  const update = ps.indexOf(`'if /i "%~1"=="update" ('`);
+  const node = ps.indexOf('--disable-warning=ExperimentalWarning `"%~dp0..\\src\\cli.mjs`" %*');
+  assert.ok(update > 0 && node > update, 'ветка update — до запуска node');
+  const block = ps.slice(update, node);
+  assert.ok(block.includes(String.raw`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"`), 'PowerShell по полному пути');
+  assert.ok(block.includes('install.ps1 | iex'));
+  assert.ok(block.includes(`'  exit /b'`), 'блок завершается exit /b: cmd.exe разобрал его целиком до перезаписи файла');
+});
+
 test('cli.mjs как команда: version и код выхода при ошибке', () => {
   const ok = spawnSync(process.execPath, [CLI, 'version'], { encoding: 'utf8' });
   assert.equal(ok.status, 0);
