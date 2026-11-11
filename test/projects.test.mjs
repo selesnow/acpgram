@@ -107,7 +107,8 @@ test('findDirs: поиск от заданной папки (без корня �
 });
 
 test('pushRecent: прежний проект — первым, без текущего и повторов, не больше лимита', () => {
-  const up = (p) => (P.CASE_INSENSITIVE_FS ? p.toUpperCase() : p);
+  // тот же путь в другом регистре: на Windows / macOS — один проект, на Linux — разные
+  const up = (p) => p.toUpperCase();
   assert.deepEqual(P.pushRecent([], '/p/a', '/p/b'), ['/p/a']);
   assert.deepEqual(P.pushRecent(['/p/c', '/p/a'], '/p/a', '/p/b'), ['/p/a', '/p/c'], 'повтор схлопнут');
   assert.deepEqual(P.pushRecent(['/p/b', '/p/c'], '/p/a', '/p/b'), ['/p/a', '/p/c'], 'новый текущий убран');
