@@ -110,11 +110,13 @@ export const parseOemCp = (output) => Number(/OEMCP\s+REG_SZ\s+(\d+)/.exec(outpu
 /**
  * Поиск программы по PATH средствами Node (строки без кодовых страниц, в отличие от `where`, который в профиле
  * с кириллицей выдаёт пути в cp866). Возвращает первый найденный файл или null.
- * @param {string} cmd имя без расширения
+ * @param {string} cmd имя без расширения («gemini») или с ним («gemini.cmd»)
  * @param {{pathVar?: string, exts?: string[], exists: (p: string) => boolean, extra?: string[]}} o
  */
 export function findOnPath(cmd, { pathVar = process.env.PATH ?? process.env.Path ?? '', exts = ['.exe', '.cmd', '.bat'], exists, extra = [] } = {}) {
   const dirs = [...pathVar.split(';').map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean), ...extra];
-  for (const dir of dirs) for (const ext of exts) if (exists(win32.join(dir, cmd + ext))) return win32.join(dir, cmd + ext);
+  // имя уже с расширением («gemini.cmd», «codex-acp.cmd») — проверяем как есть, иначе получилось бы «codex-acp.cmd.cmd»
+  const hasExt = exts.some((e) => cmd.toLowerCase().endsWith(e));
+  for (const dir of dirs) for (const ext of hasExt ? [''] : exts) if (exists(win32.join(dir, cmd + ext))) return win32.join(dir, cmd + ext);
   return null;
 }

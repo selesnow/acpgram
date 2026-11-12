@@ -13,8 +13,6 @@
 // Ключи API (GEMINI_API_KEY, ANTHROPIC_API_KEY) процессы агентов получают из окружения бота.
 import { AcpAgent, checkCommand } from './acp.mjs';
 
-const IS_WIN = process.platform === 'win32';
-
 /** Служебная строка Gemini «[MODE_UPDATE] <режим>» приходит как текст ответа — убираем её из начала. */
 const stripGeminiModeUpdate = (s) => s.replace(/^\s*\[MODE_UPDATE\]\s*(?:default|autoEdit|auto_edit|yolo|plan)/, '');
 
@@ -60,7 +58,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'Gemini CLI',
     short: 'Gemini',
     envVar: 'GEMINI_COMMAND',
-    defaultCommand: IS_WIN ? 'gemini.cmd' : 'gemini',
+    defaultCommand: 'gemini',
     args: ['--acp'],
     versionArgs: ['--version'],
     install: 'npm i -g @google/gemini-cli',
@@ -134,7 +132,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'OpenAI Codex',
     short: 'Codex',
     envVar: 'CODEX_COMMAND',
-    defaultCommand: IS_WIN ? 'codex-acp.cmd' : 'codex-acp', // мост ACP: npm i -g @agentclientprotocol/codex-acp
+    defaultCommand: 'codex-acp', // мост ACP: npm i -g @agentclientprotocol/codex-acp
     args: [],
     versionArgs: ['--version'],
     install: 'npm i -g @agentclientprotocol/codex-acp (нужен установленный Codex CLI и вход: codex login)',

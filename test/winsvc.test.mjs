@@ -95,4 +95,13 @@ test('findOnPath: поиск по PATH без where.exe (кириллица в �
   assert.equal(findOnPath('nssm', { pathVar, exists, exts: ['.exe'] }), String.raw`C:\Tools\nssm.exe`);
   assert.equal(findOnPath('nssm', { pathVar: 'C:\\Windows', exists, exts: ['.exe'], extra: ['C:\\Tools'] }), String.raw`C:\Tools\nssm.exe`, 'дополнительные папки (ссылки WinGet)');
   assert.equal(findOnPath('agy', { pathVar, exists }), null);
+
+  // имя с расширением проверяется как есть (раньше искалось «codex-acp.cmd.cmd»)
+  const npm = { pathVar: 'C:\\npm', exists: (p) => p === 'C:\\npm\\codex-acp.cmd' };
+  assert.equal(findOnPath('codex-acp.cmd', npm), String.raw`C:\npm\codex-acp.cmd`);
+  assert.equal(findOnPath('codex-acp', npm), String.raw`C:\npm\codex-acp.cmd`);
+  assert.equal(findOnPath('codex-acp.bat', npm), null);
+  // расширение определяется без учёта регистра, регистр имени сохраняется в пути
+  assert.equal(findOnPath('GEMINI.CMD', { pathVar: 'C:\\npm', exists: (p) => p === 'C:\\npm\\GEMINI.CMD' }), String.raw`C:\npm\GEMINI.CMD`);
+  assert.equal(findOnPath('GEMINI.CMD', npm), null);
 });
