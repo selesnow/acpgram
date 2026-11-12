@@ -1,5 +1,5 @@
 # Публикация пакета acpgram в npm реестр через GitHub Actions
-# Запуск по тегу версии (v1.12.0)
+# Запуск по тегу версии (vX.Y.Z)
 # Использует Trusted Publishing (OIDC) без статических токенов NPM_TOKEN
 name: Publish to npm
 

@@ -2,11 +2,12 @@
 // Токен (проверка getMe) → администратор (определяется по сообщению боту) → корень проектов → движки и ключи API →
 // .env → база → тестовое сообщение администратору → по желанию регистрация службы.
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
-import { APP, APP_DIR, DATA_DIR, ENV_PATH } from './app.mjs';
+import { APP, APP_DIR, DATA_DIR, ENV_PATH, HOME_DIR } from './app.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';
 import { findOnPath } from './winsvc.mjs';
@@ -78,6 +79,7 @@ export const envBackupPath = (dataDir = DATA_DIR) => join(dataDir, '.env.bak');
  */
 export function writeEnvFile(values, path = ENV_PATH, backup = envBackupPath()) {
   const text = serializeEnv(values); // сначала проверяем, что всё записывается, — до изменения файлов
+  mkdirSync(dirname(path), { recursive: true }); // при установке через npm каталога (~/.acpgram) ещё нет
   if (existsSync(path)) {
     mkdirSync(dirname(backup), { recursive: true });
     copyFileSync(path, backup);
@@ -85,6 +87,30 @@ export function writeEnvFile(values, path = ENV_PATH, backup = envBackupPath()) 
   }
   writeFileSync(path, text, { encoding: 'utf8', mode: 0o600 });
   chmodSync(path, 0o600);
+}
+
+// ---------- перенос из прежней установки (install.ps1 / install.sh) ----------
+
+/** Где установщики с GitHub (install.ps1 / install.sh) хранят .env и data/ по умолчанию. */
+export function legacyHomeDirs(env = process.env, platform = process.platform, home = homedir()) {
+  if (platform === 'win32') return env.LOCALAPPDATA ? [join(env.LOCALAPPDATA, 'acpgram')] : [];
+  return [join(home, '.local', 'share', 'acpgram')];
+}
+
+/** Каталог прежней установки с .env (не текущий), или undefined. */
+export function findLegacyHome({ current = HOME_DIR, dirs = legacyHomeDirs(), exists = existsSync } = {}) {
+  return dirs.find((d) => resolve(d) !== resolve(current) && exists(join(d, '.env')));
+}
+
+/** Копирует базу бота (с WAL-файлами) из прежней установки, если в новом каталоге её ещё нет. Возвращает true, если скопировано. */
+export function copyLegacyDb(legacyDir, dataDir = DATA_DIR) {
+  const from = join(legacyDir, 'data', 'bot.db');
+  if (!existsSync(from) || existsSync(join(dataDir, 'bot.db'))) return false;
+  mkdirSync(dataDir, { recursive: true });
+  for (const f of ['bot.db', 'bot.db-wal', 'bot.db-shm']) {
+    if (existsSync(join(legacyDir, 'data', f))) copyFileSync(join(legacyDir, 'data', f), join(dataDir, f));
+  }
+  return true;
 }
 
 // ---------- Telegram ----------
@@ -157,6 +183,23 @@ export async function runSetup({ fromStart = false } = {}) {
     console.log(`\n${APP.label} — настройка${existsSync(ENV_PATH) ? ' (текущие значения — в скобках, Enter оставляет их)' : ''}`);
     if (fromStart) console.log('Бот ещё не настроен — ответьте на несколько вопросов.');
 
+    // Прежняя установка через install.ps1 / install.sh хранит данные в другом каталоге — предлагаем перенести
+    const legacy = existsSync(ENV_PATH) ? undefined : findLegacyHome();
+    if (legacy) {
+      console.log(`
+Найдена прежняя установка AcpGram: ${legacy}`);
+      console.log('  Её настройки и база бота не видны этой установке (данные хранятся в другом каталоге).');
+      if (await p.yes('  Перенести настройки и базу (прежние файлы не удаляются)? Если там запущена служба, сначала остановите её: acpgram service stop')) {
+        Object.assign(env, readEnvFile(join(legacy, '.env')));
+        ok(`настройки прочитаны из ${join(legacy, '.env')}`);
+        try {
+          if (copyLegacyDb(legacy)) ok(`база бота скопирована в ${DATA_DIR}`);
+        } catch (e) {
+          warn(`базу скопировать не удалось: ${e.message}`);
+        }
+      }
+    }
+
     // 1. токен
     step(1, 'Токен бота: создайте бота у @BotFather (/newbot) и вставьте токен');
     let me;
@@ -184,7 +227,7 @@ export async function runSetup({ fromStart = false } = {}) {
         const from = await waitForAdmin(env.TELEGRAM_BOT_TOKEN);
         if (from && (await p.yes(`  Это вы: ${from.username ? '@' + from.username : from.first_name} (ID ${from.id})?`))) adminId = String(from.id);
       } catch (e) {
-        warn(`не удалось получить сообщения бота: ${e.message}${/conflict/i.test(e.message) ? ' — похоже, бот уже где-то запущен; остановите его' : ''}`);
+        warn(`не удалось получить сообщения бота: ${e.message}${/conflict/i.test(e.message) ? ' — этот токен уже опрашивает другой запущенный бот (например, прежняя служба: acpgram service stop); остановите его или введите ID вручную' : ''}`);
       }
       while (!/^\d+$/.test(adminId ?? '')) adminId = await p.ask('  Введите ваш числовой Telegram ID (его покажет @userinfobot)');
       env.ALLOWED_USER_ID = adminId;

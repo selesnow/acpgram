@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { resolveHomeDir } from '../src/app.mjs';
 import { homedir } from 'node:os';
-import { envValue, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
+import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
 import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 
@@ -184,4 +184,48 @@ test('resolveHomeDir: папка данных для npm vs локальной �
   assert.equal(resolveHomeDir({}, '/usr/local/lib/node_modules/acpgram'), join(homedir(), '.acpgram'));
   assert.equal(resolveHomeDir({}, String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\acpgram`), join(homedir(), '.acpgram'));
   assert.equal(resolveHomeDir({}, '/home/u/projects/acpgram'), '/home/u/projects/acpgram');
+});
+
+test('writeEnvFile: создаёт каталог, которого ещё нет (первая установка через npm: ~/.acpgram)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'setup-'));
+  try {
+    const path = join(dir, 'новый', '.acpgram', '.env');
+    writeEnvFile({ TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1' }, path, join(dir, 'новый', '.acpgram', 'data', '.env.bak'));
+    assert.deepEqual(readEnvFile(path), { TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacyHomeDirs / findLegacyHome: прежняя установка install.ps1 / install.sh', () => {
+  const local = String.raw`C:\Users\u\AppData\Local`;
+  assert.deepEqual(legacyHomeDirs({ LOCALAPPDATA: local }, 'win32', '/h'), [join(local, 'acpgram')]);
+  assert.deepEqual(legacyHomeDirs({}, 'win32', '/h'), []);
+  assert.deepEqual(legacyHomeDirs({}, 'linux', '/home/u'), [join('/home/u', '.local', 'share', 'acpgram')]);
+  const old = join('/x', 'old');
+  const has = (d) => d === join(old, '.env');
+  assert.equal(findLegacyHome({ current: '/x/new', dirs: [old], exists: has }), old);
+  assert.equal(findLegacyHome({ current: old, dirs: [old], exists: has }), undefined, 'текущий каталог — не «прежний»');
+  assert.equal(findLegacyHome({ current: '/x/new', dirs: [old], exists: () => false }), undefined, 'нет .env — нечего переносить');
+});
+
+test('copyLegacyDb: копирует базу с WAL-файлами и не перезаписывает существующую', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'setup-'));
+  try {
+    const legacy = join(dir, 'old');
+    const dataDir = join(dir, 'new', 'data');
+    mkdirSync(join(legacy, 'data'), { recursive: true });
+    assert.equal(copyLegacyDb(legacy, dataDir), false, 'в прежней установке базы нет');
+    writeFileSync(join(legacy, 'data', 'bot.db'), 'db');
+    writeFileSync(join(legacy, 'data', 'bot.db-wal'), 'wal');
+    assert.equal(copyLegacyDb(legacy, dataDir), true);
+    assert.equal(readFileSync(join(dataDir, 'bot.db'), 'utf8'), 'db');
+    assert.equal(readFileSync(join(dataDir, 'bot.db-wal'), 'utf8'), 'wal');
+    assert.equal(existsSync(join(dataDir, 'bot.db-shm')), false);
+    writeFileSync(join(dataDir, 'bot.db'), 'mine');
+    assert.equal(copyLegacyDb(legacy, dataDir), false, 'уже есть своя база — не трогаем');
+    assert.equal(readFileSync(join(dataDir, 'bot.db'), 'utf8'), 'mine');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

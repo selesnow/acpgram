@@ -57,6 +57,8 @@ Settings (`.env`) and SQLite database (`data/bot.db`) are stored in `~/.acpgram`
 #### Migrating from install.ps1 (resolving PATH conflict)
 The `install.ps1` script adds `%LOCALAPPDATA%\acpgram\bin` to the user `PATH`. If you switch to the npm installation, Windows might still invoke the old script due to `PATH` order.
 
+You do not need to move settings and the database by hand: on the first `acpgram setup` the wizard finds `%LOCALAPPDATA%cpgram` (`~/.local/share/acpgram` on Linux and macOS) and offers to import `.env` and `data/bot.db`. Stop the old service first, otherwise the bot token stays busy and Telegram returns a `Conflict` error.
+
 To switch:
 1. Stop and uninstall any previous service:
    ```powershell
