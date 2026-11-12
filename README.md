@@ -1,3 +1,10 @@
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/selesnow/acpgram/main/logo/acpgram-logo-light.svg">
+    <img alt="AcpGram" src="https://raw.githubusercontent.com/selesnow/acpgram/main/logo/acpgram-logo-dark.svg" width="120">
+  </picture>
+</p>
+
 # AcpGram
 
 [![npm version](https://img.shields.io/npm/v/acpgram.svg)](https://www.npmjs.com/package/acpgram)
