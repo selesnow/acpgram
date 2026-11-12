@@ -1,5 +1,6 @@
 // Состояние по пользователям: у каждого свой процесс агента, движок, проект, флаг «занят» и разрешения.
-import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVELS, MAX_AGENTS, db, log, say } from './ctx.mjs';
+import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVEL_KEYS, MAX_AGENTS, db, langOf, levelName, log, say } from './ctx.mjs';
+import { t } from './i18n.mjs';
 import { canUseEngine } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, createAgent, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
 import { DEFAULT_DIR, insideRoot, pushRecent, samePath } from './projects.mjs';
@@ -15,7 +16,7 @@ export class LimitError extends Error {
 /** Сессию закрыли (/close, администратор, отзыв доступа), пока агент запускался или запрос готовился. */
 export class ClosedError extends Error {
   code = 'CLOSED';
-  constructor(message = 'Сессия закрыта.') {
+  constructor(message = 'Session closed.') {
     super(message);
   }
 }
@@ -38,9 +39,12 @@ export function modeFor(userId, engine = getEngine(DEFAULT_ENGINE)) {
   return engineMode(engine, { admin: isAdmin(userId), level: db.getUser(userId)?.level });
 }
 
+/** Название уровня доступа пользователя на его языке (администратор — свой уровень). */
 export function levelLabel(userId) {
-  if (isAdmin(userId)) return 'Администратор';
-  return LEVELS[db.getUser(userId)?.level]?.label ?? '—';
+  const lang = langOf(userId);
+  if (isAdmin(userId)) return t('level.admin', lang);
+  const level = db.getUser(userId)?.level;
+  return LEVEL_KEYS.includes(level) ? levelName(level, lang) : '—';
 }
 
 export function getState(userId, chatId) {
@@ -151,7 +155,7 @@ const activeUserAgents = () => [...states.values()].filter((s) => !isAdmin(s.use
 export async function ensureAgent(st, { resume } = {}) {
   if (st.agent && !st.agent.closed) return st.agent;
   if (!isAdmin(st.userId) && activeUserAgents() >= MAX_AGENTS) {
-    throw new LimitError(`⏳ Сейчас заняты все ${MAX_AGENTS} слота агентов сотрудников. Попробуйте через минуту.`);
+    throw new LimitError(t('limit.slots', langOf(st.userId), { max: MAX_AGENTS }));
   }
   const engine = engineOf(st);
   const allowed = modeFor(st.userId, engine);
@@ -165,7 +169,7 @@ export async function ensureAgent(st, { resume } = {}) {
         if (a.sessionId && st.agent === a && !modeAllowed(engine, u.currentModeId, allowed)) {
           log(`⛔ ${engine.label} перешёл в режим ${u.currentModeId} выше разрешённого (${allowed}) — сессия закрыта | пользователь`, st.userId);
           stopUser(st, 'mode-violation');
-          say(st.chatId, `⛔ Агент попытался перейти в режим «${u.currentModeId}», недоступный на вашем уровне доступа. Запрос остановлен, сессия закрыта.`);
+          say(st.chatId, t('state.modeViolation', langOf(st.userId), { mode: u.currentModeId }));
           return;
         }
         a.mode = u.currentModeId;
@@ -220,7 +224,7 @@ export function startIdleReaper() {
       if (st.agent && !st.busy && Date.now() - st.lastActive > IDLE_MS) {
         endAgent(st, 'idle');
         log('сессия закрыта по неактивности, пользователь', st.userId);
-        say(st.chatId, `💤 Сессия закрыта из-за неактивности (${IDLE_MINUTES} мин). Следующий запрос начнёт новую.`);
+        say(st.chatId, t('state.idle', langOf(st.userId), { min: IDLE_MINUTES }));
       }
     }
   }, 60_000).unref();

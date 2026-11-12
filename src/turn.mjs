@@ -1,8 +1,9 @@
 // Один запрос пользователя: черновик со стримингом, ход работы, запросы разрешений, итоговый ответ.
-import { db, dbg, log, say } from './ctx.mjs';
-import { display } from './projects.mjs';
+import { db, dbg, langOf, log, say } from './ctx.mjs';
+import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
+import { t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
 import { parseTool } from './tools.mjs';
 import { tg, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
@@ -13,25 +14,27 @@ const DRAFT_INTERVAL_MS = 1000;
 const HEARTBEAT_MS = 8000; // черновик живёт 30 с — обновляем и без изменений
 
 // ---- запрос разрешения: inline-кнопки (приходят самому пользователю, чей это запрос) ----
-const OPTION_LABELS = { allow_once: '✅ Разрешить', allow_always: '✅ Разрешить на эту сессию', reject_once: '⛔ Отклонить', reject_always: '⛔ Отклонять всегда' };
-const RESULT_LABELS = { allow_once: '✅ Разрешено', allow_always: '✅ Разрешено на эту сессию', reject_once: '⛔ Отклонено', reject_always: '⛔ Отклонено' };
+const PERM_KINDS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'];
 let permSeq = 0;
 
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 /** Подпись кнопки: варианты, меняющие режим сессии (выход из плана у Claude Code), — своим текстом агента. */
-const optionLabel = (engine, o) => (engine.optionMode?.(o) ? `▶️ ${o.name}` : OPTION_LABELS[o.kind] || o.name);
-const resultLabel = (engine, o) => (engine.optionMode?.(o) ? `▶️ ${o.name}` : RESULT_LABELS[o.kind] || o.name);
+const optionLabel = (engine, o, lang) => (engine.optionMode?.(o) ? `▶️ ${o.name}` : PERM_KINDS.includes(o.kind) ? t(`perm.opt.${o.kind}`, lang) : o.name);
+/** Подпись после ответа: отклонённые варианты — одной формулировкой. */
+const resultLabel = (engine, o, lang) =>
+  engine.optionMode?.(o) ? `▶️ ${o.name}` : o.kind.startsWith('reject') && PERM_KINDS.includes(o.kind) ? t('perm.res.reject', lang) : PERM_KINDS.includes(o.kind) ? t(`perm.res.${o.kind}`, lang) : o.name;
 
 async function askPermission(st, params) {
   const seq = ++permSeq;
+  const lang = langOf(st.userId);
   const tc = params.toolCall || {};
   const engine = engineOf(st);
   const info = parseTool(tc, engine);
   // ни постоянных правил, ни выхода в режим выше уровня доступа пользователя из чата не даём
   const options = permissionOptions(engine, params.options || [], modeFor(st.userId, engine));
   const what = info.description || info.title || info.tool;
-  const meta = toolMeta(info.tool, info.kind);
+  const meta = toolMeta(info.tool, info.kind, lang);
   const head = `${meta.icon} ${meta.label}`;
   const dbId = () => db.permissionAsked(st.requestId, tc.toolCallId, info.title || what, params.options);
 
@@ -40,15 +43,15 @@ async function askPermission(st, params) {
     const reject = options.find((o) => o.kind.startsWith('reject'));
     const id = dbId();
     db.permissionAnswered(id, reject?.optionId ?? null, reject ? 'auto-rejected' : 'cancelled');
-    say(st.chatId, `🔒 Агент запросил действие, недоступное на вашем уровне доступа, — отклонено.\n${head}: ${trunc(what, 300)}`);
+    say(st.chatId, t('perm.blocked', lang, { head, what: trunc(what, 300) }));
     return reject ? { outcome: 'selected', optionId: reject.optionId } : { outcome: 'cancelled' };
   }
   // команда — блоком кода, для остального (путь к файлу и т.п.) — моноширинный текст
   const isCmd = info.kind === 'execute' && info.title;
   const body = isCmd
-    ? `${escHtml(trunc(info.description || 'выполнение команды', 400))}\n\n<pre>${escHtml(trunc(info.title, 1200))}</pre>`
+    ? `${escHtml(trunc(info.description || t('step.command', lang), 400))}\n\n<pre>${escHtml(trunc(info.title, 1200))}</pre>`
     : `<code>${escHtml(trunc(what, 600))}</code>`;
-  const text = `🔐 <b>Агент просит разрешение</b>\n\n<b>${escHtml(head)}</b>: ${body}`;
+  const text = `${t('perm.ask', lang)}\n\n<b>${escHtml(head)}</b>: ${body}`;
 
   const permId = dbId();
   // индекс кнопки — в списке показанных вариантов: скрытый вариант подменой callback_data не выбрать
@@ -57,14 +60,14 @@ async function askPermission(st, params) {
     text,
     parse_mode: 'HTML',
     reply_markup: {
-      inline_keyboard: options.map((o, i) => [{ text: optionLabel(engine, o), callback_data: `perm:${seq}:${i}` }]),
+      inline_keyboard: options.map((o, i) => [{ text: optionLabel(engine, o, lang), callback_data: `perm:${seq}:${i}` }]),
     },
   });
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       if (!st.perms.delete(seq)) return;
       db.permissionAnswered(permId, null, 'timeout');
-      tg('editMessageText', { chat_id: st.chatId, message_id: msg.message_id, text: `⌛ Время вышло, отклонено\n${head}: ${what}`.slice(0, 4000) }).catch(() => {});
+      tg('editMessageText', { chat_id: st.chatId, message_id: msg.message_id, text: t('perm.timeout', lang, { head, what }).slice(0, 4000) }).catch(() => {});
       resolve({ outcome: 'cancelled' });
     }, PERMISSION_TIMEOUT_MS);
     st.perms.set(seq, {
@@ -87,14 +90,15 @@ setPermissionHandler(askPermission);
 export async function onPermissionCallback(st, cb) {
   const m = /^perm:(\d+):(\d+)$/.exec(cb.data || '');
   const p = m && st.perms.get(Number(m[1]));
-  if (!p) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Запрос уже неактуален' }).catch(() => {});
+  const lang = langOf(st.userId);
+  if (!p) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('perm.stale', lang) }).catch(() => {});
   const opt = p.options[Number(m[2])];
-  if (!opt) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Нет такого варианта' }).catch(() => {});
+  if (!opt) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('perm.badOption', lang) }).catch(() => {});
   st.perms.delete(Number(m[1]));
   db.permissionAnswered(p.dbId, opt.optionId, 'selected');
   p.resolve({ outcome: 'selected', optionId: opt.optionId });
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-  await tg('editMessageText', { chat_id: p.chatId, message_id: p.messageId, text: `${resultLabel(p.engine, opt)}\n${p.title}`.slice(0, 4000) }).catch(() => {});
+  await tg('editMessageText', { chat_id: p.chatId, message_id: p.messageId, text: `${resultLabel(p.engine, opt, lang)}\n${p.title}`.slice(0, 4000) }).catch(() => {});
 }
 
 /**
@@ -122,6 +126,7 @@ function turnUsage(a, res, lastUsage) {
 /** Выполняет запрос пользователя к агенту и отправляет результат. */
 export async function runTurn(st, text) {
   const chatId = st.chatId;
+  const lang = langOf(st.userId);
   const engine = engineOf(st);
   const clean = engine.cleanText; // служебные вставки движка в тексте ответа
   st.busy = true;
@@ -145,7 +150,7 @@ export async function runTurn(st, text) {
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, answer: clean(answer), elapsedMs: Date.now() - startedAt });
+    const d = composeDraft({ thought, steps, answer: clean(answer), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;
@@ -223,7 +228,7 @@ export async function runTurn(st, text) {
       answer = e.message; // понятное сообщение без пометки «Ошибка»
     } else {
       log('ошибка запроса:', e.message);
-      answer += `\n\n⚠️ Ошибка: ${e.message}`;
+      answer += `\n\n${t('turn.error', lang, { msg: e.message })}`;
     }
     if (!st.requestId) st.requestId = db.startRequest(st.agent?.dbSessionId ?? null, text);
   } finally {
@@ -235,7 +240,7 @@ export async function runTurn(st, text) {
   }
 
   answer = clean(answer);
-  let final = answer.trim() || '(пустой ответ)';
+  let final = answer.trim() || t('turn.empty', lang);
   db.finishRequest(st.requestId, { stopReason, answer: answer.trim(), error, usage: usage ?? {} });
   st.requestId = null;
   if (st.suppress) {
@@ -243,9 +248,9 @@ export async function runTurn(st, text) {
     st.suppress = false;
     return;
   }
-  if (stopReason === 'cancelled') final += '\n\n⏹ Остановлено.';
+  if (stopReason === 'cancelled') final += `\n\n${t('turn.stopped', lang)}`;
   // свёрнутый ход работы и подвал (движок, модель, расход, проект, время); для «все слоты заняты» не нужны
-  const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: display(st.project), engine: engine.short, usage });
+  const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: showPath(st.project, lang), engine: engine.short, usage, lang });
   for (const msg of finalMessages(final, extras)) {
     dbg(`final u${st.userId} stop=${stopReason}`, msg);
     await sendRich(chatId, msg).catch((e) => log('sendRich:', e.message));

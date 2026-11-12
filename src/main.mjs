@@ -26,6 +26,6 @@ else if (process.stdin.isTTY && process.stdout.isTTY) {
   // зарегистрирован как служба — бот уже работает там; второй экземпляр с тем же токеном конфликтовал бы.
   // Без process.exit(): на Windows выход сразу после закрытия readline роняет Node — процесс завершится сам.
 } else {
-  console.error(`Бот не настроен: нет ${ENV_PATH} с TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID. Запустите в терминале: npm run setup`);
+  console.error(`Бот не настроен: нет ${ENV_PATH} с TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID. Запустите в терминале: acpgram setup`);
   process.exitCode = 1;
 }

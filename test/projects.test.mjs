@@ -88,7 +88,8 @@ test('expandHome и display в режиме без корня', () => {
   assert.equal(P.display(join(root, 'a', 'b'), null, root), `~${sep}${join('a', 'b')}`);
   assert.equal(P.display(join(base, 'outside'), null, root), join(base, 'outside'), 'вне домашней — полный путь');
   // с корнем — как раньше
-  assert.equal(P.display(root, root), `${root} (корень)`);
+  assert.equal(P.display(root, root, undefined, 'ru'), `${root} (корень)`);
+  assert.equal(P.display(root, root), `${root} (root)`, 'по умолчанию — английский');
   assert.equal(P.display(join(root, 'a'), root), 'a');
 });
 

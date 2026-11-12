@@ -5,6 +5,7 @@
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { DEFAULT_LANG, t } from './i18n.mjs';
 
 /**
  * Корень проектов (PROJECTS_ROOT, необязательная): реальный путь к существующей папке или null, если не задан.
@@ -90,11 +91,14 @@ export function insideRoot(p, root = ROOT) {
 /**
  * Человекочитаемый путь. С корнем — относительно корня; без корня — полный путь, домашняя папка сокращается до «~».
  */
-export function display(p, root = ROOT, home = HOME) {
-  if (root) return samePath(p, root) ? `${root} (корень)` : relative(root, p);
+export function display(p, root = ROOT, home = HOME, lang = DEFAULT_LANG) {
+  if (root) return samePath(p, root) ? t('proj.root', lang, { root }) : relative(root, p);
   if (samePath(p, home)) return '~';
   return isWithin(p, home) ? `~${sep}${relative(home, p)}` : p;
 }
+
+/** Путь проекта для пользователя на его языке (подпись корня). */
+export const showPath = (p, lang = DEFAULT_LANG) => display(p, ROOT, HOME, lang);
 
 /**
  * Список недавних проектов после смены проекта prev → next: прежний проект — в начало, новый (текущий) из списка

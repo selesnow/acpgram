@@ -5,9 +5,10 @@ import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './eng
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
-import { ADMIN_ID, IDLE_MINUTES, LEVELS, MAX_AGENTS, botInfo, db, log, say } from './ctx.mjs';
-import { adminCommand, handleUnknownUser, onAdminCallback, WELCOME_NOTE } from './admin.mjs';
-import { HOME, ROOT, display } from './projects.mjs';
+import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, hasLang, langOf, log, say, setLang } from './ctx.mjs';
+import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
+import { LANGS, LANG_CODES, LANG_PICK, normLang, t } from './i18n.mjs';
+import { HOME, ROOT, showPath } from './projects.mjs';
 import { handleProject, onNavCallback } from './projectsUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf } from './state.mjs';
@@ -23,21 +24,53 @@ if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
 /** Есть ли у пользователя доступ: администратор или активный сотрудник. */
 const hasAccess = (id) => isAdmin(id) || db.getUser(id)?.status === 'active';
 
-/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
+/** Модель пользователя для экрана /start: выбранная или «Авто» на его языке. */
 const modelLabel = (st) => {
   const engine = engineOf(st);
   const model = effectiveSelection(st.userId, engine).model;
-  return model ? choiceName(engine, 'model', model) : 'Авто';
+  return model ? choiceName(engine, 'model', model) : t('auto', langOf(st.userId));
 };
-const sendStart = (st) =>
-  sendRich(st.chatId, startView({ level: levelLabel(st.userId), project: display(st.project), engine: engineOf(st).label, model: modelLabel(st), isAdmin: isAdmin(st.userId), note: isAdmin(st.userId) ? null : WELCOME_NOTE })).catch((e) => log('start:', e.message));
+
+/** Выбор языка: три кнопки. Показываем, пока язык пользователя не выбран, и по /language. */
+const sendLangPicker = (chatId) =>
+  say(chatId, LANG_PICK, { reply_markup: { inline_keyboard: [LANG_CODES.map((code) => ({ text: LANGS[code], callback_data: `lang:${code}` }))] } });
+
+/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). Без выбранного языка сначала предлагаем выбрать его (после выбора экран откроется сам). */
+const sendStart = (st) => {
+  if (!hasLang(st.userId)) return sendLangPicker(st.chatId);
+  const lang = langOf(st.userId);
+  const admin = isAdmin(st.userId);
+  return sendRich(st.chatId, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), lang })).catch((e) => log('start:', e.message));
+};
 
 /** Кнопки экрана /start (ui:<команда>) работают как соответствующие команды. */
-const UI_COMMANDS = new Set(['project', 'engine', 'model', 'new', 'sessions', 'users', 'invite', 'close', 'active']);
+const UI_COMMANDS = new Set(['project', 'engine', 'model', 'new', 'sessions', 'users', 'invite', 'close', 'active', 'language']);
 async function onUiCallback(st, cb) {
   const name = (cb.data || '').slice('ui:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
   if (UI_COMMANDS.has(name)) return handleText(st, `/${name}`);
+}
+
+/** Кнопка выбора языка (lang:<код>). Первый выбор сразу открывает /start. */
+async function onLangCallback(st, cb) {
+  const code = (cb.data || '').slice('lang:'.length);
+  const chatId = cb.message?.chat?.id ?? st.chatId;
+  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
+  if (!LANG_CODES.includes(code)) return;
+  const first = !hasLang(st.userId);
+  setLang(st.userId, code);
+  const text = t('lang.set', code, { name: LANGS[code] });
+  await tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(chatId, text));
+  if (first) return sendStart(st);
+}
+
+/** /language [ru|uk|en] — без аргумента показываем выбор языка. */
+function languageCommand(st, arg) {
+  const q = (arg || '').trim().toLowerCase();
+  const code = normLang(q);
+  if (!code || q !== code) return sendLangPicker(st.chatId);
+  setLang(st.userId, code);
+  return say(st.chatId, t('lang.set', code, { name: LANGS[code] }));
 }
 
 /** Текст пользователя: команды или запрос к агенту. */
@@ -46,51 +79,53 @@ async function handleText(st, text) {
   const name = cmd?.[1]?.toLowerCase();
   const arg = cmd?.[2];
 
+  const lang = langOf(st.userId);
   if (name === 'start') return sendStart(st);
+  if (name === 'language' || name === 'lang') return languageCommand(st, arg);
   if (name === 'project') return handleProject(st, arg);
   if (name === 'engine') return handleEngine(st, arg);
   if (name === 'model') return handleModel(st);
   if (name === 'sessions') return handleSessions(st);
   if (name === 'stop') {
-    if (!st.busy) return say(st.chatId, 'Сейчас ничего не выполняется.');
+    if (!st.busy) return say(st.chatId, t('stop.none', lang));
     st.agent?.cancel();
     dropPermissions(st);
     return;
   }
   if (name === 'close' || name === 'exit') {
-    if (!closeSession(st, 'close')) return say(st.chatId, 'Активной сессии нет — процесс агента не запущен.');
-    return say(st.chatId, `🛑 Сессия закрыта, процесс выгружен из памяти сервера.${isAdmin(st.userId) ? '' : ' Слот освобождён.'}\nВернуться к диалогу можно через /sessions.`);
+    if (!closeSession(st, 'close')) return say(st.chatId, t('close.none', lang));
+    return say(st.chatId, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
   }
   if (name === 'new') {
-    if (st.busy) return say(st.chatId, 'Сначала остановите текущий запрос: /stop');
+    if (st.busy) return say(st.chatId, t('busy.stop', lang));
     endAgent(st, 'new');
-    return say(st.chatId, `🆕 Новая сессия. ${engineOf(st).label} начнёт диалог с чистого листа.\n📁 Проект: ${display(st.project)}`);
+    return say(st.chatId, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
   }
   if (name === 'invite' || name === 'users' || name === 'active') {
-    if (!isAdmin(st.userId)) return say(st.chatId, 'Команда доступна только администратору.');
+    if (!isAdmin(st.userId)) return say(st.chatId, t('admin.only', lang));
     return adminCommand(st.chatId, `/${name}`);
   }
-  if (st.busy) return say(st.chatId, 'Предыдущий запрос ещё выполняется. /stop — остановить.');
+  if (st.busy) return say(st.chatId, t('busy.running', lang));
   return runTurn(st, text);
 }
 
-/** Меню команд: у всех общее, у администратора дополнительно /users и /invite. */
+/**
+ * Меню команд на языке: по умолчанию — английский; русский и украинский — для клиентов Telegram с таким языком
+ * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
+ */
+const menuFor = (lang, admin) => {
+  const common = ['project', 'engine', 'model', 'new', 'sessions', 'stop', 'close', 'language', 'start'].map((command) => ({ command, description: t(`menu.${command}`, lang) }));
+  if (!admin) return common;
+  return [{ command: 'active', description: t('menu.active', lang) }, { command: 'users', description: t('menu.users', lang) }, { command: 'invite', description: t('menu.invite', lang) }, ...common];
+};
+
 async function setupCommands() {
-  const common = [
-    { command: 'project', description: 'Выбрать проект (папку), в которой работает агент' },
-    { command: 'engine', description: 'Выбрать движок: Gemini CLI, Claude Code, Antigravity CLI, Codex' },
-    { command: 'model', description: 'Выбрать модель и уровень рассуждений' },
-    { command: 'new', description: 'Начать новый диалог (новая сессия агента)' },
-    { command: 'sessions', description: 'Вернуться к прошлой сессии в этом проекте' },
-    { command: 'stop', description: 'Остановить выполняющийся запрос' },
-    { command: 'close', description: 'Закрыть сессию и освободить слот' },
-    { command: 'start', description: 'Приветствие и текущий проект' },
-  ];
-  await tg('setMyCommands', { scope: { type: 'default' }, commands: common });
-  await tg('setMyCommands', {
-    scope: { type: 'chat', chat_id: ADMIN_ID },
-    commands: [{ command: 'active', description: 'Активные сессии: кто занимает слоты' }, { command: 'users', description: 'Сотрудники с доступом: уровни и отзыв' }, { command: 'invite', description: 'Пригласить сотрудника по ссылке' }, ...common],
-  });
+  await tg('setMyCommands', { scope: { type: 'default' }, commands: menuFor('en', false) });
+  await tg('setMyCommands', { scope: { type: 'chat', chat_id: ADMIN_ID }, commands: menuFor('en', true) });
+  for (const code of LANG_CODES.filter((c) => c !== 'en')) {
+    await tg('setMyCommands', { scope: { type: 'default' }, language_code: code, commands: menuFor(code, false) });
+    await tg('setMyCommands', { scope: { type: 'chat', chat_id: ADMIN_ID }, language_code: code, commands: menuFor(code, true) });
+  }
 }
 
 async function handleUpdate(u) {
@@ -113,7 +148,7 @@ async function handleUpdate(u) {
   const chatId = msg?.chat.id ?? cb.message?.chat?.id ?? from.id;
 
   if (!hasAccess(from.id)) {
-    if (cb) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: 'Нет доступа' }).catch(() => {});
+    if (cb) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('access.denied', langOf(from.id)) }).catch(() => {});
     if (msg?.text) {
       log('нет доступа, id =', from.id, from.username);
       return handleUnknownUser(from, chatId, msg.text);
@@ -132,6 +167,7 @@ async function handleUpdate(u) {
     if (data.startsWith('eng:')) return onEngineCallback(st, cb);
     if (data.startsWith('mdl:')) return onModelCallback(st, cb);
     if (data.startsWith('ui:')) return onUiCallback(st, cb);
+    if (data.startsWith('lang:')) return onLangCallback(st, cb);
     return;
   }
   if (msg?.text) return handleText(getState(from.id, chatId), msg.text);
@@ -168,7 +204,7 @@ async function main() {
   let offset = old.length ? old[old.length - 1].update_id + 1 : 0;
   startIdleReaper();
   const admin = getState(ADMIN_ID, ADMIN_ID);
-  log(`бот @${botInfo.username} запущен | администратор ${ADMIN_ID} | проект админа: ${admin.project} | сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length} | лимит агентов сотрудников: ${MAX_AGENTS} | простой: ${IDLE_MINUTES} мин | уровни: ${Object.keys(LEVELS).join('/')}`);
+  log(`бот @${botInfo.username} запущен | администратор ${ADMIN_ID} | проект админа: ${admin.project} | сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length} | лимит агентов сотрудников: ${MAX_AGENTS} | простой: ${IDLE_MINUTES} мин | уровни: ${LEVEL_KEYS.join('/')}`);
 
   for (;;) {
     let updates;

@@ -1,5 +1,9 @@
 # AcpGram
 
+[![npm version](https://img.shields.io/npm/v/acpgram.svg)](https://www.npmjs.com/package/acpgram)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **English** · [Русский](README.ru.md)
 
 A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI** and **OpenAI Codex**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
@@ -35,7 +39,46 @@ Only the default engine (`DEFAULT_ENGINE`, Gemini CLI unless set) is required; t
 
 ## Quick start
 
-You need at least one engine from the table above and a Telegram bot token from [@BotFather](https://t.me/BotFather) (Bot API 10.1+ — rich messages and drafts). Install with one command:
+You need at least one engine from the table above and a Telegram bot token from [@BotFather](https://t.me/BotFather) (Bot API 10.1+ — rich messages and drafts).
+
+### Option 1. Install via npm (requires Node.js 22.13+)
+
+```bash
+npm install -g acpgram
+```
+
+Then run the setup wizard:
+```bash
+acpgram setup
+```
+
+Settings (`.env`) and SQLite database (`data/bot.db`) are stored in `~/.acpgram` (or `ACPGRAM_HOME`), so updating via `npm install -g acpgram@latest` keeps all settings and history intact.
+
+#### Migrating from install.ps1 (resolving PATH conflict)
+The `install.ps1` script adds `%LOCALAPPDATA%\acpgram\bin` to the user `PATH`. If you switch to the npm installation, Windows might still invoke the old script due to `PATH` order.
+
+To switch:
+1. Stop and uninstall any previous service:
+   ```powershell
+   acpgram service uninstall
+   ```
+2. Check which binary is resolved:
+   ```powershell
+   Get-Command acpgram
+   ```
+3. Remove `%LOCALAPPDATA%\acpgram\bin` from user `PATH`:
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", (([Environment]::GetEnvironmentVariable("Path", "User") -split ';') | Where-Object { $_ -notlike '*\acpgram\bin' }) -join ';', "User")
+   ```
+4. Optionally copy your previous settings and database:
+   ```powershell
+   New-Item -ItemType Directory -Force "$HOME\.acpgram"
+   Copy-Item "$env:LOCALAPPDATA\acpgram\.env" "$HOME\.acpgram\.env"
+   if (Test-Path "$env:LOCALAPPDATA\acpgram\data") { Copy-Item -Recurse "$env:LOCALAPPDATA\acpgram\data" "$HOME\.acpgram\" }
+   ```
+5. Restart your terminal window.
+
+### Option 2. One-line installer
 
 **Windows** (PowerShell):
 
@@ -139,6 +182,7 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
 | `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy` or `codex`; the bot does not start if this engine is not installed |
+| `DEFAULT_LANG` | no | interface language by default: `en` (default), `ru` or `uk`. Each user changes their language with `/language` |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
 | `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |

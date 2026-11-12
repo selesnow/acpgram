@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
+import { resolveHomeDir } from '../src/app.mjs';
+import { homedir } from 'node:os';
 import { envValue, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
 import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
@@ -176,4 +178,10 @@ test('nssmCommands: остановка не зависает — тайм-аут
   assert.deepEqual(byKey.AppStopMethodWindow, ['2000']);
   assert.deepEqual(byKey.AppStopMethodThreads, ['2000']);
   assert.deepEqual(byKey.AppKillProcessTree, ['1']);
+});
+test('resolveHomeDir: папка данных для npm vs локальной установки', () => {
+  assert.equal(resolveHomeDir({ ACPGRAM_HOME: '/custom/dir' }, '/any'), '/custom/dir');
+  assert.equal(resolveHomeDir({}, '/usr/local/lib/node_modules/acpgram'), join(homedir(), '.acpgram'));
+  assert.equal(resolveHomeDir({}, String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\acpgram`), join(homedir(), '.acpgram'));
+  assert.equal(resolveHomeDir({}, '/home/u/projects/acpgram'), '/home/u/projects/acpgram');
 });

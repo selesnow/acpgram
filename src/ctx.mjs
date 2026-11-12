@@ -1,11 +1,11 @@
 // Общие настройки, база, логирование и отправка сообщений — используются всеми модулями бота.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './app.mjs';
 import { openDb } from './db.mjs';
+import { DEFAULT_LANG, normLang, t } from './i18n.mjs';
 
-/** Папка data/ рядом с ботом, а не в текущей папке: бот может запускаться из любого места (служба, systemd). */
-export const DATA_DIR = fileURLToPath(new URL('../data/', import.meta.url));
+export { DATA_DIR };
 import { tg } from './telegram.mjs';
 
 /** Главный администратор: ID задан в .env, отозвать доступ у него из бота нельзя. */
@@ -16,12 +16,17 @@ export const MAX_AGENTS = Number(process.env.MAX_AGENTS || 3);
 export const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 30);
 export const IDLE_MS = IDLE_MINUTES * 60_000;
 
-/** Уровни доступа сотрудников. Режим сессии для уровня у каждого движка свой (engines.mjs). */
-export const LEVELS = {
-  read: { label: 'Чтение', hint: 'агент только читает и анализирует, ничего не меняет' },
-  normal: { label: 'Обычный', hint: 'агент спрашивает разрешение на изменения' },
-  full: { label: 'Полный', hint: 'агент правит файлы без подтверждений' },
-};
+/** Уровни доступа сотрудников по порядку. Названия и описания — в i18n.mjs. Режим сессии для уровня у каждого движка свой (engines.mjs). */
+export const LEVEL_KEYS = ['read', 'normal', 'full'];
+export const isLevel = (key) => LEVEL_KEYS.includes(key);
+export const levelName = (key, lang) => t(`level.${key}.label`, lang);
+export const levelHint = (key, lang) => t(`level.${key}.hint`, lang);
+
+/** Язык интерфейса пользователя: выбранный (/language), иначе язык по умолчанию. */
+export const langOf = (userId) => normLang(db.getSetting(`lang:${userId}`)) ?? DEFAULT_LANG;
+/** Выбирал ли пользователь язык: при первом /start без выбора показываем выбор языка. */
+export const hasLang = (userId) => Boolean(normLang(db.getSetting(`lang:${userId}`)));
+export const setLang = (userId, lang) => db.setSetting(`lang:${userId}`, lang);
 
 export const botInfo = { username: null }; // заполняется при старте
 

@@ -6,7 +6,7 @@ import { homedir, userInfo } from 'node:os';
 import { join, posix } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { APP, APP_DIR, MAIN_PATH } from './app.mjs';
+import { APP, APP_DIR, DATA_DIR, HOME_DIR, MAIN_PATH } from './app.mjs';
 import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from './winsvc.mjs';
 
 // разбор вывода sc.exe — в winsvc.mjs (не зависит от языка Windows); отсюда экспортируется для совместимости
@@ -33,7 +33,7 @@ const sdEnv = (s) => {
 };
 
 /** Unit-файл systemd --user. path — PATH, с которым бот найдёт агентов (как у пользователя, установившего службу). */
-export function systemdUnit({ node, main = MAIN_PATH, dir = APP_DIR, path = process.env.PATH ?? '', description = APP.description } = {}) {
+export function systemdUnit({ node, main = MAIN_PATH, dir = HOME_DIR, path = process.env.PATH ?? '', description = APP.description } = {}) {
   return [
     '[Unit]',
     `Description=${description}`,
@@ -58,7 +58,7 @@ export function systemdUnit({ node, main = MAIN_PATH, dir = APP_DIR, path = proc
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** plist LaunchAgent (macOS). */
-export function launchdPlist({ node, main = MAIN_PATH, dir = APP_DIR, path = process.env.PATH ?? '', label = APP.launchdLabel } = {}) {
+export function launchdPlist({ node, main = MAIN_PATH, dir = HOME_DIR, path = process.env.PATH ?? '', label = APP.launchdLabel } = {}) {
   const log = posix.join(dir, 'data', 'service.log'); // только macOS — пути POSIX
 
   const args = [node, ...NODE_ARGS, main].map((a) => `    <string>${xml(a)}</string>`).join('\n');
@@ -89,7 +89,7 @@ ${args}
  * account — {user, password} учётной записи, от которой работает служба (там авторизованы агенты); без него — LocalSystem.
  * @returns {string[][]} аргументы для nssm
  */
-export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = APP_DIR, account = null, label = APP.label, description = APP.description } = {}) {
+export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = HOME_DIR, account = null, label = APP.label, description = APP.description } = {}) {
   const log = join(dir, 'data', 'service.log');
   return [
     // аргументы — отдельно и в кавычках: путь к боту может содержать пробелы, а nssm install склеивает их без кавычек
@@ -256,7 +256,7 @@ const markedForDeleteHint = (name) =>
   '     Закройте «Службы» (services.msc) и вкладку «Службы» Диспетчера задач и повторите: acpgram service install\n' +
   '     Если не поможет — перезагрузите компьютер: после перезагрузки Windows удалит её окончательно.';
 
-const logHint = () => `Лог: ${join(APP_DIR, 'data', 'service.log')}${PLATFORM === 'win32' ? ` (в PowerShell: Get-Content "${join(APP_DIR, 'data', 'service.log')}" -Tail 30 -Encoding UTF8)` : ''}`;
+const logHint = () => `Лог: ${join(DATA_DIR, 'service.log')}${PLATFORM === 'win32' ? ` (в PowerShell: Get-Content "${join(DATA_DIR, 'service.log')}" -Tail 30 -Encoding UTF8)` : ''}`;
 
 /** Перезапуск службы: после обновления или смены настроек. Зависшую службу добивает. */
 export async function restartService({ name = APP.id } = {}) {
@@ -290,7 +290,7 @@ export async function restartService({ name = APP.id } = {}) {
  */
 export async function installService({ name = APP.id, dry = false, prompt = null, allowSystem = false } = {}) {
   const node = process.execPath;
-  if (!dry) mkdirSync(join(APP_DIR, 'data'), { recursive: true });
+  if (!dry) mkdirSync(DATA_DIR, { recursive: true });
 
   if (PLATFORM === 'win32') {
     const nssm = findNssm();
@@ -453,7 +453,7 @@ export async function installService({ name = APP.id, dry = false, prompt = null
       console.log(`  ❌ ${r.stderr || r.stdout}`);
       return { ok: false };
     }
-    console.log(`  ✅ LaunchAgent ${APP.launchdLabel} запущен. Лог: ${join(APP_DIR, 'data', 'service.log')}`);
+    console.log(`  ✅ LaunchAgent ${APP.launchdLabel} запущен. Лог: ${join(DATA_DIR, 'service.log')}`);
     return { ok: true };
   }
 

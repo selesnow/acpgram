@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Команда acpgram (устанавливается install.ps1 / install.sh):
 //   acpgram [start]            запустить бота (первый запуск без .env — мастер настройки)
 //   acpgram setup              мастер настройки
@@ -68,6 +69,9 @@ export function updateCommand(platform = process.platform, env = process.env) {
 }
 
 /** Окружение для обновления: установщик обновляет именно эту установку (ACPGRAM_HOME), а не папку по умолчанию. */
+/** Установлен ли пакет через npm (находится внутри node_modules). */
+export const isNpm = (appDir = fileURLToPath(new URL('..', import.meta.url))) => /[\\/]node_modules[\\/]/.test(appDir);
+
 export const updateEnv = (env = process.env, appDir = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '')) => ({
   ...env,
   ACPGRAM_HOME: env.ACPGRAM_HOME || appDir,
@@ -88,6 +92,8 @@ if (isMain()) {
   else if (r.error) {
     console.error(r.error);
     process.exitCode = 2;
+  } else if (r.update && isNpm()) {
+    console.log('AcpGram установлен через npm.\nДля обновления до последней версии выполните:\n  npm install -g acpgram@latest');
   } else {
     // отдельный процесс: так у мастера и службы честный терминал и свой код выхода
     const before = version();

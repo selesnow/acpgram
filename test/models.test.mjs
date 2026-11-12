@@ -117,18 +117,18 @@ test('подвал ответа: движок, модель, уровень ра
   assert.equal(fmtCost(0.0047242), '0.0047');
   assert.equal(fmtCost(0.46016), '0.46');
 
-  const full = finalExtras({ elapsedMs: 4000, project: 'p', engine: 'Claude', usage: { model: 'claude-haiku-5-5', effort: 'Max', total: 36825, cost: 0.0016 } });
+  const full = finalExtras({ lang: 'ru', elapsedMs: 4000, project: 'p', engine: 'Claude', usage: { model: 'claude-haiku-5-5', effort: 'Max', total: 36825, cost: 0.0016 } });
   assert.equal(full, '<footer>🤖 Claude · claude-haiku-5-5 · Max · 🔢 36.8k ток. · 💲0.0016 · 📁 p · ⏱ 4 с</footer>');
   // без расхода (ошибка, прерывание) — как раньше, плюс движок
-  assert.equal(finalExtras({ elapsedMs: 1000, project: 'p', engine: 'Gemini', usage: null }), '<footer>🤖 Gemini · 📁 p · ⏱ 1 с</footer>');
-  assert.equal(finalExtras({ elapsedMs: 1000, project: 'p' }), '<footer>📁 p · ⏱ 1 с</footer>');
+  assert.equal(finalExtras({ lang: 'ru', elapsedMs: 1000, project: 'p', engine: 'Gemini', usage: null }), '<footer>🤖 Gemini · 📁 p · ⏱ 1 с</footer>');
+  assert.equal(finalExtras({ lang: 'ru', elapsedMs: 1000, project: 'p' }), '<footer>📁 p · ⏱ 1 с</footer>');
 });
 
 test('modelMenu: «Авто», выбор, уровни рассуждений, ограничение администратора, длинные id', () => {
   const engine = { id: 'claude', label: 'Claude Code' };
   const models = [{ id: 'opus', name: 'Opus' }, { id: 'haiku', name: 'Haiku' }];
   const efforts = [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }];
-  const v = modelMenu({ engine, models, efforts, model: 'haiku', effort: null });
+  const v = modelMenu({ lang: 'ru', engine, models, efforts, model: 'haiku', effort: null });
   assert.ok(v.text.includes('Сейчас: Haiku') && v.text.includes('Рассуждения: Авто'), v.text);
   const btns = v.markup.inline_keyboard.flat();
   assert.deepEqual(btns.map((b) => b.callback_data), ['mdl:claude:m:~', 'mdl:claude:m:opus', 'mdl:claude:m:haiku', 'mdl:claude:e:~', 'mdl:claude:e:low', 'mdl:claude:e:max']);
@@ -136,13 +136,13 @@ test('modelMenu: «Авто», выбор, уровни рассуждений, 
   assert.equal(btns.find((b) => b.callback_data === 'mdl:claude:e:~').text, '✓ 🧠 Авто');
 
   // ограничение: без «Авто», с пометкой
-  const r = modelMenu({ engine, models, model: 'opus', effort: null, restricted: true });
+  const r = modelMenu({ lang: 'ru', engine, models, model: 'opus', effort: null, restricted: true });
   assert.ok(!r.markup.inline_keyboard.flat().some((b) => b.callback_data.endsWith(':m:~')));
   assert.ok(r.text.includes('ограничен администратором'));
 
   // Gemini: без уровня рассуждений; id длиннее лимита callback_data — номер в списке
   const long = 'x'.repeat(80);
-  const g = modelMenu({ engine: { id: 'gemini', label: 'Gemini CLI' }, models: [{ id: long, name: 'Long' }], model: null, effort: null });
+  const g = modelMenu({ lang: 'ru', engine: { id: 'gemini', label: 'Gemini CLI' }, models: [{ id: long, name: 'Long' }], model: null, effort: null });
   assert.ok(!g.text.includes('Рассуждения'));
   const data = g.markup.inline_keyboard.flat().map((b) => b.callback_data);
   assert.deepEqual(data, ['mdl:gemini:m:~', 'mdl:gemini:m:#0']);
@@ -151,6 +151,7 @@ test('modelMenu: «Авто», выбор, уровни рассуждений, 
 
 test('права в карточке сотрудника: движки и модели', () => {
   const eg = engineGrants({
+    lang: 'ru',
     userId: 5,
     engines: [
       { id: 'gemini', label: 'Gemini CLI', granted: true, isDefault: true },
@@ -162,20 +163,20 @@ test('права в карточке сотрудника: движки и мо�
   // движок по умолчанию переключателя не имеет
   assert.deepEqual(eg.rows.flat().map((b) => [b.text, b.callback_data]), [['✅ Claude Code', 'adm:et:5:claude'], ['⬜ Antigravity CLI', 'adm:et:5:agy'], ['🧠 Модели сотрудника', 'adm:mm:5']]);
 
-  const o = modelGrantsOverview({ userId: 5, name: '@u', engines: [{ id: 'gemini', label: 'Gemini CLI', total: 5, allowed: null }, { id: 'claude', label: 'Claude Code', total: 4, allowed: 2 }, { id: 'agy', label: 'Antigravity CLI', total: 0, allowed: null }] });
+  const o = modelGrantsOverview({ lang: 'ru', userId: 5, name: '@u', engines: [{ id: 'gemini', label: 'Gemini CLI', total: 5, allowed: null }, { id: 'claude', label: 'Claude Code', total: 4, allowed: 2 }, { id: 'agy', label: 'Antigravity CLI', total: 0, allowed: null }] });
   assert.ok(o.text.includes('Gemini CLI: все модели') && o.text.includes('Claude Code: 2 из 4') && o.text.includes('ещё не получен'), o.text);
 
   const models = [{ id: 'opus', name: 'Opus' }, { id: 'haiku', name: 'Haiku' }];
-  const all = modelGrantsView({ userId: 5, name: '@u', engine: { id: 'claude', label: 'Claude Code' }, models, allowed: null });
+  const all = modelGrantsView({ lang: 'ru', userId: 5, name: '@u', engine: { id: 'claude', label: 'Claude Code' }, models, allowed: null });
   assert.deepEqual(all.markup.inline_keyboard.flat().map((b) => b.text), ['✅ Opus', '✅ Haiku', '← Назад']);
-  const part = modelGrantsView({ userId: 5, name: '@u', engine: { id: 'claude', label: 'Claude Code' }, models, allowed: ['haiku'] });
+  const part = modelGrantsView({ lang: 'ru', userId: 5, name: '@u', engine: { id: 'claude', label: 'Claude Code' }, models, allowed: ['haiku'] });
   // кнопка несёт id модели, а не номер: обновление списка моделей не переключит чужую модель
   assert.deepEqual(part.markup.inline_keyboard.flat().map((b) => [b.text, b.callback_data]), [['⬜ Opus', 'adm:mt:5:claude:opus'], ['✅ Haiku', 'adm:mt:5:claude:haiku'], ['✅ Разрешить все', 'adm:ma:5:claude'], ['← Назад', 'adm:mm:5']]);
   assert.ok(part.markup.inline_keyboard.flat().every((b) => Buffer.byteLength(b.callback_data) <= 64));
 });
 
 test('startView: модель и кнопка /model', () => {
-  const s = startView({ level: 'Чтение', project: 'p', engine: 'Claude Code', model: 'Haiku', isAdmin: false });
+  const s = startView({ lang: 'ru', level: 'Чтение', project: 'p', engine: 'Claude Code', model: 'Haiku', isAdmin: false });
   assert.ok(s.includes('**🧠 Модель:** Haiku') && s.includes('data="ui:model"') && s.includes('/model'), s);
-  assert.ok(startView({ level: 'x', project: 'p', engine: 'Gemini CLI', isAdmin: false }).includes('**🧠 Модель:** Авто'));
+  assert.ok(startView({ lang: 'ru', level: 'x', project: 'p', engine: 'Gemini CLI', isAdmin: false }).includes('**🧠 Модель:** Авто'));
 });

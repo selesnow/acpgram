@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
-import { APP, APP_DIR, ENV_PATH } from './app.mjs';
+import { APP, APP_DIR, DATA_DIR, ENV_PATH } from './app.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';
 import { findOnPath } from './winsvc.mjs';
@@ -70,7 +70,7 @@ export function serializeEnv(values, { date = new Date().toISOString().slice(0, 
 }
 
 /** Где лежит копия прежнего .env: в data/ (не попадает в git и в образ Docker). */
-export const envBackupPath = (dataDir = join(APP_DIR, 'data')) => join(dataDir, '.env.bak');
+export const envBackupPath = (dataDir = DATA_DIR) => join(dataDir, '.env.bak');
 
 /**
  * Пишет .env; прежний сохраняется в data/.env.bak. Оба файла — только для владельца (0600): mode в writeFileSync
@@ -269,9 +269,9 @@ export async function runSetup({ fromStart = false } = {}) {
       return { ok: false, service: false };
     }
     ok(`${ENV_PATH}${hadEnv ? ` (прежний — ${envBackupPath()})` : ''}`);
-    mkdirSync(join(APP_DIR, 'data'), { recursive: true });
+    mkdirSync(DATA_DIR, { recursive: true });
     const { openDb } = await import('./db.mjs');
-    openDb(join(APP_DIR, 'data', 'bot.db')).close();
+    openDb(join(DATA_DIR, 'bot.db')).close();
     ok('база data/bot.db');
     try {
       await api(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: adminId, text: `✅ ${APP.label} настроен. Вы — главный администратор. После запуска бота нажмите /start.` });

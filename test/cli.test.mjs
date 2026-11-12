@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { HELP, route, updateCommand, updateEnv } from '../src/cli.mjs';
+import { HELP, isNpm, route, updateCommand, updateEnv } from '../src/cli.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -55,4 +57,25 @@ test('cli.mjs как команда: version и код выхода при ош�
   assert.equal(ok.stdout.trim(), VERSION);
   const bad = spawnSync(process.execPath, [CLI, 'service', 'bogus'], { encoding: 'utf8' });
   assert.equal(bad.status, 2);
+});
+test('isNpm: определяет установку из node_modules', () => {
+  assert.equal(isNpm('/usr/local/lib/node_modules/acpgram'), true);
+  assert.equal(isNpm(String.raw`C:\Users\tester\AppData\Roaming\npm\node_modules\acpgram`), true);
+  assert.equal(isNpm('/home/user/.local/share/acpgram'), false);
+  assert.equal(isNpm(String.raw`C:\dev\acpgram`), false);
+});
+test('acpgram update при установке через npm: подсказка обновления и код 0 без запуска скриптов', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-cli-'));
+  const modDir = join(tmp, 'node_modules', 'acpgram');
+  try {
+    mkdirSync(join(modDir, 'src'), { recursive: true });
+    copyFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), join(modDir, 'package.json'));
+    copyFileSync(CLI, join(modDir, 'src', 'cli.mjs'));
+    const res = spawnSync(process.execPath, [join(modDir, 'src', 'cli.mjs'), 'update'], { encoding: 'utf8' });
+    assert.equal(res.status, 0);
+    assert.ok(res.stdout.includes('npm install -g acpgram@latest'));
+    assert.ok(!res.stdout.includes('Обновляю AcpGram'));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

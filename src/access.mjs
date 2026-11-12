@@ -5,8 +5,9 @@
 // - Администратору доступно всё.
 // - Каталог (список моделей и уровней рассуждений) присылает сам агент в ответе session/new; бот хранит его в settings.
 import { tmpdir } from 'node:os';
-import { ADMIN_ID, db, log } from './ctx.mjs';
+import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
 import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
+import { t } from './i18n.mjs';
 
 const parseJson = (s, fallback) => {
   try {
@@ -210,7 +211,7 @@ export async function syncSelection(userId, a) {
   const restricted = Boolean(modelRestriction(userId, engine.id));
   const want = effectiveSelection(userId, engine);
   if (restricted && !want.model) {
-    throw new ModelAccessError(`🔒 Для ${engine.label} вам не осталось доступных моделей. Обратитесь к администратору.`);
+    throw new ModelAccessError(t('access.noModels', langOf(userId), { engine: engine.label }));
   }
   a.applied ??= {};
   for (const kind of ['model', 'effort']) {
@@ -230,7 +231,7 @@ export async function syncSelection(userId, a) {
       log(`⚠️ ${engine.label}: не удалось выставить ${kind} = ${value}: ${e.message}`);
       a.applied[kind] = '?'; // что сейчас в сессии — неизвестно, в следующий раз выставим снова
       if (kind === 'model' && restricted) {
-        throw new ModelAccessError(`⚠️ Не удалось переключить ${engine.label} на разрешённую модель (${choiceName(engine, 'model', value)}), запрос не отправлен. Попробуйте ещё раз или /new.`);
+        throw new ModelAccessError(t('access.switchFail', langOf(userId), { engine: engine.label, model: choiceName(engine, 'model', value) }));
       }
     }
   }

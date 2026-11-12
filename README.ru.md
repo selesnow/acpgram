@@ -1,5 +1,9 @@
 # AcpGram
 
+[![npm version](https://img.shields.io/npm/v/acpgram.svg)](https://www.npmjs.com/package/acpgram)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 [English](README.md) · **Русский**
 
 Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Claude Code**, **Antigravity CLI** и **OpenAI Codex**: бот запускает агента как подпроцесс на той машине, где он установлен, и общается с ним по [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC через stdin/stdout). Каждый пользователь выбирает движок сам (`/engine`), движок по умолчанию задаётся в `.env`. Ответы приходят со стримингом, ходом работы агента и кнопками подтверждения действий.
@@ -76,7 +80,44 @@ Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Cl
 
 ## Установка и запуск
 
-**Одной командой** (нужен хотя бы один движок и токен бота от @BotFather):
+### Способ 1. Через npm (рекомендуется при наличии Node.js 22.13+)
+
+```bash
+npm install -g acpgram
+```
+
+После установки запустите мастер первичной настройки:
+```bash
+acpgram setup
+```
+
+Настройки (`.env`) и база данных SQLite (`data/bot.db`) сохраняются в пользовательском каталоге `~/.acpgram` (или `ACPGRAM_HOME`), поэтому при обновлении пакета (`npm install -g acpgram@latest`) данные не теряются.
+
+#### Если AcpGram уже был установлен через install.ps1 (разрешение конфликта в PATH)
+Скрипт `install.ps1` добавляет в пользовательскую переменную `Path` путь `%LOCALAPPDATA%\acpgram\bin`. Если вы переходите на установку через `npm install -g acpgram`, Windows может продолжать вызывать старую версию из-за порядка записей в `PATH`.
+
+Чтобы переключиться на npm-версию:
+1. Остановите и удалите старую службу (если была установлена):
+   ```powershell
+   acpgram service uninstall
+   ```
+2. Проверьте, какая команда сейчас вызывается:
+   ```powershell
+   Get-Command acpgram
+   ```
+3. Удалите старый путь `%LOCALAPPDATA%\acpgram\bin` из пользовательского PATH:
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", (([Environment]::GetEnvironmentVariable("Path", "User") -split ';') | Where-Object { $_ -notlike '*\acpgram\bin' }) -join ';', "User")
+   ```
+4. При необходимости перенесите настройки и базу данных из старой папки в новую:
+   ```powershell
+   New-Item -ItemType Directory -Force "$HOME\.acpgram"
+   Copy-Item "$env:LOCALAPPDATA\acpgram\.env" "$HOME\.acpgram\.env"
+   if (Test-Path "$env:LOCALAPPDATA\acpgram\data") { Copy-Item -Recurse "$env:LOCALAPPDATA\acpgram\data" "$HOME\.acpgram\" }
+   ```
+5. Перезапустите окно терминала.
+
+### Способ 2. Одной командой (установщик)
 
 ```powershell
 # Windows (PowerShell)
@@ -158,6 +199,7 @@ npm start            # первый запуск без .env сам открое
 | `ALLOWED_USER_ID` | да | числовой Telegram ID главного администратора |
 | `PROJECTS_ROOT` | нет | корень проектов: агент выбирает рабочую папку только внутри него (`C:\scripts`, `/home/user/projects`). Без него — любая папка на машине, по умолчанию домашняя |
 | `DEFAULT_ENGINE` | нет | движок по умолчанию: `gemini` (по умолчанию), `claude`, `agy` или `codex`. Если этот движок не установлен, бот не запускается |
+| `DEFAULT_LANG` | нет | язык интерфейса по умолчанию: `en` (по умолчанию), `ru` или `uk`. Пользователь выбирает свой язык командой `/language` |
 | `GEMINI_API_KEY` | нет | ключ Gemini API; передаётся процессу Gemini через окружение бота. Не нужен, если Gemini CLI уже авторизован |
 | `ANTHROPIC_API_KEY` | нет | ключ Anthropic API для Claude Code (оплата по API, а не по подписке). Не нужен, если Claude Code авторизован подпиской |
 | `GEMINI_COMMAND` | нет | полный путь к Gemini CLI. По умолчанию `gemini.cmd` на Windows и `gemini` на Linux / macOS. Под службой (nssm, systemd) глобальные пакеты npm пользователя часто не в `PATH` |
