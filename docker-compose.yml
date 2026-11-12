@@ -1,8 +1,14 @@
 # Запуск: docker compose up -d --build
-# Настройки берутся из .env (TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, GEMINI_API_KEY, PROJECTS_DIR и др.)
+# Настройки берутся из .env (TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, PROJECTS_DIR, DEFAULT_ENGINE и ключи API движков:
+# GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY). Antigravity CLI ключей API не поддерживает — вход один раз:
+#   docker compose exec -it bot agy acp --login
 services:
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        # какие движки ставить в образ (через пробел): gemini claude codex agy
+        ENGINES: ${ENGINES:-gemini claude codex agy}
     image: acpgram
     restart: unless-stopped
     env_file: .env
@@ -10,12 +16,20 @@ services:
       # внутри контейнера пути свои: значения из .env для установки напрямую (C:\scripts, gemini.cmd) не подходят
       PROJECTS_ROOT: /projects
       GEMINI_COMMAND: gemini
+      CLAUDE_COMMAND: claude-agent-acp
+      CODEX_COMMAND: codex-acp
+      AGY_COMMAND: agy
     volumes:
       # папка проектов на хосте, с которой работает агент; PROJECTS_DIR задаётся в .env
       - ${PROJECTS_DIR:?Укажите в .env PROJECTS_DIR - папку проектов на хосте}:/projects
       - bot-data:/app/data
+      # настройки, вход и история сессий движков (Antigravity CLI хранит вход тоже в .gemini)
       - gemini-home:/home/node/.gemini
+      - claude-home:/home/node/.claude
+      - codex-home:/home/node/.codex
 
 volumes:
   bot-data:
   gemini-home:
+  claude-home:
+  codex-home:

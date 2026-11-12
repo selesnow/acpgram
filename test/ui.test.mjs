@@ -120,6 +120,10 @@ test('engineMenu и движок на экранах /start и /active', () => {
   assert.ok(m.text.startsWith('🤖 Движок: Claude Code') && m.text.includes('Недоступны на сервере: Antigravity CLI'), m.text);
   assert.deepEqual(m.markup.inline_keyboard.flat().map((b) => [b.text, b.callback_data]), [['Gemini CLI · по умолчанию', 'eng:gemini'], ['✓ Claude Code', 'eng:claude']]);
   assert.ok(!engineMenu({ engines, current: 'gemini', defaultId: 'gemini' }).text.includes('Недоступны'));
+  const lm = engineMenu({ engines, current: 'gemini', defaultId: 'gemini', needLogin: ['claude'] });
+  assert.ok(lm.text.includes('⚠️ Нужен вход или ключ API: Claude Code'), lm.text);
+  assert.deepEqual(lm.markup.inline_keyboard.flat().map((b) => b.text), ['✓ Gemini CLI · по умолчанию', 'Claude Code · ⚠️ нужен вход']);
+  assert.ok(!engineMenu({ engines, current: 'gemini', defaultId: 'gemini' }).text.includes('Нужен вход'));
 
   const start = startView({ level: 'Чтение', project: 'p', engine: 'Claude Code', isAdmin: false });
   assert.ok(start.includes('**🤖 Движок:** Claude Code') && start.includes('передам его Claude Code') && start.includes('data="ui:engine"') && start.includes('/engine'), start);

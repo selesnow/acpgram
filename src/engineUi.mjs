@@ -1,7 +1,7 @@
 // Команда /engine: выбор движка (Gemini CLI, Claude Code, Antigravity CLI). Выбор запоминается для пользователя.
 import { log, say } from './ctx.mjs';
 import { canUseEngine, grantedEngines, userEngines } from './access.mjs';
-import { DEFAULT_ENGINE, ENGINES, isAvailable } from './engines.mjs';
+import { DEFAULT_ENGINE, ENGINES, isAvailable, needsLogin } from './engines.mjs';
 import { endAgent, engineOf, isAdmin, saveEngine } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { engineMenu } from './ui.mjs';
@@ -24,10 +24,12 @@ export function switchEngine(st, id) {
   if (st.busy) return 'Сначала остановите текущий запрос: /stop';
   const before = engineOf(st);
   saveEngine(st, id);
-  if (before.id === id) return `🤖 Движок уже выбран: ${e.label}`;
+  // не блокируем выбор: только предупреждаем, что движок не авторизован на сервере
+  const warn = needsLogin(id) ? `\n⚠️ ${e.label} не авторизован на сервере (нужен вход или ключ API) — запросы могут завершаться ошибкой. Сообщите администратору.` : '';
+  if (before.id === id) return `🤖 Движок уже выбран: ${e.label}${warn}`;
   endAgent(st, 'engine');
   log('движок переключён:', st.userId, id);
-  return `🤖 Движок: ${e.label}\nНовая сессия начнётся со следующего запроса. Прошлые сессии этого проекта — /sessions.`;
+  return `🤖 Движок: ${e.label}\nНовая сессия начнётся со следующего запроса. Прошлые сессии этого проекта — /sessions.${warn}`;
 }
 
 export async function handleEngine(st, arg) {
@@ -41,6 +43,7 @@ export async function handleEngine(st, arg) {
     engines,
     current: engineOf(st).id,
     defaultId: DEFAULT_ENGINE,
+    needLogin: engines.filter((x) => needsLogin(x.id)).map((x) => x.id),
     // выданные пользователю, но не запустившиеся на сервере
     unavailable: grantedEngines(st.userId).filter((id) => !isAvailable(id)).map((id) => ENGINES[id].label),
   });

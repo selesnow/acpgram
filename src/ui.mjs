@@ -250,16 +250,17 @@ export function activeSessionsView({ sessions, adminId, maxAgents, nameOf, proje
  * @param {{engines: {id:string,label:string}[], current: string, defaultId: string, unavailable?: string[]}} o
  *   engines — доступные движки; unavailable — названия движков, которые не запустились на сервере
  */
-export function engineMenu({ engines, current, defaultId, unavailable = [] }) {
+export function engineMenu({ engines, current, defaultId, unavailable = [], needLogin = [] }) {
   const cur = engines.find((e) => e.id === current);
   const text = [
     `🤖 Движок: ${cur?.label ?? current}`,
     'Выберите AI-агента. Выбор запоминается, смена движка начинает новую сессию.',
     ...(unavailable.length ? [`Недоступны на сервере: ${unavailable.join(', ')}`] : []),
+    ...(needLogin.length ? [`⚠️ Нужен вход или ключ API: ${engines.filter((e) => needLogin.includes(e.id)).map((e) => e.label).join(', ')} — обратитесь к администратору`] : []),
   ].join('\n');
   return {
     text,
-    markup: { inline_keyboard: engines.map((e) => [{ text: `${e.id === current ? '✓ ' : ''}${e.label}${e.id === defaultId ? ' · по умолчанию' : ''}`, callback_data: `eng:${e.id}` }]) },
+    markup: { inline_keyboard: engines.map((e) => [{ text: `${e.id === current ? '✓ ' : ''}${e.label}${e.id === defaultId ? ' · по умолчанию' : ''}${needLogin.includes(e.id) ? ' · ⚠️ нужен вход' : ''}`, callback_data: `eng:${e.id}` }]) },
   };
 }
 

@@ -6,7 +6,7 @@
 // - Каталог (список моделей и уровней рассуждений) присылает сам агент в ответе session/new; бот хранит его в settings.
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, log } from './ctx.mjs';
-import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, isAvailable, parseCatalog, selectionRequest } from './engines.mjs';
+import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
 
 const parseJson = (s, fallback) => {
   try {
@@ -66,9 +66,11 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
     try {
       const res = await Promise.race([a.init(null), new Promise((_, rej) => (timer = setTimeout(() => rej(new Error('нет ответа')), timeoutMs)))]);
       probeFailedAt.delete(engine.id);
+      setNeedsLogin(engine.id, false);
       return saveCatalog(engine, res);
     } catch (e) {
       probeFailedAt.set(engine.id, Date.now());
+      setNeedsLogin(engine.id, isAuthError(e)); // нужен вход или ключ API — движок виден, но с предупреждением в /engine
       throw e;
     } finally {
       clearTimeout(timer);

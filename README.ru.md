@@ -14,7 +14,7 @@ Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Cl
   - как пошёл ответ — последний шаг и сам ответ.
 - **Итоговый ответ** в rich-форматировании: заголовки, списки, таблицы, блоки кода. В конце свёрнутый блок «Ход работы · N шагов» со всеми шагами и подвал: движок, реальная модель, уровень рассуждений, токены, стоимость (только Claude Code), проект и время ответа — например `🤖 Claude · claude-haiku-5-5 · 🔢 36.8k ток. · 💲0.0046 · 📁 проект · ⏱ 4 с`. Если Telegram отклонит разметку, ответ уходит обычным текстом.
 - **Запросы разрешений** кнопками (режимы `default` и `plan`): «Разрешить», «Разрешить на эту сессию», «Отклонить». Команда показывается блоком кода. Вариант «навсегда» из чата не даётся.
-- **Выбор движка** (`/engine`): Gemini CLI, Claude Code, Antigravity CLI или Codex — из выданных пользователю. Выбор запоминается для каждого пользователя, смена движка начинает новую сессию. Движок по умолчанию — `DEFAULT_ENGINE`; недоступные на сервере движки не предлагаются.
+- **Выбор движка** (`/engine`): Gemini CLI, Claude Code, Antigravity CLI или Codex — из выданных пользователю. Выбор запоминается для каждого пользователя, смена движка начинает новую сессию. Движок по умолчанию — `DEFAULT_ENGINE`; недоступные на сервере движки не предлагаются, а запускающиеся, но не авторизованные (нет входа или ключа API) помечаются «⚠️ нужен вход».
 - **Выбор модели и уровня рассуждений** (`/model`): модели текущего движка (список присылает сам агент) и уровень рассуждений у Claude Code (`effort`) и Antigravity CLI (`thought_level`). По умолчанию «Авто» — как у агента. Выбор запоминается для каждого пользователя отдельно по движкам и применяется со следующего запроса, без перезапуска сессии.
 - **Экран `/start`** с кнопками: проект, движок, модель, новая сессия, прошлые сессии, завершение сессии (у администратора — сотрудники, приглашение, активные сессии).
 - **Выбор проекта** (`/project`): агент запускается в папке выбранного проекта — кнопками, поиском по названию или путём (`/project C:\my-app`, `/project ~/projects/web`). Вверху — кнопки «🕘» с последними проектами пользователя. Выбор запоминается для каждого пользователя.
@@ -92,27 +92,28 @@ curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | 
 
 Два способа, выбирайте под машину:
 
-| | Напрямую (Node + Gemini CLI) | Docker |
+| | Напрямую (Node + движки) | Docker |
 |---|---|---|
 | Установка | Node 24, Gemini CLI, `.env`, служба | Docker и `.env`, одна команда |
 | Доступ агента | вся система с правами учётной записи бота | только смонтированная папка проектов |
-| Инструменты агента | всё, что установлено на машине (R, PowerShell, планировщик и т.д.) | только то, что есть в образе (Node, git, ripgrep) |
+| Инструменты агента | всё, что установлено на машине (R, PowerShell, планировщик и т.д.) | только то, что есть в образе (Node, git, ripgrep и движки) |
 | Когда | рабочий сервер, где агент должен запускать скрипты (например, сервер команды) | быстрая установка на VPS, ПК, ноутбук; изоляция от системы |
 
 ### Docker
 
 ```bash
-cp .env.example .env     # TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, GEMINI_API_KEY; раскомментировать PROJECTS_DIR
+cp .env.example .env     # TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, ключи API движков; раскомментировать PROJECTS_DIR
 docker compose up -d --build
 docker compose logs -f
 ```
 
-- `PROJECTS_DIR` — папка проектов на хосте, в контейнере она становится `/projects` (это и есть корень для `/project`). `PROJECTS_ROOT` и `GEMINI_COMMAND` в контейнере задаются автоматически, так что один `.env` подходит для обоих способов.
-- Авторизация Gemini — через `GEMINI_API_KEY`, отдельный вход в Gemini CLI не нужен.
-- В образе только Gemini CLI (Claude Code и Antigravity CLI пока не входят), поэтому `DEFAULT_ENGINE` оставьте `gemini`.
-- Тома: `bot-data` (база бота) и `gemini-home` (настройки и история сессий Gemini, нужна для `/sessions`). Переживают пересоздание и обновление контейнера; `docker compose down -v` их удаляет.
+- `PROJECTS_DIR` — папка проектов на хосте, в контейнере она становится `/projects` (это и есть корень для `/project`). `PROJECTS_ROOT` и команды движков (`GEMINI_COMMAND`, `CLAUDE_COMMAND`, `CODEX_COMMAND`, `AGY_COMMAND`) в контейнере задаются автоматически, так что один `.env` подходит для обоих способов.
+- В образе все четыре движка: Gemini CLI, Claude Code (мост `claude-agent-acp`), OpenAI Codex (`codex` и мост `codex-acp`) и Antigravity CLI. Чтобы собрать образ полегче, перечислите нужные в `ENGINES` в `.env` (`ENGINES=gemini claude`); `DEFAULT_ENGINE` должен быть из собранных.
+- Авторизация: Gemini — `GEMINI_API_KEY`, Claude Code — `ANTHROPIC_API_KEY`, Codex — `OPENAI_API_KEY`. Ключи берутся из `.env`, отдельный вход не нужен.
+- Antigravity CLI ключи API не поддерживает: один раз войдите под Google-аккаунтом (откроется ссылка и код, браузер на сервере не нужен): `docker compose exec -it bot agy acp --login`. Вход сохраняется в томе `gemini-home`. Сборка образа падает, если Antigravity не установился или в нём нет подкоманды `acp` (нужна версия 1.5+) — тогда уберите `agy` из `ENGINES`.
+- Тома: `bot-data` (база бота), `gemini-home` (настройки, вход Antigravity и история сессий Gemini, нужна для `/sessions`), `claude-home` и `codex-home` (настройки и история Claude Code и Codex). Переживают пересоздание и обновление контейнера; `docker compose down -v` их удаляет.
 - Бот в контейнере работает от пользователя `node` (uid 1000). Чтобы агент мог менять файлы, папка `PROJECTS_DIR` должна быть доступна этому uid на запись (`sudo chown -R 1000:1000 <папка>`), либо смонтируйте её только для чтения (`:ro` в `docker-compose.yml`) — тогда агент сможет только анализировать.
-- Версия Gemini CLI зафиксирована в образе. Обновление: `docker compose build --build-arg GEMINI_CLI_VERSION=<версия> && docker compose up -d`.
+- Версия Gemini CLI зафиксирована в образе (`GEMINI_CLI_VERSION`), мосты и Codex CLI берутся последними (`CLAUDE_ACP_VERSION`, `CODEX_CLI_VERSION`, `CODEX_ACP_VERSION` — можно закрепить). Antigravity CLI ставится официальным скриптом последней версии, закрепить её нельзя. Обновление: `docker compose build --no-cache --build-arg GEMINI_CLI_VERSION=<версия> && docker compose up -d`.
 - Нужны R, Python или другие инструменты — сделайте свой `Dockerfile` поверх образа (`FROM acpgram`, `USER root`, установка пакетов, `USER node`).
 
 ### Напрямую
@@ -254,8 +255,8 @@ src/
   db.mjs          SQLite: сессии, запросы, инструменты, разрешения, сотрудники
   ctx.mjs         общие настройки, база, логирование
 test/             тесты node:test и фиктивный ACP-агент (fixtures/)
-Dockerfile        образ: Node 24, Gemini CLI, git, ripgrep, tini (Claude Code и Antigravity CLI в образ пока не входят)
-docker-compose.yml запуск в Docker: .env, папка проектов, тома для базы и сессий Gemini
+Dockerfile        образ: Node 24, четыре движка (Gemini CLI, Claude Code, Codex, Antigravity CLI; набор задаёт ENGINES), git, ripgrep, tini
+docker-compose.yml запуск в Docker: .env, папка проектов, тома для базы и настроек движков
 data/             (не в Git) bot.db, debug.log, service.log
 ```
 

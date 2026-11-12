@@ -89,11 +89,16 @@ Also: `acpgram service restart` (after an update; a hung service is force-stoppe
 ### Docker
 
 ```bash
-cp .env.example .env     # set TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, GEMINI_API_KEY and uncomment PROJECTS_DIR
+cp .env.example .env     # set TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, engine API keys and uncomment PROJECTS_DIR
 docker compose up -d --build
 ```
 
-In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships Gemini CLI only (Claude Code and Antigravity CLI are not included yet), so keep `DEFAULT_ENGINE` at `gemini`.
+In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all four engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge) and Antigravity CLI. To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
+
+- Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY` (all from `.env`).
+- Antigravity CLI has no API keys: log in once with your Google account (a link and a code, no browser needed on the server): `docker compose exec -it bot agy acp --login`. The login is kept in the `gemini-home` volume. The build fails if Antigravity cannot be installed or lacks the `acp` subcommand (1.5+) - then drop `agy` from `ENGINES`.
+- Volumes: `bot-data`, `gemini-home`, `claude-home`, `codex-home` survive container re-creation; `docker compose down -v` removes them.
+- An engine that starts but is not authenticated is shown as "login needed" in `/engine`.
 
 ## Bot commands
 

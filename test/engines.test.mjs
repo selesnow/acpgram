@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_ENGINE, ENGINES, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability,
+  DEFAULT_ENGINE, ENGINES, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin,
 } from '../src/engines.mjs';
 import { parseTool } from '../src/tools.mjs';
 
@@ -195,4 +195,20 @@ test('checkEngines: слишком старая версия движка — н
   assert.match(a.error, /нужна 99\.0\.0\+ — обновите: old update/);
   assert.equal(b.ok, true);
   assert.equal(ENGINES.agy.minVersion, '1.5.0');
+});
+
+test('isAuthError: ошибки входа и ключей API отличаются от прочих', () => {
+  for (const m of ['Authentication required', 'Gemini API key is missing or not configured.', 'Please log in', 'HTTP 401 Unauthorized', 'No credentials found', 'Authorization failed']) {
+    assert.equal(isAuthError(new Error(`ACP -32000: ${m}`)), true, m);
+  }
+  for (const m of ['нет ответа', 'недавняя попытка не удалась, повтор позже', 'spawn ENOENT', 'Connection reset', 'author mismatch', 'code 14012']) assert.equal(isAuthError(new Error(m)), false, m);
+  assert.equal(isAuthError(undefined), false);
+});
+
+test('needsLogin: отметка ставится и снимается', () => {
+  setNeedsLogin('agy', true);
+  assert.equal(needsLogin('agy'), true);
+  assert.equal(needsLogin('claude'), false);
+  setNeedsLogin('agy', false);
+  assert.equal(needsLogin('agy'), false);
 });

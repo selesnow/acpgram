@@ -170,6 +170,21 @@ export function setAvailability(results) {
 
 export const isAvailable = (id) => Boolean(ENGINES[id]) && !unavailable.has(id);
 
+// ---- вход и ключи API (определяется по ошибке запуска сессии при получении каталога моделей) ----
+const loginNeeded = new Set();
+
+/** Ошибка запуска агента из-за отсутствия входа или ключа API («Authentication required», «API key is missing», 401…). */
+export const isAuthError = (err) => /auth(?!or\b)|api[ _-]?key|log ?in|sign ?in|unauthori[sz]ed|credential|\b401\b/i.test(String(err?.message ?? err ?? ''));
+
+/** Отмечает движок, которому нужен вход или ключ API (on = true), или снимает отметку. */
+export function setNeedsLogin(id, on) {
+  if (on) loginNeeded.add(id);
+  else loginNeeded.delete(id);
+}
+
+/** Движок запускается, но не авторизован: выбор не блокируется, пользователю показывается предупреждение. */
+export const needsLogin = (id) => loginNeeded.has(id);
+
 /** Движки, которые можно выбрать в /engine. */
 export const availableEngines = () => Object.values(ENGINES).filter((e) => isAvailable(e.id));
 
