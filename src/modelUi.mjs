@@ -5,7 +5,7 @@ import { langOf, log, say } from './ctx.mjs';
 import { t } from './i18n.mjs';
 import { engineOf } from './state.mjs';
 import { tg } from './telegram.mjs';
-import { modelMenu } from './ui.mjs';
+import { modelChosen, modelMenu } from './ui.mjs';
 
 /** Каталог движка; если его ещё нет — запрашиваем у агента в фоне (один запуск на движок, с паузой после неудачи). */
 function catalogOf(engine) {
@@ -57,6 +57,8 @@ export async function onModelCallback(st, cb) {
   saveChoice(st.userId, engine.id, kind, value);
   log(`${kind} выбран:`, st.userId, engine.id, value ?? 'auto');
   await ack(t(kind === 'model' ? 'model.set' : 'effort.set', lang));
-  const v = view(st, engine, catalog);
-  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, reply_markup: v.markup }).catch(() => {});
+  // как в /engine: меню заменяется итогом выбора, кнопки убираются
+  const sel = effectiveSelection(st.userId, engine);
+  const text = modelChosen({ engine, models: allowedModels(st.userId, engine.id), efforts: engine.effortConfig ? catalog.efforts : [], model: sel.model, effort: sel.effort, lang });
+  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.chatId, text));
 }

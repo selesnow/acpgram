@@ -311,6 +311,17 @@ export function modelMenu({ engine, models, efforts = [], model, effort, restric
   return { text, markup: { inline_keyboard: [...rowsOf(modelButtons, 2), ...rowsOf(effortButtons, 3)] } };
 }
 
+/** Итог выбора в /model: вместо меню — какой движок и какая модель (и уровень рассуждений) теперь выбраны. */
+export function modelChosen({ engine, models, efforts = [], model, effort, lang = DEFAULT_LANG }) {
+  const nameOf = (list, id) => list.find((x) => x.id === id)?.name ?? id;
+  return [
+    t('model.chosenEngine', lang, { engine: engine.label }),
+    t('model.chosenModel', lang, { name: model ? nameOf(models, model) : t('model.autoDesc', lang) }),
+    ...(efforts.length ? [t('model.chosenEffort', lang, { name: effort ? nameOf(efforts, effort) : t('auto', lang) })] : []),
+    t('model.saved', lang),
+  ].join('\n');
+}
+
 // ---------- права сотрудника в карточке /users (кнопки adm:*) ----------
 
 /**

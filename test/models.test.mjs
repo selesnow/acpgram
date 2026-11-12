@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ENGINES, autoValue, parseCatalog, parseUsage, selectionRequest } from '../src/engines.mjs';
-import { engineGrants, finalExtras, fmtCost, fmtTokens, modelGrantsOverview, modelGrantsView, modelMenu, startView } from '../src/ui.mjs';
+import { engineGrants, finalExtras, fmtCost, fmtTokens, modelGrantsOverview, modelChosen, modelGrantsView, modelMenu, startView } from '../src/ui.mjs';
 
 const GEMINI_NEW = {
   sessionId: 's',
@@ -179,4 +179,20 @@ test('startView: модель и кнопка /model', () => {
   const s = startView({ lang: 'ru', level: 'Чтение', project: 'p', engine: 'Claude Code', model: 'Haiku', isAdmin: false });
   assert.ok(s.includes('**🧠 Модель:** Haiku') && s.includes('data="ui:model"') && s.includes('/model'), s);
   assert.ok(startView({ lang: 'ru', level: 'x', project: 'p', engine: 'Gemini CLI', isAdmin: false }).includes('**🧠 Модель:** Авто'));
+});
+
+test('modelChosen: итог выбора вместо меню — движок, модель, уровень рассуждений', () => {
+  const engine = { id: 'claude', label: 'Claude Code' };
+  const models = [{ id: 'opus', name: 'Opus' }, { id: 'haiku', name: 'Haiku' }];
+  const efforts = [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }];
+  const ru = modelChosen({ lang: 'ru', engine, models, efforts, model: 'haiku', effort: 'max' });
+  assert.ok(ru.includes('Выбран движок: Claude Code') && ru.includes('Выбрана модель: Haiku') && ru.includes('Рассуждения: Max'), ru);
+  assert.ok(!ru.includes('Сейчас:'), 'это итог, а не меню');
+  // «Авто» для модели и уровня
+  const auto = modelChosen({ lang: 'ru', engine, models, efforts, model: null, effort: null });
+  assert.ok(auto.includes('Выбрана модель: Авто') && auto.includes('Рассуждения: Авто'), auto);
+  // Gemini: без уровня рассуждений; другие языки
+  const g = modelChosen({ lang: 'en', engine: { id: 'gemini', label: 'Gemini CLI' }, models: [{ id: 'g', name: 'Gem' }], model: 'g', effort: null });
+  assert.ok(g.includes('Engine selected: Gemini CLI') && g.includes('Model selected: Gem') && !g.includes('Reasoning'), g);
+  assert.ok(modelChosen({ lang: 'uk', engine, models, model: 'opus' }).includes('Обрано модель: Opus'));
 });
