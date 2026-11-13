@@ -11,6 +11,7 @@ console.log('не JSON: служебный вывод должен игнори�
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const msg = JSON.parse(line);
+  if (process.env.FAKE_HANG && msg.method === process.env.FAKE_HANG) return; // «зависший» агент: не отвечает на этот метод
   switch (msg.method) {
     case 'initialize':
       return send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: true } } } });

@@ -15,6 +15,10 @@ import {
   resolveSendable,
   safeFileName,
   saveUpload,
+  attachFiles,
+  filePlaceholder,
+  isSecret,
+  splitCode,
   stripSendMarks,
   uploadsDir,
 } from '../src/files.mjs';
@@ -118,6 +122,49 @@ test('stripSendMarks: убирает целые и недописанные ме
   assert.equal(stripSendMarks('массив [1] и [[2]]'), 'массив [1] и [[2]]');
 });
 
+const FENCE = '`'.repeat(3);
+
+test('extractSendMarks: метки в коде (строчном, блоках ``` и ~~~) не считаются отправкой и остаются в тексте', () => {
+  const md = [
+    'Отправить можно через `[[send:...]]`, или ``a ` [[send:…]]``.',
+    '',
+    `${FENCE}md`,
+    '[[send:C:\\x.txt]]',
+    FENCE,
+    '~~~',
+    '[[send:/y]]',
+    '~~~',
+    '[[send:C:\\out\\r.pdf]]',
+  ].join('\n');
+  const r = extractSendMarks(md);
+  assert.deepEqual(r.paths, ['C:\\out\\r.pdf']);
+  for (const kept of ['`[[send:...]]`', '[[send:…]]', '[[send:C:\\x.txt]]', '[[send:/y]]']) assert.ok(r.text.includes(kept), kept);
+  assert.ok(!r.text.includes('r.pdf'));
+  // незакрытая кавычка — обычный текст, метка после неё работает; незакрытый блок кода — код до конца
+  assert.deepEqual(extractSendMarks('цена ` 5\n[[send:/a.txt]]').paths, ['/a.txt']);
+  assert.deepEqual(extractSendMarks(`${FENCE}\n[[send:/a.txt]]`).paths, []);
+  // пробелы и пустые строки внутри кода не схлопываются
+  const code = `x\n[[send:/a]]\n${FENCE}\na  \n\n\n\nb\n${FENCE}`;
+  assert.equal(extractSendMarks(code).text, `x\n\n${FENCE}\na  \n\n\n\nb\n${FENCE}`);
+});
+
+test('stripSendMarks: в коде метки не трогает, недописанную метку в конце текста убирает', () => {
+  assert.equal(stripSendMarks('см. `[[send:...]]` и [[send:/x]] ok'), 'см. `[[send:...]]` и  ok');
+  assert.equal(stripSendMarks(`${FENCE}\n[[send:/x]]\n${FENCE}\nтекст [[se`), `${FENCE}\n[[send:/x]]\n${FENCE}\nтекст `);
+  assert.equal(stripSendMarks(`${FENCE}\n[[se`), `${FENCE}\n[[se`); // внутри незакрытого блока кода
+});
+
+test('splitCode: куски текста и кода склеиваются обратно в исходный текст', () => {
+  const four = '`'.repeat(4);
+  const md = `a \`b\` c\n${FENCE}js\nx \`y\`\n${FENCE}\n${four}\n${FENCE}\n${four}\nd \`\`e\`\` f \` g`;
+  const parts = splitCode(md);
+  assert.equal(parts.map((p) => p.s).join(''), md);
+  assert.deepEqual(
+    parts.filter((p) => p.code).map((p) => p.s),
+    ['`b`', `${FENCE}js\nx \`y\`\n${FENCE}\n`, `${four}\n${FENCE}\n${four}\n`, '``e``'],
+  );
+});
+
 test('resolveSendable: разрешены каталог исходящих и проект; секреты, чужие папки и ссылки наружу — нет', () => {
   const project = join(tmp, 'proj');
   const outbox = join(tmp, 'outbox', '1');
@@ -173,4 +220,59 @@ test('buildPromptBlocks: распакованный архив — папка и
   // архив без распаковки — обычный файл
   const plain = buildPromptBlocks({ text: 'x', files: [{ ...zip, unpacked: undefined }] })[1].text;
   assert.ok(!/unpacked/.test(plain));
+});
+
+test('extractSendMarks с заглушками: файл встаёт на место метки, повтор того же файла — без второй заглушки', () => {
+  const r = extractSendMarks('График:\n[[send:/o/a.png]]\nИ снова [[send:/o/a.png]], отчёт:\n[[send:/o/b.csv]]', { placeholders: true });
+  assert.deepEqual(r.paths, ['/o/a.png', '/o/b.csv']);
+  assert.equal(r.text, `График:\n${filePlaceholder(0)}\nИ снова , отчёт:\n${filePlaceholder(1)}`);
+});
+
+test('attachFiles: файлы — блоками на месте меток, недоступные — строкой с причиной, сверх лимита — отдельно', () => {
+  const outbox = join(tmp, 'attach', 'outbox');
+  const project = join(tmp, 'attach', 'proj');
+  mkdirSync(outbox, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(outbox, 'chart.png'), 'png');
+  writeFileSync(join(outbox, 'pic.webp'), 'webp');
+  writeFileSync(join(project, 'report.csv'), 'a,b\n1,2\n');
+  writeFileSync(join(project, 'big.bin'), Buffer.alloc(100));
+  const paths = [join(outbox, 'chart.png'), 'report.csv', join(outbox, 'nope.txt'), join(outbox, 'pic.webp'), join(project, 'big.bin')];
+  const text = ['Итог:', filePlaceholder(0), 'Отчёт ниже.', `${filePlaceholder(1)} ${filePlaceholder(2)}`, filePlaceholder(3), filePlaceholder(4), 'Конец.'].join('\n');
+  const skipped = [];
+  const r = attachFiles(text, paths, { cwd: project, outbox, failText: (name, why) => `⚠️ ${name}: ${why}`, onSkip: (p, why) => skipped.push(why), maxBytes: 50 });
+
+  assert.equal(
+    r.text,
+    ['Итог:', '', '![](tg://photo?id=f0)', '', 'Отчёт ниже.', '', '![](tg://document?id=f1)', '', '⚠️ nope.txt: missing', '', '![](tg://document?id=f3)', '', 'Конец.'].join('\n'),
+  );
+  assert.deepEqual(Object.keys(r.media), ['f0', 'f1', 'f3']);
+  assert.equal(r.media.f0.photo, true); // png — фото
+  assert.equal(r.media.f3.photo, false); // webp — документом
+  assert.equal(r.media.f1.name, 'report.csv');
+  assert.deepEqual(r.extra.map((f) => f.name), ['big.bin']); // 100 байт сверх лимита 50 — отдельно
+  assert.deepEqual(skipped, ['missing']);
+});
+
+test('attachFiles: не больше 10 файлов за ответ; текст без заглушек и код не меняются', () => {
+  const fence = '`'.repeat(3);
+  const code = `${fence}\na  \n\n\n\nb\n${fence}`;
+  assert.deepEqual(attachFiles(code, [], { cwd: tmp, outbox: tmp, failText: () => '' }), { text: code, media: {}, extra: [] });
+  const paths = Array.from({ length: 12 }, (_, i) => `/x/${i}.txt`);
+  const skipped = [];
+  attachFiles(paths.map((_, i) => filePlaceholder(i)).join('\n'), paths, { cwd: tmp, outbox: tmp, failText: () => '', onSkip: (p, why) => skipped.push(why) });
+  assert.deepEqual(skipped.slice(-2), ['limit', 'limit']);
+});
+
+test('isSecret: ключи, входы и папки агентов закрыты, обычные файлы проекта — нет', () => {
+  const p = (...parts) => join('C:', 'proj', ...parts);
+  for (const secret of [
+    p('.env'), p('.env.local'), p('.Renviron'), p('.npmrc'), p('.netrc'), p('.git-credentials'),
+    p('id_rsa'), p('id_ed25519'), p('server.pem'), p('cert.p12'), p('my.key'), p('client_secret_123.json'), p('credentials.json'),
+    p('.ssh', 'config'), p('.aws', 'config'), p('.claude', '.credentials.json'), p('.gemini', 'oauth_creds.json'),
+    p('.codex', 'auth.json'), p('.config', 'gh', 'hosts.yml'), p('.git', 'config'),
+  ]) assert.equal(isSecret(secret), true, secret);
+  for (const ok of [p('report.csv'), p('id_rsa.pub'), p('keys.md'), p('env.R'), p('R', 'credentials_check.R'), p('.github', 'ci.yml'), p('chart.png')]) {
+    assert.equal(isSecret(ok), false, ok);
+  }
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { AcpAgent, checkCommand } from '../src/acp.mjs';
+import { AcpAgent, checkCommand, quietStderrFilter } from '../src/acp.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-agent.mjs', import.meta.url));
 
@@ -84,4 +84,44 @@ test('AcpAgent: возможности агента сохраняются, prom
   assert.deepEqual(byBlocks._meta.blocks, ['text', 'image']);
   agent.close();
   await exited;
+});
+
+test('AcpAgent: зависший при запуске агент — ошибка START_TIMEOUT и завершение процесса', async () => {
+  const agent = new AcpAgent({ cwd: process.cwd(), command: process.execPath, args: [FAKE] });
+  const exited = new Promise((r) => (agent.onExit = r));
+  process.env.FAKE_HANG = 'session/new'; // окружение копируется при запуске процесса (синхронно внутри init)
+  const started = agent.init(null, { timeoutMs: 800 });
+  delete process.env.FAKE_HANG;
+  const t0 = Date.now();
+  await assert.rejects(started, (e) => e.code === 'START_TIMEOUT' && /нет ответа за 1 с/.test(e.message));
+  assert.ok(Date.now() - t0 < 3000);
+  assert.equal(agent.closed, true);
+  await exited;
+});
+
+test('AcpAgent: тайм-аут запуска не мешает агенту, который отвечает вовремя', async () => {
+  const agent = new AcpAgent({ cwd: process.cwd(), command: process.execPath, args: [FAKE] });
+  const exited = new Promise((r) => (agent.onExit = r));
+  await agent.init('plan', { timeoutMs: 15_000 });
+  assert.equal(agent.mode, 'plan');
+  agent.close();
+  await exited;
+});
+
+test('quietStderrFilter: служебный блок (трассировка AttachConsole) пропускается целиком, прочие ошибки — нет', () => {
+  const skip = quietStderrFilter(/^\[session\//, { start: /conpty_console_list_agent\.js/, end: /^Node\.js v\d/ });
+  const trace = [
+    'C:\npm\node_modules\@lydell\node-pty\conpty_console_list_agent.js:11',
+    'var consoleProcessList = getConsoleProcessList(shellPid);',
+    '                         ^',
+    '',
+    'Error: AttachConsole failed',
+    '    at Object.<anonymous> (conpty_console_list_agent.js:11:26)',
+    '',
+    'Node.js v24.13.1',
+  ];
+  assert.deepEqual(trace.map(skip), trace.map(() => true));
+  assert.equal(skip('Error: настоящая ошибка агента'), false, 'после блока фильтр снова пропускает в лог');
+  assert.equal(skip('    at somewhere (x.js:1:1)'), false);
+  assert.equal(skip('[session/load] служебное'), true);
 });

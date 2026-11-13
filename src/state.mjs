@@ -7,6 +7,12 @@ import { DEFAULT_DIR, insideRoot, pushRecent, samePath } from './projects.mjs';
 
 const states = new Map(); // userId -> состояние
 
+/**
+ * Сколько ждать запуска агента (initialize, создание или загрузка сессии), AGENT_START_TIMEOUT секунд, по умолчанию 120.
+ * Без ограничения зависший агент (например, ждёт входа в аккаунт) держал бы пользователя в «агент занят» до /close.
+ */
+export const START_TIMEOUT_MS = (Number(process.env.AGENT_START_TIMEOUT) > 0 ? Number(process.env.AGENT_START_TIMEOUT) : 120) * 1000;
+
 export const isAdmin = (id) => id === ADMIN_ID;
 
 export class LimitError extends Error {
@@ -47,16 +53,43 @@ export function levelLabel(userId) {
   return LEVEL_KEYS.includes(level) ? levelName(level, lang) : '—';
 }
 
-export function getState(userId, chatId) {
-  let st = states.get(userId);
+// ---- темы в личном чате (Bot API 9.3): режим «диалоги» ----
+
+/** Включены ли у бота темы в личном чате (getMe: has_topics_enabled) и могут ли пользователи сами их создавать. Заполняется при старте. */
+export const topicsSupport = { enabled: false, usersCreate: false };
+
+/**
+ * Режим «диалоги» у пользователя: каждая тема чата с ботом — отдельный диалог со своей сессией агента, проектом и движком.
+ * Только если у бота включены темы; пользователь может выключить (/topics) — тогда один диалог, как без тем. По умолчанию включён.
+ */
+export const topicsOn = (userId) => topicsSupport.enabled && db.getSetting(`topics:${userId}`) !== 'off';
+export const setTopicsMode = (userId, on) => db.setSetting(`topics:${userId}`, on ? 'on' : 'off');
+
+/** Номер диалога для сообщения из темы threadId: в режиме «диалоги» — сама тема, иначе 0 (один диалог на пользователя). */
+export const topicOf = (userId, threadId) => (threadId && topicsOn(userId) ? threadId : 0);
+const keyOf = (userId, topic) => `${userId}:${topic}`;
+
+/**
+ * Состояние диалога пользователя. threadId — тема, откуда пришло сообщение (null — общий чат). В режиме «диалоги» у каждой
+ * темы своё состояние (st.topic = threadId), общий чат (General) — обычный диалог, как без тем (st.topic = 0); вне режима —
+ * одно состояние на пользователя, а ответы уходят в тему последнего сообщения. Куда отвечать — st.to.
+ */
+export function getState(userId, chatId, threadId = null) {
+  const topic = topicOf(userId, threadId);
+  const key = keyOf(userId, topic);
+  let st = states.get(key);
   if (!st) {
     // проект запоминается отдельно для каждого пользователя; у администратора подхватываем ранее сохранённый общий
     const saved = db.getSetting(`project:${userId}`) || (isAdmin(userId) ? db.getSetting('project') : null);
+    // у темы свои проект, движок и сессия агента; новая тема начинает с последнего выбора пользователя
+    const row = topic ? db.getTopic(userId, topic) : null;
     st = {
       userId,
       chatId,
+      topic,
+      threadId: topic || threadId || null,
       agent: null,
-      engine: db.getSetting(`engine:${userId}`), // выбор пользователя; null — движок по умолчанию (DEFAULT_ENGINE)
+      engine: row?.engine ?? db.getSetting(`engine:${userId}`), // выбор пользователя; null — движок по умолчанию (DEFAULT_ENGINE)
       busy: false,
       requestId: null,
       onUpdate: null, // обработчик событий текущего запроса
@@ -64,15 +97,26 @@ export function getState(userId, chatId) {
       suppress: false, // администратор прервал запрос — итоговый ответ не отправляем
       lastActive: Date.now(),
       // сохранённый проект, если он ещё существует (и лежит в корне, если корень задан), иначе корень или домашняя папка
-      project: insideRoot(saved || DEFAULT_DIR) || DEFAULT_DIR,
+      project: insideRoot(row?.project || saved || DEFAULT_DIR) || DEFAULT_DIR,
+      // сессия агента темы: возобновится при первом запросе (после простоя или перезапуска бота)
+      resumeId: row?.acp_session_id || null,
+      /** Куда отвечать: id чата или {chat_id, message_thread_id} для темы. */
+      get to() {
+        return this.threadId ? { chat_id: this.chatId, message_thread_id: this.threadId } : this.chatId;
+      },
     };
-    states.set(userId, st);
+    states.set(key, st);
   }
   if (chatId) st.chatId = chatId;
+  if (!topic) st.threadId = threadId || null;
   return st;
 }
 
-export const findState = (userId) => states.get(userId);
+/** Состояние диалога, если оно уже есть (не создаёт новое). */
+export const findState = (userId, threadId = null) => states.get(keyOf(userId, topicOf(userId, threadId)));
+
+/** Все диалоги пользователя (в режиме «диалоги» их может быть несколько). */
+export const statesOf = (userId) => [...states.values()].filter((s) => s.userId === userId);
 
 export const RECENT_LIMIT = 6;
 
@@ -94,13 +138,17 @@ export const recentProjects = (st) =>
 export function saveProject(st, path) {
   db.setSetting(`recent:${st.userId}`, JSON.stringify(pushRecent(readRecent(st.userId), st.project, path, RECENT_LIMIT)));
   st.project = path;
-  db.setSetting(`project:${st.userId}`, path);
+  db.setSetting(`project:${st.userId}`, path); // и проект по умолчанию для новых тем
+  if (st.topic) db.saveTopic(st.userId, st.topic, { project: path });
+  st.resumeId = null; // в другом проекте — новая сессия
 }
 
 /** Запоминает выбор движка пользователя. Текущую сессию закрывает вызывающий (endAgent), если движок другой. */
 export function saveEngine(st, id) {
+  if (id !== st.engine) st.resumeId = null; // в другом движке — новая сессия
   st.engine = id;
-  db.setSetting(`engine:${st.userId}`, id);
+  db.setSetting(`engine:${st.userId}`, id); // и движок по умолчанию для новых тем
+  if (st.topic && id) db.saveTopic(st.userId, st.topic, { engine: id });
 }
 
 export function dropPermissions(st, outcome = { outcome: 'cancelled' }) {
@@ -108,11 +156,20 @@ export function dropPermissions(st, outcome = { outcome: 'cancelled' }) {
     db.permissionAnswered(p.dbId, null, outcome.outcome);
     p.resolve(outcome);
     st.perms.delete(seq);
+    p.onDrop?.(); // сообщение с кнопками — в итог «Отменено» (turn.mjs)
   }
 }
 
+// После каких закрытий сессия диалога продолжится при следующем запросе: в теме — после простоя, /close, выгрузки
+// и перезапуска бота; в обычном диалоге — только после выгрузки ради места (раньше там всегда начиналась новая).
+// После смены проекта, движка, уровня доступа, нарушения режима и /new — всегда новая сессия.
+const KEEP_IN_TOPIC = new Set(['idle', 'close', 'evicted', 'shutdown']);
+
 export function endAgent(st, reason) {
   if (!st.agent) return;
+  const keep = st.topic ? KEEP_IN_TOPIC.has(reason) : reason === 'evicted';
+  st.resumeId = keep ? (st.agent.sessionId ?? st.resumeId) : null;
+  if (st.topic && !keep) db.saveTopic(st.userId, st.topic, { acpSessionId: '' }); // '' — сессии нет (null не затирает)
   db.endSession(st.agent.dbSessionId, reason);
   st.agent.close();
   st.agent = null;
@@ -142,26 +199,72 @@ export function closeSession(st, reason) {
 export function activeSessions() {
   return [...states.values()]
     .filter((s) => s.agent && !s.agent.closed)
-    .map((s) => ({ userId: s.userId, engine: s.agent.engine?.short, project: s.agent.cwd ?? s.project, startedAt: s.agent.startedAt ?? s.lastActive, busy: s.busy }));
+    .map((s) => ({
+      userId: s.userId,
+      engine: s.agent.engine?.short,
+      project: s.agent.cwd ?? s.project,
+      topic: s.topic ? db.getTopic(s.userId, s.topic)?.name ?? null : null, // название темы (режим «диалоги»)
+      startedAt: s.agent.startedAt ?? s.lastActive,
+      busy: s.busy,
+    }));
 }
 
 /** Сколько процессов агентов сейчас у сотрудников: все движки под общим лимитом, администратор в лимит не входит. */
 const activeUserAgents = () => [...states.values()].filter((s) => !isAdmin(s.userId) && s.agent).length;
 
+/** Сколько агентов одного пользователя работает одновременно (в режиме «диалоги» — в разных темах). */
+export const MAX_AGENTS_PER_USER = Number(process.env.MAX_AGENTS_PER_USER) > 0 ? Number(process.env.MAX_AGENTS_PER_USER) : 2;
+export const ADMIN_MAX_AGENTS = Number(process.env.ADMIN_MAX_AGENTS) > 0 ? Number(process.env.ADMIN_MAX_AGENTS) : 4;
+const capOf = (userId) => (isAdmin(userId) ? ADMIN_MAX_AGENTS : MAX_AGENTS_PER_USER);
+
 /**
- * Возвращает работающий процесс агента пользователя или запускает новый (в его движке).
- * @param {{resume?: string}} [opts] resume — id сессии ACP, которую нужно возобновить вместо новой
+ * Освобождает место под агента диалога st. Если упёрлись в лимит пользователя или общий лимит сотрудников —
+ * выгружается самый давний простаивающий агент этого же пользователя (из другой темы): его сессия продолжится,
+ * когда пользователь туда вернётся. Чужие агенты не трогаем; если свободных нет — LimitError.
+ */
+export function reserveSlot(st) {
+  const lang = langOf(st.userId);
+  const mine = () => statesOf(st.userId).filter((s) => s !== st && s.agent);
+  const globalFull = () => !isAdmin(st.userId) && activeUserAgents() >= MAX_AGENTS;
+  while (mine().length >= capOf(st.userId) || globalFull()) {
+    const idle = mine()
+      .filter((s) => !s.busy)
+      .sort((x, y) => x.lastActive - y.lastActive)[0];
+    if (!idle) break;
+    log('агент простаивающего диалога выгружен, чтобы освободить место | пользователь', st.userId, '| тема', idle.topic);
+    endAgent(idle, 'evicted');
+  }
+  if (mine().length >= capOf(st.userId)) throw new LimitError(t('limit.user', lang, { max: capOf(st.userId) }));
+  if (globalFull()) throw new LimitError(t('limit.slots', lang, { max: MAX_AGENTS }));
+}
+
+/**
+ * Возвращает работающий процесс агента диалога или запускает новый (в его движке). Если у диалога есть сохранённая
+ * сессия (st.resumeId: тема, к которой вернулись, или выгруженный агент), она возобновляется; не вышло — новая.
+ * @param {{resume?: string}} [opts] resume — id сессии ACP, которую нужно возобновить вместо новой (/sessions)
  */
 export async function ensureAgent(st, { resume } = {}) {
   if (st.agent && !st.agent.closed) return st.agent;
-  if (!isAdmin(st.userId) && activeUserAgents() >= MAX_AGENTS) {
-    throw new LimitError(t('limit.slots', langOf(st.userId), { max: MAX_AGENTS }));
+  const auto = resume ? null : st.resumeId;
+  try {
+    return await startAgent(st, { resume: resume ?? auto ?? undefined });
+  } catch (e) {
+    if (!auto || e instanceof ClosedError || e instanceof LimitError) throw e;
+    log(`сессию ${auto} не удалось возобновить (${e.message}) — начинаю новую | пользователь`, st.userId);
+    st.resumeId = null;
+    return startAgent(st, {});
   }
+}
+
+async function startAgent(st, { resume } = {}) {
+  reserveSlot(st);
   const engine = engineOf(st);
   const allowed = modeFor(st.userId, engine);
   const a = createAgent(engine, {
     cwd: st.project,
     onUpdate: (u) => {
+      // пока агент запускается, он может «проигрывать» историю возобновлённой сессии — в текущий ответ она не идёт
+      if (!a.ready) return;
       // Агент сменил режим сам (например, выход из плана у Claude Code). Основная защита — фильтр вариантов в askPermission;
       // это последний рубеж: вернуть режим нельзя (текущий ход агент доделывает уже в новом режиме), поэтому сразу
       // прерываем запрос и гасим процесс.
@@ -169,7 +272,7 @@ export async function ensureAgent(st, { resume } = {}) {
         if (a.sessionId && st.agent === a && !modeAllowed(engine, u.currentModeId, allowed)) {
           log(`⛔ ${engine.label} перешёл в режим ${u.currentModeId} выше разрешённого (${allowed}) — сессия закрыта | пользователь`, st.userId);
           stopUser(st, 'mode-violation');
-          say(st.chatId, t('state.modeViolation', langOf(st.userId), { mode: u.currentModeId }));
+          say(st.to, t('state.modeViolation', langOf(st.userId), { mode: u.currentModeId }));
           return;
         }
         a.mode = u.currentModeId;
@@ -190,13 +293,18 @@ export async function ensureAgent(st, { resume } = {}) {
   });
   st.agent = a; // занимаем слот сразу, пока идёт запуск (~10 с), иначе лимит можно обойти параллельными запросами
   try {
-    await a.init(allowed, { resume });
+    await a.init(allowed, { resume, timeoutMs: START_TIMEOUT_MS });
   } catch (e) {
     // процесс убили закрытием сессии во время запуска (endAgent уже снял st.agent) — это не ошибка агента
     const closedByUser = st.agent !== a;
     a.close();
     if (st.agent === a) st.agent = null;
-    throw closedByUser ? new ClosedError() : e;
+    if (closedByUser) throw new ClosedError();
+    if (e.code === 'START_TIMEOUT') {
+      log(`⚠️ ${engine.label} не запустился за ${START_TIMEOUT_MS / 1000} с — процесс завершён | пользователь`, st.userId);
+      throw new Error(t('state.startTimeout', langOf(st.userId), { engine: engine.label, sec: START_TIMEOUT_MS / 1000 }));
+    }
+    throw e;
   }
   // сессию закрыли, пока шёл запуск, а init успел завершиться: не регистрируем её и гасим процесс
   if (st.agent !== a || a.closed) {
@@ -204,6 +312,10 @@ export async function ensureAgent(st, { resume } = {}) {
     throw new ClosedError();
   }
   a.startedAt = Date.now();
+  a.ready = true;
+  // сессия диалога: в теме — запоминается в базе (вернётся пользователь через неделю — продолжит её же)
+  st.resumeId = a.sessionId;
+  if (st.topic) db.saveTopic(st.userId, st.topic, { acpSessionId: a.sessionId, engine: engine.id, project: st.project });
   // Каталог моделей здесь не обновляем: у сессии пользователя могут быть свои настройки (а у Claude Code набор уровней
   // рассуждений зависит от модели) — каталог берётся только из чистого запуска (access.probeCatalog).
   if (resume) {
@@ -223,8 +335,9 @@ export function startIdleReaper() {
     for (const st of states.values()) {
       if (st.agent && !st.busy && Date.now() - st.lastActive > IDLE_MS) {
         endAgent(st, 'idle');
-        log('сессия закрыта по неактивности, пользователь', st.userId);
-        say(st.chatId, t('state.idle', langOf(st.userId), { min: IDLE_MINUTES }));
+        log('сессия закрыта по неактивности, пользователь', st.userId, '| тема', st.topic);
+        // в теме разговор продолжится с того же места (сессия темы возобновится), в обычном диалоге — начнётся новый
+        say(st.to, t(st.topic ? 'state.idleTopic' : 'state.idle', langOf(st.userId), { min: IDLE_MINUTES }));
       }
     }
   }, 60_000).unref();

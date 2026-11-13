@@ -72,6 +72,10 @@ export const ENGINES = Object.assign(Object.create(null), {
     // «навсегда» (сохранение в политику агента) из удалённого чата не даём
     permanentOption: (o) => /_and_save$/.test(o.optionId),
     cleanText: stripGeminiModeUpdate,
+    // Под службой (без консоли) вспомогательный процесс node-pty внутри Gemini CLI падает с «AttachConsole failed»
+    // после каждой команды оболочки — на работу не влияет (команды выполняются), но засоряет журнал трассировкой
+    // на ~16 строк. Пропускаем этот блок целиком: от строки с conpty_console_list_agent.js до «Node.js vXX».
+    quietStderrBlock: { start: /conpty_console_list_agent\.js/, end: /^Node\.js v\d/ },
     // у Gemini имя инструмента зашито в toolCallId: «read_file__call_…»
     toolName: (u) => {
       const id = u.toolCallId || '';
@@ -161,12 +165,20 @@ export const getEngine = (id) => ENGINES[id] ?? ENGINES[DEFAULT_ENGINE];
 
 // ---- доступность движков (заполняется проверкой при старте) ----
 const unavailable = new Set();
+const versions = new Map(); // движок → версия из проверки при старте
 
 /** Отмечает движки, которые не запустились при старте; таймаут проверки считаем доступным (медленный, но есть). */
 export function setAvailability(results) {
   unavailable.clear();
-  for (const r of results) if (!r.ok && !r.timeout) unavailable.add(r.engine.id);
+  versions.clear();
+  for (const r of results) {
+    if (!r.ok && !r.timeout) unavailable.add(r.engine.id);
+    if (r.ok && r.version) versions.set(r.engine.id, r.version);
+  }
 }
+
+/** Версия движка по проверке при старте (вывод `--version`) или null. */
+export const engineVersion = (id) => versions.get(id) ?? null;
 
 export const isAvailable = (id) => Boolean(ENGINES[id]) && !unavailable.has(id);
 
@@ -306,7 +318,7 @@ export function parseUsage(res, usageUpdate) {
  * @param {{cwd: string, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
  */
 export function createAgent(engine, opts) {
-  const agent = new AcpAgent({ ...opts, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null });
+  const agent = new AcpAgent({ ...opts, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
   agent.engine = engine;
   return agent;
 }

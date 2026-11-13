@@ -1,12 +1,13 @@
 // Общие настройки, база, логирование и отправка сообщений — используются всеми модулями бота.
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { appendFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DATA_DIR } from './app.mjs';
 import { openDb } from './db.mjs';
 import { normLang, pickLang, t } from './i18n.mjs';
 
 export { DATA_DIR };
-import { tg } from './telegram.mjs';
+import { dest, tg } from './telegram.mjs';
 
 /** Главный администратор: ID задан в .env, отозвать доступ у него из бота нельзя. */
 export const ADMIN_ID = Number(process.env.ALLOWED_USER_ID);
@@ -50,18 +51,40 @@ export const botInfo = { username: null }; // заполняется при ст
 
 export const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-// подробный журнал того, что бот отправляет в Telegram (для разбора проблем с отображением)
+// Подробный журнал того, что бот отправляет в Telegram (для разбора проблем с отображением) — только при
+// ACPGRAM_DEBUG=1: черновик пишется каждую секунду, без выключателя и ротации файл рос бесконечно.
+// Запись асинхронная, по очереди; больше DEBUG_MAX_BYTES — файл переименовывается в debug.log.1 (хранится один прошлый).
 mkdirSync(DATA_DIR, { recursive: true });
-export const dbg = (kind, text) => {
-  try {
-    appendFileSync(join(DATA_DIR, 'debug.log'), `=== ${new Date().toISOString()} ${kind} (${text.length} симв.)\n${text.slice(0, 1500)}\n`);
-  } catch {}
+export const DEBUG = process.env.ACPGRAM_DEBUG === '1';
+export const DEBUG_MAX_BYTES = 5 * 1024 * 1024;
+export const createDebugLog = (path, maxBytes = DEBUG_MAX_BYTES) => {
+  let queue = Promise.resolve();
+  let size = null;
+  const write = (kind, text) => {
+    const entry = `=== ${new Date().toISOString()} ${kind} (${text.length} симв.)\n${text.slice(0, 1500)}\n`;
+    queue = queue
+      .then(async () => {
+        size ??= await stat(path).then((s) => s.size, () => 0);
+        if (size >= maxBytes) {
+          await rename(path, `${path}.1`).catch(() => {});
+          size = 0;
+        }
+        await appendFile(path, entry);
+        size += Buffer.byteLength(entry);
+      })
+      .catch(() => {});
+    return queue;
+  };
+  return write;
 };
+const debugLog = DEBUG ? createDebugLog(join(DATA_DIR, 'debug.log')) : null;
+export const dbg = (kind, text) => debugLog?.(kind, text);
 
 // база работы бота: сессии, запросы, вызовы инструментов, разрешения, ответы, сотрудники
 export const db = openDb(join(DATA_DIR, 'bot.db'));
 
-export const say = (chat_id, text, extra = {}) => tg('sendMessage', { chat_id, text, ...extra }).catch((e) => log('sendMessage:', e.message));
+/** Сообщение пользователю: to — id чата или {chat_id, message_thread_id} (тема), обычно st.to. */
+export const say = (to, text, extra = {}) => tg('sendMessage', { ...dest(to), text, ...extra }).catch((e) => log('sendMessage:', e.message));
 
 /** Как показывать человека в сообщениях администратору. */
 export const who = (u) => (u.username ? `@${u.username}` : u.first_name || `id ${u.id ?? u.user_id}`);

@@ -9,12 +9,15 @@ import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, lo
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, showPath } from './projects.mjs';
-import { handleProject, onNavCallback } from './projectsUi.mjs';
+import { handleProject, onNavCallback, onTopicListCallback } from './projectsUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
-import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf } from './state.mjs';
+import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport } from './state.mjs';
+import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
+import { topicInfoOf } from './topics.mjs';
+import { setSyncKill } from './acp.mjs';
 import { downloadFile, sendRich, tg } from './telegram.mjs';
 import { MAX_FILE_BYTES, IMAGE_BLOCK_MAX, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
-import { archiveKind, extractArchive } from './archive.mjs';
+import { archiveKind, extractArchiveAsync } from './archive.mjs';
 import { createAlbumBuffer } from './albums.mjs';
 import { onPermissionCallback, runTurn } from './turn.mjs';
 import { startView } from './ui.mjs';
@@ -42,11 +45,12 @@ const sendLangPicker = (chatId) =>
 const sendStart = (st) => {
   const lang = langOf(st.userId);
   const admin = isAdmin(st.userId);
-  return sendRich(st.chatId, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), lang })).catch((e) => log('start:', e.message));
+  const topics = topicsSupport.enabled ? (topicsOn(st.userId) ? 'on' : 'off') : null; // режим «диалоги», если у бота есть темы
+  return sendRich(st.to, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
 };
 
 /** Кнопки экрана /start (ui:<команда>) работают как соответствующие команды. */
-const UI_COMMANDS = new Set(['project', 'engine', 'model', 'new', 'sessions', 'users', 'invite', 'close', 'active', 'language']);
+const UI_COMMANDS = new Set(['project', 'engine', 'model', 'new', 'sessions', 'users', 'invite', 'close', 'active', 'language', 'topics']);
 async function onUiCallback(st, cb) {
   const name = (cb.data || '').slice('ui:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
@@ -68,9 +72,9 @@ async function onLangCallback(st, cb) {
 function languageCommand(st, arg) {
   const q = (arg || '').trim().toLowerCase();
   const code = normLang(q);
-  if (!code || q !== code) return sendLangPicker(st.chatId);
+  if (!code || q !== code) return sendLangPicker(st.to);
   setLang(st.userId, code);
-  return say(st.chatId, t('lang.set', code, { name: LANGS[code] }));
+  return say(st.to, t('lang.set', code, { name: LANGS[code] }));
 }
 
 /** Текст пользователя: команды или запрос к агенту. */
@@ -86,26 +90,28 @@ async function handleText(st, text) {
   if (name === 'engine') return handleEngine(st, arg);
   if (name === 'model') return handleModel(st);
   if (name === 'sessions') return handleSessions(st);
+  if (name === 'topics') return handleTopics(st);
   if (name === 'stop') {
-    if (!st.busy) return say(st.chatId, t('stop.none', lang));
+    if (!st.busy) return say(st.to, t('stop.none', lang));
     st.agent?.cancel();
     dropPermissions(st);
     return;
   }
   if (name === 'close' || name === 'exit') {
-    if (!closeSession(st, 'close')) return say(st.chatId, t('close.none', lang));
-    return say(st.chatId, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
+    if (!closeSession(st, 'close')) return say(st.to, t('close.none', lang));
+    return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
   }
   if (name === 'new') {
-    if (st.busy) return say(st.chatId, t('busy.stop', lang));
+    if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
+    if (st.busy) return say(st.to, t('busy.stop', lang));
     endAgent(st, 'new');
-    return say(st.chatId, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
+    return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
   }
   if (name === 'invite' || name === 'users' || name === 'active') {
-    if (!isAdmin(st.userId)) return say(st.chatId, t('admin.only', lang));
-    return adminCommand(st.chatId, `/${name}`);
+    if (!isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
+    return adminCommand(st.to, `/${name}`);
   }
-  if (st.busy) return say(st.chatId, t('busy.running', lang));
+  if (st.busy) return say(st.to, t('busy.running', lang));
   return runTurn(st, text);
 }
 
@@ -115,7 +121,7 @@ async function handleText(st, text) {
  */
 async function receiveFile(st, meta, lang) {
   if (meta.size > MAX_FILE_BYTES) {
-    await say(st.chatId, t('file.tooBig', lang));
+    await say(st.to, t('file.tooBig', lang));
     return null;
   }
   let data;
@@ -123,11 +129,11 @@ async function receiveFile(st, meta, lang) {
     data = await downloadFile(meta.id);
   } catch (e) {
     log('скачивание файла:', e.message, '| пользователь', st.userId);
-    await say(st.chatId, t('file.downloadFail', lang, { msg: e.message }));
+    await say(st.to, t('file.downloadFail', lang, { msg: e.message }));
     return null;
   }
   if (data.length > MAX_FILE_BYTES) {
-    await say(st.chatId, t('file.tooBig', lang));
+    await say(st.to, t('file.tooBig', lang));
     return null;
   }
   const path = saveUpload(uploadsDir(st.userId), meta.name, data);
@@ -139,11 +145,11 @@ async function receiveFile(st, meta, lang) {
     // архив: рядом с ним папка с содержимым; не вышло — агент получит сам архив, пользователь причину
     const dir = `${path}_unpacked`;
     try {
-      file.unpacked = { dir, ...extractArchive(data, kind, dir) };
+      file.unpacked = { dir, ...(await extractArchiveAsync(data, kind, dir)) };
       log('архив распакован', st.userId, dir, `${file.unpacked.files.length} файлов, пропущено ${file.unpacked.skipped}`);
     } catch (e) {
       log('архив не распакован:', e.reason ?? e.message, '| пользователь', st.userId);
-      await say(st.chatId, t('file.archiveSkipped', lang, { name: meta.name, why: t(`file.archiveWhy.${e.reason ?? 'corrupt'}`, lang) }));
+      await say(st.to, t('file.archiveSkipped', lang, { name: meta.name, why: t(`file.archiveWhy.${e.reason ?? 'corrupt'}`, lang) }));
     }
   }
   return file;
@@ -155,12 +161,12 @@ async function receiveFile(st, meta, lang) {
  */
 async function processAttachments(st, msgs) {
   const lang = langOf(st.userId);
-  if (st.busy) return say(st.chatId, t('busy.running', lang));
+  if (st.busy) return say(st.to, t('busy.running', lang));
   const received = await Promise.all(msgs.map((m) => describeAttachment(m)).filter(Boolean).map((meta) => receiveFile(st, meta, lang)));
   const files = received.filter(Boolean);
   if (!files.length) return;
   // пока качался альбом, пользователь мог отправить текст и занять агента
-  if (st.busy) return say(st.chatId, t('busy.running', lang));
+  if (st.busy) return say(st.to, t('busy.running', lang));
   const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
   return runTurn(st, caption, { files });
 }
@@ -183,7 +189,9 @@ function handleAttachment(st, msg) {
  * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
  */
 const menuFor = (lang, admin) => {
-  const common = ['project', 'engine', 'model', 'new', 'sessions', 'stop', 'close', 'language', 'start'].map((command) => ({ command, description: t(`menu.${command}`, lang) }));
+  // /topics — только если у бота включены темы в личном чате
+  const names = ['project', 'engine', 'model', 'new', 'sessions', 'stop', 'close', ...(topicsSupport.enabled ? ['topics'] : []), 'language', 'start'];
+  const common = names.map((command) => ({ command, description: t(`menu.${command}`, lang) }));
   if (!admin) return common;
   return [{ command: 'active', description: t('menu.active', lang) }, { command: 'users', description: t('menu.users', lang) }, { command: 'invite', description: t('menu.invite', lang) }, ...common];
 };
@@ -200,7 +208,8 @@ async function setupCommands() {
 async function handleUpdate(u) {
   // пользователь нажал «стоп» на черновике
   if (u.stopped_message_generation) {
-    const st = findState(u.stopped_message_generation.chat?.id);
+    const sg = u.stopped_message_generation;
+    const st = findState(sg.chat?.id, sg.message_thread_id ?? null); // в личном чате id чата = id пользователя
     if (st?.busy) {
       st.agent?.cancel();
       dropPermissions(st);
@@ -228,10 +237,17 @@ async function handleUpdate(u) {
   noteTgLang(from.id, from.language_code, true);
   if (!isAdmin(from.id)) db.touchUser(from.id, from.username, from.first_name);
 
+  // тема, откуда пришло сообщение или нажата кнопка (темы в личном чате с ботом); null — общий чат
+  const source = msg ?? cb?.message;
+  const threadId = source?.is_topic_message && source.message_thread_id ? source.message_thread_id : null;
+  if (msg && threadId && noteTopic(from.id, threadId, msg)) return; // служебное сообщение о теме — запомнили, отвечать не нужно
+
   if (cb) {
     const data = cb.data || '';
     if (data.startsWith('adm:')) return isAdmin(from.id) ? onAdminCallback(cb) : tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-    const st = getState(from.id, chatId);
+    const st = getState(from.id, chatId, threadId);
+    if (data.startsWith('tpc:')) return onTopicsCallback(st, cb);
+    if (data.startsWith('tpl:')) return onTopicListCallback(st, cb);
     if (data.startsWith('nav:')) return onNavCallback(st, cb);
     if (data.startsWith('perm:')) return onPermissionCallback(st, cb);
     if (data.startsWith('ses:')) return onSessionCallback(st, cb);
@@ -241,8 +257,29 @@ async function handleUpdate(u) {
     if (data.startsWith('lang:')) return onLangCallback(st, cb);
     return;
   }
-  if (msg?.text) return handleText(getState(from.id, chatId), msg.text);
-  if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId), msg);
+  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text);
+  if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId, threadId), msg);
+}
+
+/**
+ * Запоминает тему, которую создал или переименовал пользователь (в режиме «диалоги»). Тема без названия
+ * (is_name_implicit) получит название от агента по первому ответу; названную пользователем не переименовываем.
+ * @returns {boolean} true — это служебное сообщение о теме (создана, переименована), отвечать на него не нужно
+ */
+function noteTopic(userId, threadId, msg) {
+  if (!topicsOn(userId)) return false;
+  if (msg.forum_topic_edited) {
+    if (msg.forum_topic_edited.name) db.saveTopic(userId, threadId, { name: msg.forum_topic_edited.name, named: true });
+    return true;
+  }
+  const info = topicInfoOf(msg);
+  if (msg.forum_topic_created) topicsSupport.usersCreate = true; // пользователь создал тему сам — значит, это разрешено
+  if (!db.getTopic(userId, threadId)) {
+    // неизвестная тема без сведений о создании — считаем названной: чужое название не трогаем
+    db.saveTopic(userId, threadId, { name: info?.name ?? null, named: info ? !info.implicit : true });
+    log('тема пользователя', threadId, info?.name ?? '', info?.implicit ? '(без названия)' : '', '| пользователь', userId);
+  }
+  return Boolean(msg.forum_topic_created);
 }
 
 async function main() {
@@ -266,10 +303,21 @@ async function main() {
       ? `корень проектов: ${ROOT} (проект — только папка внутри корня)`
       : `⚠️ PROJECTS_ROOT не задан: проектом может быть любая папка на машине, по умолчанию домашняя (${HOME})`,
   );
-  // списки моделей движков — в фоне, запуск бота не ждёт
-  refreshCatalogs().catch((e) => log('каталоги моделей:', e.message));
+  // списки моделей движков — в фоне, запуск бота не ждёт; свежие (моложе суток, та же версия движка) не запрашиваются;
+  // раз в сутки — обновление, чтобы новые модели появлялись и без перезапуска бота
+  const catalogs = () => refreshCatalogs().catch((e) => log('каталоги моделей:', e.message));
+  catalogs();
+  setInterval(catalogs, 24 * 3600_000).unref();
   const me = await tg('getMe');
   botInfo.username = me.username;
+  // темы в личном чате включает владелец бота в @BotFather; без них режим «диалоги» недоступен, бот работает как раньше
+  topicsSupport.enabled = Boolean(me.has_topics_enabled);
+  topicsSupport.usersCreate = Boolean(me.allows_users_to_create_topics);
+  log(
+    topicsSupport.enabled
+      ? `темы в личном чате включены (режим «диалоги», /topics)${topicsSupport.usersCreate ? '' : ' — пользователи не могут создавать темы сами, только через /new'}`
+      : 'темы в личном чате выключены — режим «диалоги» недоступен',
+  );
   await setupCommands().catch((e) => log('setMyCommands:', e.message));
   // пропускаем накопившиеся до запуска обновления
   const old = await tg('getUpdates', { offset: -1, timeout: 0 });
@@ -292,7 +340,8 @@ async function main() {
   for (;;) {
     let updates;
     try {
-      updates = await tg('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query', 'stopped_message_generation'] });
+      // длинный опрос 30 с + запас: если соединение тихо оборвалось, через 45 с переподключаемся (а не через ~5 минут)
+      updates = await tg('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query', 'stopped_message_generation'] }, { timeoutMs: 45_000 });
     } catch (e) {
       log('getUpdates:', e.message);
       await new Promise((r) => setTimeout(r, 3000));
@@ -310,6 +359,7 @@ let stopping = false;
 function shutdown() {
   if (stopping) return;
   stopping = true;
+  setSyncKill(); // бот сейчас выйдет: процессы агентов завершаем синхронно, чтобы ни один не остался
   shutdownAll('shutdown'); // сессии пользователей: процессы агентов вместе с дочерними
   killProbes(); // и агенты, запущенные за списком моделей
   db.close();

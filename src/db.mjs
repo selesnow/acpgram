@@ -12,6 +12,9 @@ export function openDb(path = 'data/bot.db') {
   const db = new DatabaseSync(path);
   db.exec(`
     PRAGMA journal_mode = WAL;
+    -- при WAL безопасно: база не повреждается, после сбоя питания теряются лишь последние записи журнала;
+    -- без этого каждая запись (шаги агента, запросы разрешений) ждала сброса на диск
+    PRAGMA synchronous = NORMAL;
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -103,8 +106,25 @@ export function openDb(path = 'data/bot.db') {
       decided_at   TEXT
     );
 
+    -- темы в личном чате с ботом (режим «диалоги»): у каждой темы свой проект, движок и сессия агента
+    CREATE TABLE IF NOT EXISTS topics (
+      user_id        INTEGER NOT NULL,
+      thread_id      INTEGER NOT NULL,
+      name           TEXT,
+      named          INTEGER NOT NULL DEFAULT 0, -- 1: название окончательное (задал пользователь или агент)
+      project        TEXT,
+      engine         TEXT,
+      acp_session_id TEXT,                       -- сессия агента темы: возобновляется, когда пользователь возвращается
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL,
+      PRIMARY KEY (user_id, thread_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls(request_id);
+    -- /sessions: сессии пользователя и поиск всех запусков одной ACP-сессии
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_acp ON sessions(acp_session_id);
   `);
 
   // миграция для баз, созданных до появления колонки cwd
@@ -135,6 +155,8 @@ export function openDb(path = 'data/bot.db') {
     ['engines', 'TEXT'],
     ['models', 'TEXT'],
   ]);
+  // v1.19: тему можно убрать из списка тем проекта (Telegram не сообщает боту об удалении темы)
+  addColumns('topics', [['hidden', 'INTEGER NOT NULL DEFAULT 0']]);
 
   const q = {
     getUser: db.prepare('SELECT * FROM users WHERE user_id = ?'),
@@ -189,6 +211,17 @@ export function openDb(path = 'data/bot.db') {
     ),
     addPermission: db.prepare('INSERT INTO permissions (request_id, tool_call_id, title, options, asked_at) VALUES (?,?,?,?,?)'),
     answerPermission: db.prepare('UPDATE permissions SET chosen_option = ?, outcome = ?, answered_at = ? WHERE id = ?'),
+    getTopic: db.prepare('SELECT * FROM topics WHERE user_id = ? AND thread_id = ?'),
+    insertTopic: db.prepare('INSERT OR IGNORE INTO topics (user_id, thread_id, created_at, updated_at) VALUES (?,?,?,?)'),
+    updateTopic: db.prepare(
+      `UPDATE topics SET name = COALESCE(?, name), named = COALESCE(?, named), project = COALESCE(?, project), engine = COALESCE(?, engine),
+       acp_session_id = COALESCE(?, acp_session_id), hidden = COALESCE(?, hidden), updated_at = ? WHERE user_id = ? AND thread_id = ?`,
+    ),
+    // темы проекта для списка в General: свежие первыми, без убранных из списка
+    listTopics: db.prepare(
+      'SELECT * FROM topics WHERE user_id = ? AND lower(project) = lower(?) AND hidden = 0 ORDER BY updated_at DESC LIMIT ? OFFSET ?',
+    ),
+    countTopics: db.prepare('SELECT COUNT(*) AS n FROM topics WHERE user_id = ? AND lower(project) = lower(?) AND hidden = 0'),
   };
 
   // Любая ошибка БД не должна ронять бота — журнал вторичен по отношению к работе.
@@ -243,6 +276,19 @@ export function openDb(path = 'data/bot.db') {
     permissionAsked: safe((requestId, toolCallId, title, options) =>
       Number(q.addPermission.run(requestId, toolCallId ?? null, cut(title, 2000), JSON.stringify(options), now()).lastInsertRowid)),
     permissionAnswered: safe((id, chosen, outcome) => id && q.answerPermission.run(chosen ?? null, outcome, now(), id)),
+    // --- темы ---
+    getTopic: safe((userId, threadId) => q.getTopic.get(userId, threadId) ?? null),
+    /** Создаёт тему, если её нет, и обновляет переданные поля (name, named, project, engine, acpSessionId); остальные не трогает. */
+    saveTopic: safe((userId, threadId, { name, named, project, engine, acpSessionId, hidden } = {}) => {
+      const t = now(); // updated_at — последняя активность темы (порядок в списке тем проекта)
+      q.insertTopic.run(userId, threadId, t, t);
+      const flag = (v) => (v == null ? null : Number(Boolean(v)));
+      q.updateTopic.run(name ?? null, flag(named), project ?? null, engine ?? null, acpSessionId ?? null, flag(hidden), t, userId, threadId);
+      return q.getTopic.get(userId, threadId);
+    }),
+    /** Темы пользователя в проекте (кроме убранных из списка), свежие первыми; total — сколько всего. */
+    listTopics: (userId, project, limit = 10, offset = 0) =>
+      safe(() => ({ items: q.listTopics.all(userId, project, limit, offset), total: q.countTopics.get(userId, project).n }))() ?? { items: [], total: 0 },
     close: () => db.close(),
   };
 }

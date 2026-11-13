@@ -30,9 +30,9 @@ function view(st, engine, catalog) {
 export async function handleModel(st) {
   const engine = engineOf(st);
   const catalog = catalogOf(engine);
-  if (!catalog) return say(st.chatId, t('model.loading', langOf(st.userId), { engine: engine.label }));
+  if (!catalog) return say(st.to, t('model.loading', langOf(st.userId), { engine: engine.label }));
   const v = view(st, engine, catalog);
-  return say(st.chatId, v.text, { reply_markup: v.markup });
+  return say(st.to, v.text, { reply_markup: v.markup });
 }
 
 /** Кнопка mdl:<движок>:<m|e>:<id | #номер | ~>. */
@@ -60,5 +60,5 @@ export async function onModelCallback(st, cb) {
   // как в /engine: меню заменяется итогом выбора, кнопки убираются
   const sel = effectiveSelection(st.userId, engine);
   const text = modelChosen({ engine, models: allowedModels(st.userId, engine.id), efforts: engine.effortConfig ? catalog.efforts : [], model: sel.model, effort: sel.effort, lang });
-  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.chatId, text));
+  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text));
 }

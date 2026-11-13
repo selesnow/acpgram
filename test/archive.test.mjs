@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { crc32, deflateRawSync, gzipSync } from 'node:zlib';
-import { ArchiveError, archiveKind, extractArchive, safeEntryPath } from '../src/archive.mjs';
+import { ArchiveError, archiveKind, extractArchive, extractArchiveAsync, safeEntryPath } from '../src/archive.mjs';
 
 const tmp = mkdtempSync(join(tmpdir(), 'acpgram-archive-'));
 after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -168,4 +168,19 @@ test('tar и tar.gz: файлы, папки, ссылки пропускаютс
 test('tgz: распакованный размер больше лимита — отказ без распаковки в память', () => {
   const tar = makeTar([{ name: 'big.txt', data: 'a'.repeat(200_000) }]);
   assert.throws(() => extractArchive(gzipSync(tar), 'tgz', dest(), { maxBytes: 1000 }), (e) => e.reason === 'limit');
+});
+
+test('extractArchiveAsync: распаковка в отдельном потоке — тот же результат и те же ошибки', async () => {
+  const zip = makeZip([{ name: 'a/b.txt', data: 'привет' }, { name: '../evil.txt', data: 'x' }]);
+  const d = dest();
+  const r = await extractArchiveAsync(zip, 'zip', d);
+  assert.deepEqual(r.files, [{ path: 'a/b.txt', size: Buffer.byteLength('привет') }]);
+  assert.equal(r.skipped, 1);
+  assert.equal(readFileSync(join(d, 'a', 'b.txt'), 'utf8'), 'привет');
+
+  await assert.rejects(extractArchiveAsync(Buffer.from('не gzip'), 'tgz', dest()), (e) => e instanceof ArchiveError && e.reason === 'corrupt');
+  const many = makeZip(Array.from({ length: 6 }, (_, i) => ({ name: `f${i}.txt`, data: 'x' })));
+  const d2 = dest();
+  await assert.rejects(extractArchiveAsync(many, 'zip', d2, { maxFiles: 5 }), (e) => e instanceof ArchiveError && e.reason === 'limit');
+  assert.equal(existsSync(d2), false);
 });

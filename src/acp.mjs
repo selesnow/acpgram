@@ -15,11 +15,23 @@ export function spawnCommand(command, args, opts = {}) {
   return spawn(command, args, { ...opts, detached: true });
 }
 
-/** Завершает процесс вместе со всеми дочерними. */
+// При остановке бота процессы агентов завершаются синхронно: бот сразу выходит, и асинхронный taskkill мог не успеть.
+let syncKill = false;
+/** Включает синхронное завершение процессов (вызывается перед остановкой бота). */
+export const setSyncKill = (on = true) => {
+  syncKill = on;
+};
+
+/**
+ * Завершает процесс вместе со всеми дочерними. На Windows — taskkill /T; обычно асинхронно: синхронный вызов
+ * занимает 0,1–0,5 с, и на это время замирал весь бот (закрытие сессии, простой, /close).
+ */
 export function killTree(proc, graceMs = 3000) {
   if (!proc?.pid) return;
   if (IS_WIN) {
-    spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
+    const args = ['/pid', String(proc.pid), '/T', '/F'];
+    if (syncKill) spawnSync('taskkill', args, { windowsHide: true });
+    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', (e) => console.error('[acp] taskkill:', e.message));
     return;
   }
   const signal = (sig) => {
@@ -64,6 +76,26 @@ export function checkCommand(command, args = ['--version'], timeoutMs = 60_000) 
   });
 }
 
+/**
+ * Фильтр служебного вывода агента в stderr: строки по line (RegExp) и многострочные блоки block {start, end} —
+ * от строки, где совпал start, до строки, где совпал end (включительно; не дольше 60 строк — на случай, если конца нет).
+ * Возвращает функцию line → true, если строку в лог не писать.
+ */
+export function quietStderrFilter(line = null, block = null) {
+  let inBlock = 0;
+  return (l) => {
+    if (inBlock) {
+      inBlock = block.end.test(l) || inBlock >= 60 ? 0 : inBlock + 1;
+      return true;
+    }
+    if (block?.start.test(l)) {
+      inBlock = 1;
+      return true;
+    }
+    return Boolean(line?.test(l));
+  };
+}
+
 export class AcpAgent {
   /**
    * @param {object} o
@@ -75,8 +107,9 @@ export class AcpAgent {
    * @param {(u:object)=>void} [o.onUpdate]                 обработчик session/update
    * @param {(code:number|null)=>void} [o.onExit]
    */
-  constructor({ cwd, command, args = [], name = command, quietStderr = null, onPermission, onUpdate, onExit }) {
+  constructor({ cwd, command, args = [], name = command, quietStderr = null, quietStderrBlock = null, onPermission, onUpdate, onExit }) {
     this.quietStderr = quietStderr; // RegExp служебных строк stderr, которые не пишем в лог бота
+    this.quietStderrBlock = quietStderrBlock; // {start, end}: многострочный служебный блок stderr (трассировка), пропускается целиком
     this.cwd = cwd;
     this.name = name;
     this.command = command;
@@ -95,8 +128,9 @@ export class AcpAgent {
   start() {
     this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l));
+    const skip = quietStderrFilter(this.quietStderr, this.quietStderrBlock);
     readline.createInterface({ input: this.proc.stderr }).on('line', (l) => {
-      if (!this.quietStderr?.test(l)) console.error(`[${this.name}:stderr]`, l);
+      if (!skip(l)) console.error(`[${this.name}:stderr]`, l);
     });
     // запись в уже завершившийся процесс (EPIPE) не должна ронять бота
     this.proc.stdin.on('error', (e) => console.error('[acp] stdin:', e.message));
@@ -117,9 +151,27 @@ export class AcpAgent {
 
   /**
    * @param {string} [mode] режим сессии ACP (у каждого движка свои, см. engines.mjs); если не задан — режим агента по умолчанию
-   * @param {{resume?: string}} [opts] resume — id ранее созданной сессии ACP, которую нужно загрузить вместо новой
+   * @param {{resume?: string, timeoutMs?: number}} [opts] resume — id ранее созданной сессии ACP, которую нужно загрузить
+   *   вместо новой; timeoutMs — сколько ждать запуска (агент мог зависнуть, например, на входе в аккаунт): по истечении
+   *   процесс завершается, а ошибка получает code = 'START_TIMEOUT'. 0 — без ограничения.
    */
-  async init(mode, { resume } = {}) {
+  async init(mode, { resume, timeoutMs = 0 } = {}) {
+    if (!timeoutMs) return this.#init(mode, { resume });
+    let timer;
+    const limit = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error(`${this.name}: нет ответа за ${Math.round(timeoutMs / 1000)} с`), { code: 'START_TIMEOUT' })), timeoutMs);
+    });
+    try {
+      return await Promise.race([this.#init(mode, { resume }), limit]);
+    } catch (e) {
+      if (e.code === 'START_TIMEOUT') this.close();
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async #init(mode, { resume } = {}) {
     this.start();
     const init = await this.request('initialize', {
       protocolVersion: 1,

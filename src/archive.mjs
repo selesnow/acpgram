@@ -3,6 +3,7 @@
 // размер и число файлов ограничены (защита от zip-бомбы). 7z и rar не поддерживаются — остаются обычным файлом.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { gunzipSync, inflateRawSync } from 'node:zlib';
 import { safeFileName } from './files.mjs';
 import { isWithin } from './projects.mjs';
@@ -239,4 +240,29 @@ export function extractArchive(buffer, kind, destDir, { maxFiles = MAX_ARCHIVE_F
     throw e instanceof ArchiveError ? e : new ArchiveError('corrupt', e.message);
   }
   return { files, skipped, total };
+}
+
+/**
+ * То же, что extractArchive, но в отдельном потоке (worker_threads): распаковка до 100 МБ (zlib) и запись файлов
+ * занимают секунды, и в главном потоке на это время замирал бы весь бот — черновики и запросы всех пользователей.
+ * Ошибки — те же ArchiveError с reason.
+ */
+export function extractArchiveAsync(buffer, kind, destDir, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL(import.meta.url), { workerData: { acpgramArchive: true, buffer, kind, destDir, opts } });
+    w.once('message', (m) => (m.ok ? resolve(m.result) : reject(new ArchiveError(m.reason, m.message))));
+    w.once('error', (e) => reject(new ArchiveError('corrupt', e.message)));
+    w.once('exit', (code) => reject(new ArchiveError('corrupt', `поток распаковки завершился с кодом ${code}`))); // после ответа ни на что не влияет
+  });
+}
+
+// этот же модуль — тело потока распаковки
+if (!isMainThread && workerData?.acpgramArchive) {
+  const { buffer, kind, destDir, opts } = workerData;
+  try {
+    const data = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    parentPort.postMessage({ ok: true, result: extractArchive(data, kind, destDir, opts) });
+  } catch (e) {
+    parentPort.postMessage({ ok: false, reason: e.reason ?? 'corrupt', message: e.message });
+  }
 }

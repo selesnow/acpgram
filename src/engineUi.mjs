@@ -39,7 +39,7 @@ export async function handleEngine(st, arg) {
   const q = (arg || '').trim();
   if (q) {
     const e = findEngine(q);
-    return say(st.chatId, e ? switchEngine(st, e.id) : t('eng.badArg', lang, { q, list: userEngines(st.userId).map((x) => x.id).join(', ') }));
+    return say(st.to, e ? switchEngine(st, e.id) : t('eng.badArg', lang, { q, list: userEngines(st.userId).map((x) => x.id).join(', ') }));
   }
   const engines = userEngines(st.userId);
   const v = engineMenu({
@@ -52,7 +52,7 @@ export async function handleEngine(st, arg) {
     lang,
   });
   const more = !isAdmin(st.userId) && grantedEngines(st.userId).length < Object.keys(ENGINES).length ? `\n${t('engine.more', lang)}` : '';
-  return say(st.chatId, v.text + more, { reply_markup: v.markup });
+  return say(st.to, v.text + more, { reply_markup: v.markup });
 }
 
 /** Кнопка eng:<id>. */
@@ -60,5 +60,5 @@ export async function onEngineCallback(st, cb) {
   const id = (cb.data || '').slice('eng:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
   const text = switchEngine(st, id);
-  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.chatId, text));
+  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text));
 }

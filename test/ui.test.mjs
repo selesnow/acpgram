@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { plural, t } from '../src/i18n.mjs';
-import { richToPlain } from '../src/telegram.mjs';
-import { ANIM, activeSessionsView, composeDraft, engineMenu, sessionStatus, finalExtras, finalMessages, fmtDuration, skillName, startView, stepLine } from '../src/ui.mjs';
+import { fixTables, mediaBlock, mediaIdsOf, richToPlain, splitRich, stripMedia } from '../src/telegram.mjs';
+import { ANIM, activeSessionsView, composeDraft, engineMenu, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, skillName, startView, stepLine } from '../src/ui.mjs';
 
 const step = (o) => ({ toolCallId: 'x', tool: 'read_file', kind: 'read', title: 'src/a.mjs', description: '', status: null, ...o });
 const RU = { lang: 'ru' };
@@ -175,4 +175,48 @@ test('richToPlain: запасной обычный текст без служе�
   assert.ok(plain.includes('/project') && plain.includes('Ход работы'));
   assert.equal(richToPlain(`a ![💭](tg://emoji?id=${ANIM.thinking}) b`), 'a 💭 b');
   assert.equal(richToPlain(`a <tg-emoji emoji-id="${ANIM.thinking}">💭</tg-emoji> b`), 'a 💭 b');
+});
+
+test('fixTables: пустая строка перед таблицей после абзаца или пункта списка, код и готовые таблицы не трогает', () => {
+  const tbl = ['| A | B |', '|---|:-:|', '| 1 | 2 |'].join('\n');
+  const fence = '`'.repeat(3);
+  assert.equal(fixTables(`**Стоит взять:**\n${tbl}`), `**Стоит взять:**\n\n${tbl}`);
+  assert.equal(fixTables(`- пункт\n${tbl}`), `- пункт\n\n${tbl}`);
+  assert.equal(fixTables(`Текст\n\n${tbl}`), `Текст\n\n${tbl}`);
+  assert.equal(fixTables(tbl), tbl);
+  assert.equal(fixTables(`${tbl}\n| 3 | 4 |`), `${tbl}\n| 3 | 4 |`);
+  const code = `${fence}\nТекст\n${tbl}\n${fence}`;
+  assert.equal(fixTables(code), code);
+  assert.equal(fixTables('a | b\nc'), 'a | b\nc');
+  assert.equal(fixTables('Заголовок\n---'), 'Заголовок\n---');
+});
+
+test('splitRich: продолжение таблицы в следующей части получает её шапку', () => {
+  const rows = Array.from({ length: 40 }, (_, i) => `| строка ${i} | значение ${i} |`).join('\n');
+  const parts = splitRich(`Итог:\n| Имя | Значение |\n|---|---|\n${rows}`, 400);
+  assert.ok(parts.length > 1);
+  assert.ok(parts[0].startsWith('Итог:\n\n| Имя |'));
+  for (const p of parts.slice(1)) assert.ok(p.startsWith('| Имя | Значение |\n|---|---|\n| строка'), p.slice(0, 80));
+  assert.deepEqual(splitRich('коротко'), ['коротко']);
+});
+
+test('mediaIdsOf и stripMedia: блоки файлов в rich-разметке', () => {
+  const md = `Итог:${mediaBlock('photo', 'f0')}текст${mediaBlock('document', 'f1')}${mediaBlock('photo', 'f0')}конец`;
+  assert.deepEqual(mediaIdsOf(md), ['f0', 'f1']);
+  assert.equal(stripMedia(md), 'Итог:\n\nтекст\n\nконец');
+  assert.deepEqual(mediaIdsOf('текст ![](tg://photo?id=f0) внутри строки'), []); // только отдельным блоком
+  assert.ok(!richToPlain(`a${mediaBlock('document', 'f2')}b`).includes('tg://'));
+});
+
+test('lastThoughtTitle: заголовок мыслей по фрагментам, в буфере только незаконченная строка', () => {
+  let buf = '';
+  let thought = null;
+  for (const chunk of ['**Читаю ко', 'д**\nДлинное рассуждение...\n', 'ещё текст **Запуска', 'ю тесты**', ' и дальше']) {
+    const r = lastThoughtTitle(buf + chunk);
+    if (r.title) thought = r.title;
+    buf = r.rest;
+  }
+  assert.equal(thought, 'Запускаю тесты');
+  assert.equal(buf, 'ещё текст **Запускаю тесты** и дальше');
+  assert.deepEqual(lastThoughtTitle('без заголовка\nхвост'), { title: null, rest: 'хвост' });
 });

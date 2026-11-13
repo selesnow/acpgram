@@ -17,10 +17,10 @@ export async function handleSessions(st) {
   const lang = langOf(st.userId);
   const list = db.listSessions(st.userId, st.project, LIST_LIMIT);
   if (!list.length) {
-    return say(st.chatId, t('ses.none', lang, { p: showPath(st.project, lang) }));
+    return say(st.to, t('ses.none', lang, { p: showPath(st.project, lang) }));
   }
   const current = st.agent?.sessionId;
-  return say(st.chatId, t('ses.list', lang, { p: showPath(st.project, lang) }), {
+  return say(st.to, t('ses.list', lang, { p: showPath(st.project, lang) }), {
     reply_markup: {
       inline_keyboard: list.map((s) => [
         { text: trunc(`${s.acp_id === current ? '▶ ' : ''}${getEngine(s.engine).short} · ${when(s.last_at, lang)} · ${t('ses.reqs', lang, { n: s.n })} · ${oneLine(s.first_text)}`, 60), callback_data: `ses:${s.acp_id}` },

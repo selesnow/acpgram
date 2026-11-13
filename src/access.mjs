@@ -6,7 +6,7 @@
 // - Каталог (список моделей и уровней рассуждений) присылает сам агент в ответе session/new; бот хранит его в settings.
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
-import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
+import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
 import { t } from './i18n.mjs';
 
 const parseJson = (s, fallback) => {
@@ -20,8 +20,25 @@ const isEngineId = (id) => typeof id === 'string' && Object.hasOwn(ENGINES, id);
 
 // ---------- каталоги ----------
 
-/** @returns {{models: {id,name}[], efforts: {id,name}[], defaultModel: string|null, defaultEffort: string|null, at: string}|null} */
-export const getCatalog = (engineId) => (isEngineId(engineId) ? parseJson(db.getSetting(`catalog:${engineId}`), null) : null);
+// Каталог читается часто (экран /start, подвал ответа, /model) — держим разобранным в памяти; меняет его только saveCatalog.
+const catalogCache = new Map();
+
+/** @returns {{models: {id,name}[], efforts: {id,name}[], defaultModel: string|null, defaultEffort: string|null, at: string, version?: string|null}|null} */
+export function getCatalog(engineId) {
+  if (!isEngineId(engineId)) return null;
+  if (!catalogCache.has(engineId)) catalogCache.set(engineId, parseJson(db.getSetting(`catalog:${engineId}`), null));
+  return catalogCache.get(engineId);
+}
+
+/** Каталог считается свежим сутки, если движок с тех пор не обновлялся. */
+export const CATALOG_TTL_MS = 24 * 3600_000;
+
+/** Можно ли не запускать агента за списком моделей: каталог есть, моложе CATALOG_TTL_MS и версия движка та же. */
+export function catalogFresh(catalog, version, now = Date.now()) {
+  if (!catalog || !(catalog.models?.length || catalog.efforts?.length)) return false;
+  const age = now - Date.parse(catalog.at);
+  return age >= 0 && age < CATALOG_TTL_MS && (catalog.version ?? null) === (version ?? null);
+}
 
 /**
  * Сохраняет каталог из ответа session/new чистой сессии (probeCatalog). Пустой список не затирает ранее полученный:
@@ -37,8 +54,10 @@ export function saveCatalog(engine, res) {
     defaultModel: c.defaultModel ?? old?.defaultModel ?? null,
     defaultEffort: c.defaultEffort ?? old?.defaultEffort ?? null,
     at: new Date().toISOString(),
+    version: engineVersion(engine.id), // обновился движок — каталог запрашивается заново (catalogFresh)
   };
   db.setSetting(`catalog:${engine.id}`, JSON.stringify(catalog));
+  catalogCache.set(engine.id, catalog);
   return catalog;
 }
 
@@ -63,9 +82,8 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
   const run = (async () => {
     const a = createAgent(engine, { cwd: tmpdir(), onPermission: async () => ({ outcome: 'cancelled' }) });
     probeAgents.add(a);
-    let timer;
     try {
-      const res = await Promise.race([a.init(null), new Promise((_, rej) => (timer = setTimeout(() => rej(new Error('нет ответа')), timeoutMs)))]);
+      const res = await a.init(null, { timeoutMs });
       probeFailedAt.delete(engine.id);
       setNeedsLogin(engine.id, false);
       return saveCatalog(engine, res);
@@ -74,7 +92,6 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
       setNeedsLogin(engine.id, isAuthError(e)); // нужен вход или ключ API — движок виден, но с предупреждением в /engine
       throw e;
     } finally {
-      clearTimeout(timer);
       a.close(); // завершает агента вместе с дочерними процессами — и при ответе, и при тайм-ауте
       probeAgents.delete(a);
       probes.delete(engine.id);
@@ -84,9 +101,16 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
   return run;
 }
 
-/** Обновляет каталоги всех доступных движков по очереди (в фоне при старте бота). */
-export async function refreshCatalogs() {
+/**
+ * Обновляет каталоги доступных движков по очереди (в фоне: при старте бота и раз в сутки). Свежий каталог
+ * (catalogFresh) не запрашивается: раньше каждый перезапуск поднимал по процессу на каждый движок (~25 с).
+ */
+export async function refreshCatalogs({ force = false } = {}) {
   for (const e of Object.values(ENGINES).filter((x) => isAvailable(x.id))) {
+    if (!force && catalogFresh(getCatalog(e.id), engineVersion(e.id))) {
+      log(`${e.label}: список моделей свежий (${getCatalog(e.id).at}), агент не запускается`);
+      continue;
+    }
     try {
       const c = await probeCatalog(e);
       log(`${e.label}: моделей ${c?.models.length ?? 0}, уровней рассуждений ${c?.efforts.length ?? 0}`);

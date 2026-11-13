@@ -5,7 +5,7 @@ import { allowAllModels, allowedCount, allowedModels, getCatalog, grantedEngines
 import { ADMIN_ID, LEVEL_KEYS, MAX_AGENTS, botInfo, db, isLevel, langOf, levelHint, levelName, log, say, who } from './ctx.mjs';
 import { DEFAULT_ENGINE, ENGINES } from './engines.mjs';
 import { t } from './i18n.mjs';
-import { activeSessions, closeSession, findState, saveEngine, stopUser } from './state.mjs';
+import { activeSessions, closeSession, saveEngine, statesOf, stopUser } from './state.mjs';
 import { showPath } from './projects.mjs';
 import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, sessionStatus } from './ui.mjs';
 import { tg } from './telegram.mjs';
@@ -193,8 +193,8 @@ export async function onAdminCallback(cb) {
     return edit(c.text, c.markup);
   }
   if (action === 'k') {
-    const st = findState(id);
-    const closed = st ? closeSession(st, 'admin_close') : false;
+    // все диалоги сотрудника (в режиме «диалоги» их может быть несколько)
+    const closed = statesOf(id).map((s) => closeSession(s, 'admin_close')).some(Boolean);
     if (closed) {
       log('сессия завершена администратором', id);
       await say(id, t('adm.killedByAdmin', langOf(id)));
@@ -218,9 +218,10 @@ export async function onAdminCallback(cb) {
     if (on) await say(id, t('access.engineGranted', ul, { engine: e.label }));
     else {
       // забрали движок, в котором сотрудник работает: закрываем сессию, дальше — движок по умолчанию
-      const st = findState(id);
-      if (st?.agent && !st.agent.closed && st.agent.engine.id === b) stopUser(st, 'engine-revoked');
-      if (st?.engine === b) saveEngine(st, null);
+      for (const st of statesOf(id)) {
+        if (st.agent && !st.agent.closed && st.agent.engine.id === b) stopUser(st, 'engine-revoked');
+        if (st.engine === b) saveEngine(st, null);
+      }
       await say(id, t('access.engineRevoked', ul, { engine: e.label, default: ENGINES[DEFAULT_ENGINE].label }));
     }
     await ack(on ? t('adm.ackEngineOn', al, { engine: e.label }) : t('adm.ackEngineOff', al, { engine: e.label }));
@@ -278,8 +279,7 @@ export async function onAdminCallback(cb) {
   if (action === 'l') {
     if (!isLevel(b) || b === user.level) return ack();
     db.setUserLevel(id, b);
-    const st = findState(id);
-    if (st) stopUser(st, 'level'); // режим агента задаётся при создании сессии — перезапускаем
+    for (const st of statesOf(id)) stopUser(st, 'level'); // режим агента задаётся при создании сессии — перезапускаем
     log('уровень изменён', id, b);
     await ack(t('adm.ackLevelChanged', al));
     await say(id, t('access.levelChanged', langOf(id), { level: levelName(b, langOf(id)), hint: levelHint(b, langOf(id)) }));
@@ -294,8 +294,7 @@ export async function onAdminCallback(cb) {
   }
   if (action === 'ro') {
     db.revokeUser(id);
-    const st = findState(id);
-    if (st) stopUser(st, 'revoked');
+    for (const st of statesOf(id)) stopUser(st, 'revoked');
     log('доступ отозван', id);
     await ack(t('adm.ackRevoked', al));
     await say(id, t('access.revoked', langOf(id)));

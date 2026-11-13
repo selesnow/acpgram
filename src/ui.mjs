@@ -158,6 +158,17 @@ const SHOW_ELAPSED_AFTER_MS = 10_000;
  * - Пошёл ответ → последний шаг и сам ответ (с закрытием незавершённой разметки).
  * @returns {{plain: true} | {markdown: string}}
  */
+/**
+ * Последний заголовок мыслей агента («**Проверяю тесты**») в куске текста и остаток для следующего фрагмента —
+ * незаконченная последняя строка (заголовок не переносится на новую строку, поэтому раньше её ничего не нужно).
+ * @returns {{title: string|null, rest: string}}
+ */
+export function lastThoughtTitle(text) {
+  let title = null;
+  for (const m of text.matchAll(/\*\*([^*\n]+)\*\*/g)) title = m[1].trim();
+  return { title, rest: text.slice(text.lastIndexOf('\n') + 1) };
+}
+
 export function composeDraft({ thought = '', steps = [], answer = '', elapsedMs = 0, lang = DEFAULT_LANG }) {
   if (answer.trim()) {
     const body = balanceMarkdown(answer.replace(/^\s+/, '')).slice(-RICH_LIMIT);
@@ -221,7 +232,8 @@ export function finalMessages(answer, extras) {
 }
 
 /** Движок, проект, время работы и занятость сессии: «Claude · team/proj, 12 мин, выполняет запрос». */
-const sessionDetails = (s, projectOf, now, lang) => `${s.engine ? `${s.engine} · ` : ''}${projectOf(s.project)}, ${fmtDuration(now - s.startedAt, lang)}${s.busy ? t('session.busy', lang) : ''}`;
+const sessionDetails = (s, projectOf, now, lang) =>
+  `${s.topic ? `💬 ${s.topic} · ` : ''}${s.engine ? `${s.engine} · ` : ''}${projectOf(s.project)}, ${fmtDuration(now - s.startedAt, lang)}${s.busy ? t('session.busy', lang) : ''}`;
 
 /**
  * Статус сессии сотрудника для карточки в /users.
@@ -390,7 +402,7 @@ const button = (text, data) => `<tg-button type="callback_data" data="${data}">$
  * @param {{level: string, project: string, engine: string, model?: string, isAdmin: boolean, note?: string, lang?: string}} o
  *   level, engine, model — уже переведённые названия (уровень доступа, движок, модель; по умолчанию «Авто»)
  */
-export function startView({ level, project, engine, model, isAdmin, note, lang = DEFAULT_LANG }) {
+export function startView({ level, project, engine, model, isAdmin, note, topics = null, lang = DEFAULT_LANG }) {
   const cmd = (key) => t(`help.${key}`, lang);
   const commands = [
     cmd('project'),
@@ -400,19 +412,22 @@ export function startView({ level, project, engine, model, isAdmin, note, lang =
     cmd('sessions'),
     cmd('stop'),
     cmd('close'),
+    ...(topics ? [cmd('topics')] : []),
     cmd('language'),
     ...(isAdmin ? [cmd('users'), cmd('active'), cmd('invite')] : []),
   ];
   const rows = [
     `<tg-button-row>${button(t('start.btn.project', lang), 'ui:project')}${button(t('start.btn.new', lang), 'ui:new')}${button(t('start.btn.sessions', lang), 'ui:sessions')}</tg-button-row>`,
     `<tg-button-row>${button(t('start.btn.engine', lang), 'ui:engine')}${button(t('start.btn.model', lang), 'ui:model')}${button(t('start.btn.close', lang), 'ui:close')}</tg-button-row>`,
-    `<tg-button-row>${button(t('btn.language', lang), 'ui:language')}</tg-button-row>`,
+    // topics: 'on' | 'off' — режим «диалоги» (если у бота включены темы), null — кнопки нет
+    `<tg-button-row>${button(t('btn.language', lang), 'ui:language')}${topics ? button(t(topics === 'on' ? 'start.btn.topicsOn' : 'start.btn.topicsOff', lang), 'ui:topics') : ''}</tg-button-row>`,
   ];
   if (isAdmin) rows.push(`<tg-button-row>${button(t('start.btn.users', lang), 'ui:users')}${button(t('start.btn.invite', lang), 'ui:invite')}${button(t('start.btn.active', lang), 'ui:active')}</tg-button-row>`);
   return [
     t('start.title', lang),
     t('start.intro', lang, { engine: escHtml(engine) }),
     t('start.info', lang, { engine: escHtml(engine), model: escHtml(model ?? t('auto', lang)), level: escHtml(level), project }),
+    ...(topics === 'on' ? [t('start.topics', lang)] : []),
     ...rows,
     `<details><summary>${t('start.commands', lang)}</summary>\n\n${commands.map((c) => `- ${c}`).join('\n')}\n\n</details>`,
     ...(note ? [`<footer>${escHtml(note)}</footer>`] : []),

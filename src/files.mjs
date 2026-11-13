@@ -107,7 +107,8 @@ const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${
 export function outboxNote(outbox) {
   return (
     `[AcpGram] You can send a file to the user in Telegram: save it (preferably in "${outbox}") and put [[send:<absolute path>]] ` +
-    `on its own line in your reply. Allowed: that folder and the project folder, up to 20 MB per file, never secrets (.env, databases). ` +
+    `on its own line in your reply where the file should appear (the image or file is shown right there, inside the message). ` +
+    `Allowed: that folder and the project folder, up to 20 MB per file, never secrets (.env, databases). ` +
     `Use it only when the user asks for a file or a file is the natural result of the task; do not mention this mechanism otherwise.`
   );
 }
@@ -147,28 +148,154 @@ export function buildPromptBlocks({ text, files = [], caps, outbox }) {
 
 const MARK = /\[\[send:([^\]\r\n]+)\]\]/g;
 
-/** Убирает метки отправки из текста ответа и возвращает пути из них (без повторов). */
-export function extractSendMarks(text) {
+/** Строчный код: отрезок из n обратных кавычек до следующего отрезка ровно из n кавычек (как в CommonMark). */
+function splitInlineCode(text, out) {
+  let i = 0;
+  let from = 0;
+  while (i < text.length) {
+    const open = text.indexOf('`', i);
+    if (open < 0) break;
+    let n = 1;
+    while (text[open + n] === '`') n++;
+    const close = new RegExp(`(?<!\`)\`{${n}}(?!\`)`, 'g');
+    close.lastIndex = open + n;
+    const m = close.exec(text);
+    if (!m) {
+      i = open + n; // незакрытые кавычки — обычный текст
+      continue;
+    }
+    if (open > from) out.push({ code: false, s: text.slice(from, open) });
+    out.push({ code: true, s: text.slice(open, m.index + n) });
+    i = from = m.index + n;
+  }
+  if (from < text.length) out.push({ code: false, s: text.slice(from) });
+}
+
+/**
+ * Делит Markdown на куски текста и кода: блоки ``` / ~~~ (незакрытый — код до конца) и строчный код в `кавычках`.
+ * Метки отправки ищутся только в тексте: упоминание метки в коде (пример, документация) — не команда отправки.
+ * @returns {{code: boolean, s: string}[]}
+ */
+export function splitCode(text) {
+  const out = [];
+  const lines = String(text ?? '').split(/(?<=\n)/);
+  let buf = '';
+  let fence = null; // открывающий забор: символ и длина
+  for (const line of lines) {
+    if (fence) {
+      buf += line;
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?\n?$/.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+        out.push({ code: true, s: buf });
+        buf = '';
+        fence = null;
+      }
+      continue;
+    }
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (open && !(open[1][0] === '`' && line.slice(open[0].length).includes('`'))) {
+      if (buf) splitInlineCode(buf, out);
+      buf = line;
+      fence = open[1];
+      continue;
+    }
+    buf += line;
+  }
+  if (fence) out.push({ code: true, s: buf });
+  else if (buf) splitInlineCode(buf, out);
+  return out;
+}
+
+/** Заглушка на месте метки: туда потом встаёт сам файл (блок rich-сообщения). Символы \u0000 в ответе агента не встречаются. */
+export const filePlaceholder = (i) => `\u0000${i}\u0000`;
+export const FILE_PLACEHOLDER = /\u0000(\d+)\u0000/g;
+
+/**
+ * Убирает метки отправки из текста ответа и возвращает пути из них (без повторов). Метки внутри кода не трогает.
+ * placeholders: true — на месте первой метки каждого файла остаётся filePlaceholder(номер пути), чтобы файл встал туда же.
+ */
+export function extractSendMarks(text, { placeholders = false } = {}) {
   const src = String(text ?? '');
   if (!src.includes('[[send:')) return { text: src, paths: [] }; // ответ без меток не трогаем
   const paths = [];
-  const stripped = src
-    .replace(MARK, (_, p) => {
-      const path = p.trim().replace(/^["']|["']$/g, '');
-      if (path && !paths.includes(path)) paths.push(path);
-      return '';
+  const stripped = splitCode(src)
+    .map(({ code, s }) => {
+      if (code || !s.includes('[[send:')) return s;
+      return s
+        .replace(MARK, (_, p) => {
+          const path = p.trim().replace(/^["']|["']$/g, '');
+          if (!path || paths.includes(path)) return '';
+          paths.push(path);
+          return placeholders ? filePlaceholder(paths.length - 1) : '';
+        })
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n');
     })
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .join('')
     .trim();
   return { text: stripped, paths };
 }
 
-/** Для черновика: убирает и целые метки, и ещё не дописанные в потоке («[[send:C:\x», «[[se»). */
+/** Сколько файлов агента отправляем пользователю за один ответ. */
+export const MAX_FILES_PER_TURN = 10;
+/** Файлы внутри ответа загружаются одним запросом вместе с ним; лимит загрузки Bot API — 50 МБ. */
+export const MAX_EMBED_BYTES = 45 * 1024 * 1024;
+/** Фото Telegram принимает до 10 МБ (крупнее — документом). */
+const PHOTO_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Ставит файлы агента в текст ответа на место меток (заглушки FILE_PLACEHOLDER из extractSendMarks):
+ * доступный файл — блоком rich-сообщения (фото или документ), недоступный — строкой failText(имя, причина).
+ * Файлы сверх maxBytes (суммарно) — в extra: уйдут отдельными сообщениями после ответа.
+ * @param {{cwd: string, outbox: string, failText: (name: string, reason: string) => string, onSkip?: (path: string, reason: string) => void, maxBytes?: number}} o
+ * @returns {{text: string, media: Object<string, {path: string, name: string, size: number, photo: boolean}>, extra: object[]}}
+ */
+export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () => {}, maxBytes = MAX_EMBED_BYTES }) {
+  const media = {};
+  const extra = [];
+  let budget = maxBytes;
+  const place = (n) => {
+    const i = Number(n);
+    const p = paths[i];
+    if (p == null) return null;
+    if (i >= MAX_FILES_PER_TURN) {
+      onSkip(p, 'limit');
+      return null;
+    }
+    const r = resolveSendable(p, { cwd, outbox });
+    if (!r.ok) {
+      onSkip(p, r.reason);
+      return failText(basename(p), r.reason);
+    }
+    const file = { path: r.path, name: basename(r.path), size: r.size, photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)) && r.size <= PHOTO_BYTES };
+    if (r.size > budget) {
+      extra.push(file);
+      return null;
+    }
+    budget -= r.size;
+    const id = `f${i}`;
+    media[id] = file;
+    return `![](tg://${file.photo ? 'photo' : 'document'}?id=${id})`;
+  };
+  // заглушки, идущие подряд, вместе с пробелами и переводами строк вокруг → блоки через пустую строку;
+  // остальной текст (и код в нём) не трогаем
+  const out = String(text ?? '').replace(/[ \t]*\n*(?:\u0000\d+\u0000[ \t]*\n*)+/g, (run) => {
+    const blocks = [...run.matchAll(FILE_PLACEHOLDER)].map((m) => place(m[1])).filter(Boolean);
+    return blocks.length ? `\n\n${blocks.join('\n\n')}\n\n` : '\n\n';
+  });
+  return { text: out.trim(), media, extra };
+}
+
+/** Для черновика: убирает и целые метки, и ещё не дописанные в потоке («[[send:C:\x», «[[se»). Код не трогает. */
 export function stripSendMarks(text) {
-  return String(text ?? '')
-    .replace(/\[\[send:[^\]\r\n]*(?:\]\]?)?/g, '')
-    .replace(/\[{1,2}(?:s(?:e(?:n(?:d)?)?)?)?$/, '');
+  const parts = splitCode(text);
+  return parts
+    .map(({ code, s }, i) => {
+      if (code) return s;
+      const r = s.replace(/\[\[send:[^\]\r\n]*(?:\]\]?)?/g, '');
+      return i === parts.length - 1 ? r.replace(/\[{1,2}(?:s(?:e(?:n(?:d)?)?)?)?$/, '') : r;
+    })
+    .join('');
 }
 
 const real = (p) => {
@@ -179,10 +306,19 @@ const real = (p) => {
   }
 };
 
-/** Секретные места, которые агент не может отправить: .env, база и логи бота, служебная папка git. */
-function isSecret(path) {
-  if (/^\.env(\.|$)/i.test(basename(path))) return true;
-  if (/[\\/]\.git[\\/]/.test(path)) return true;
+// Папки с ключами и входами: SSH, облака, менеджеры пакетов и сами AI-агенты (токены Claude Code, Gemini CLI, Codex)
+const SECRET_DIRS = /[\\/](?:\.git|\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker|\.claude|\.gemini|\.codex|\.acpgram|\.config[\\/](?:gh|gcloud))[\\/]/i;
+// Файлы с секретами: .env*, .Renviron (пароли и токены в R-проектах), закрытые ключи и сертификаты, входы npm/pip/git
+const SECRET_FILES = /^(?:\.env(?:\..*)?|\.Renviron|\.npmrc|\.pypirc|\.netrc|_netrc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|.*\.(?:pem|key|p12|pfx|jks|keystore|ppk)|credentials(?:\.json)?|client_secret.*\.json)$/i;
+
+/**
+ * Секретные места, которые агент не может отправить из папки проекта: файлы и папки с ключами (SECRET_FILES,
+ * SECRET_DIRS), .env и каталог данных бота (база, журналы). Это защита от случайной или навязанной (prompt injection)
+ * отправки файла; прочитать файл и пересказать его текстом агент по-прежнему может своими инструментами.
+ */
+export function isSecret(path) {
+  if (SECRET_FILES.test(basename(path))) return true;
+  if (SECRET_DIRS.test(path)) return true;
   const envReal = real(ENV_PATH);
   if (envReal && isWithin(path, envReal)) return true;
   const data = real(DATA_DIR);
