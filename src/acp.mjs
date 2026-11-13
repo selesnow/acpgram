@@ -89,6 +89,7 @@ export class AcpAgent {
     this.sessionId = null;
     this.proc = null;
     this.closed = false;
+    this.caps = {}; // agentCapabilities из ответа initialize
   }
 
   start() {
@@ -120,10 +121,11 @@ export class AcpAgent {
    */
   async init(mode, { resume } = {}) {
     this.start();
-    await this.request('initialize', {
+    const init = await this.request('initialize', {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     });
+    this.caps = init?.agentCapabilities ?? {}; // что принимает агент (promptCapabilities.image и др.)
     // При загрузке агент «проигрывает» историю диалога уведомлениями session/update до ответа на запрос
     const res = resume
       ? await this.request('session/load', { sessionId: resume, cwd: this.cwd, mcpServers: [] })
@@ -140,10 +142,11 @@ export class AcpAgent {
     return res;
   }
 
-  prompt(text) {
+  /** @param {string | object[]} input текст или готовые блоки содержимого ACP (text, image, ...) */
+  prompt(input) {
     return this.request('session/prompt', {
       sessionId: this.sessionId,
-      prompt: [{ type: 'text', text }],
+      prompt: typeof input === 'string' ? [{ type: 'text', text: input }] : input,
     });
   }
 

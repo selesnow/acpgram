@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { APP, APP_DIR, DATA_DIR, ENV_PATH, HOME_DIR } from './app.mjs';
+import { getCliLang, tc } from './cli-i18n.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';
 import { findOnPath } from './winsvc.mjs';
@@ -27,24 +28,24 @@ export const readEnvFile = (path = ENV_PATH) => (existsSync(path) ? parseEnv(rea
  */
 export function envValue(v) {
   const s = String(v);
-  if (/[\r\n]/.test(s)) throw new Error('значение в .env не может содержать перенос строки');
+  if (/[\r\n]/.test(s)) throw new Error(tc('env.noNewline'));
   if (!/#|^\s|\s$|^['"`]/.test(s)) return s;
   if (!s.includes("'")) return `'${s}'`;
   if (!s.includes('`')) return `\`${s}\``;
-  throw new Error('значение нельзя записать в .env: в нём одновременно «#»/пробел по краям, апостроф и обратная кавычка');
+  throw new Error(tc('env.cannotQuote'));
 }
 
-/** Порядок и комментарии основных переменных в .env, созданном мастером. */
+/** Порядок и комментарии (ключи словаря) основных переменных в .env, созданном мастером. */
 const LAYOUT = [
-  ['TELEGRAM_BOT_TOKEN', 'Токен бота от @BotFather (секрет: файл не публикуйте и не коммитьте)'],
-  ['ALLOWED_USER_ID', 'Telegram ID главного администратора'],
-  ['PROJECTS_ROOT', 'Корень проектов (необязательно): без него проектом может быть любая папка, по умолчанию домашняя'],
-  ['DEFAULT_ENGINE', 'Движок по умолчанию: gemini | claude | agy | codex'],
+  ['TELEGRAM_BOT_TOKEN', 'env.c.token'],
+  ['ALLOWED_USER_ID', 'env.c.admin'],
+  ['PROJECTS_ROOT', 'env.c.root'],
+  ['DEFAULT_ENGINE', 'env.c.engine'],
   ['GEMINI_COMMAND', null],
   ['CLAUDE_COMMAND', null],
   ['AGY_COMMAND', null],
   ['CODEX_COMMAND', null],
-  ['GEMINI_API_KEY', 'Ключи API передаются агентам через окружение бота'],
+  ['GEMINI_API_KEY', 'env.c.keys'],
   ['ANTHROPIC_API_KEY', null],
   ['OPENAI_API_KEY', null],
 ];
@@ -53,18 +54,18 @@ const LAYOUT = [
  * Текст .env: основные переменные по порядку с комментариями, затем остальные ранее заданные (не теряем ручные настройки).
  * Пустые значения не пишутся.
  */
-export function serializeEnv(values, { date = new Date().toISOString().slice(0, 10) } = {}) {
-  const lines = [`# Создано мастером настройки ${APP.label} (npm run setup), ${date}. Все переменные — в .env.example`, ''];
+export function serializeEnv(values, { date = new Date().toISOString().slice(0, 10), lang = getCliLang() } = {}) {
+  const lines = [tc('env.header', { label: APP.label, date }, lang), ''];
   const known = new Set(LAYOUT.map(([k]) => k));
   const has = (k) => values[k] != null && String(values[k]) !== '';
   for (const [key, comment] of LAYOUT) {
     if (!has(key)) continue;
-    if (comment) lines.push(`# ${comment}`);
+    if (comment) lines.push(`# ${tc(comment, {}, lang)}`);
     lines.push(`${key}=${envValue(values[key])}`);
   }
   const rest = Object.keys(values).filter((k) => !known.has(k) && has(k));
   if (rest.length) {
-    lines.push('', '# Прочие настройки');
+    lines.push('', `# ${tc('env.rest', {}, lang)}`);
     for (const k of rest) lines.push(`${k}=${envValue(values[k])}`);
   }
   return lines.join('\n') + '\n';
@@ -180,75 +181,74 @@ export async function runSetup({ fromStart = false } = {}) {
   const p = prompter();
   const env = { ...readEnvFile() };
   try {
-    console.log(`\n${APP.label} — настройка${existsSync(ENV_PATH) ? ' (текущие значения — в скобках, Enter оставляет их)' : ''}`);
-    if (fromStart) console.log('Бот ещё не настроен — ответьте на несколько вопросов.');
+    console.log(tc('setup.title', { label: APP.label, hint: existsSync(ENV_PATH) ? tc('setup.titleHint') : '' }));
+    if (fromStart) console.log(tc('setup.fromStart'));
 
     // Прежняя установка через install.ps1 / install.sh хранит данные в другом каталоге — предлагаем перенести
     const legacy = existsSync(ENV_PATH) ? undefined : findLegacyHome();
     if (legacy) {
-      console.log(`
-Найдена прежняя установка AcpGram: ${legacy}`);
-      console.log('  Её настройки и база бота не видны этой установке (данные хранятся в другом каталоге).');
-      if (await p.yes('  Перенести настройки и базу (прежние файлы не удаляются)? Если там запущена служба, сначала остановите её: acpgram service stop')) {
+      console.log(tc('setup.legacyFound', { dir: legacy }));
+      console.log(tc('setup.legacyNote'));
+      if (await p.yes(tc('setup.legacyAsk'))) {
         Object.assign(env, readEnvFile(join(legacy, '.env')));
-        ok(`настройки прочитаны из ${join(legacy, '.env')}`);
+        ok(tc('setup.legacyRead', { path: join(legacy, '.env') }));
         try {
-          if (copyLegacyDb(legacy)) ok(`база бота скопирована в ${DATA_DIR}`);
+          if (copyLegacyDb(legacy)) ok(tc('setup.legacyDb', { dir: DATA_DIR }));
         } catch (e) {
-          warn(`базу скопировать не удалось: ${e.message}`);
+          warn(tc('setup.legacyDbFail', { msg: e.message }));
         }
       }
     }
 
     // 1. токен
-    step(1, 'Токен бота: создайте бота у @BotFather (/newbot) и вставьте токен');
+    step(1, tc('setup.s1'));
     let me;
     for (;;) {
-      const token = (await p.secret(env.TELEGRAM_BOT_TOKEN ? 'Токен (Enter — оставить текущий)' : 'Токен')) || env.TELEGRAM_BOT_TOKEN;
+      const token = (await p.secret(env.TELEGRAM_BOT_TOKEN ? tc('setup.tokenKeep') : tc('setup.token'))) || env.TELEGRAM_BOT_TOKEN;
       if (!token) continue;
       try {
         me = await api(token, 'getMe');
         env.TELEGRAM_BOT_TOKEN = token;
-        ok(`бот @${me.username} (${me.first_name})`);
+        ok(tc('setup.botOk', { username: me.username, name: me.first_name }));
         break;
       } catch (e) {
-        warn(`токен не подошёл: ${e.message}`);
+        warn(tc('setup.tokenBad', { msg: e.message }));
       }
     }
 
     // 2. администратор
-    step(2, 'Главный администратор');
+    step(2, tc('setup.s2'));
     let adminId = env.ALLOWED_USER_ID;
-    if (adminId && (await p.yes(`Оставить администратора с ID ${adminId}?`))) ok(`администратор ${adminId}`);
+    if (adminId && (await p.yes(tc('setup.adminKeep', { id: adminId })))) ok(tc('setup.adminOk', { id: adminId }));
     else {
       adminId = null;
-      console.log(`  Напишите боту @${me.username} в Telegram любое сообщение (например /start) с вашего аккаунта — жду до 3 минут…`);
+      console.log(tc('setup.adminWait', { username: me.username }));
       try {
         const from = await waitForAdmin(env.TELEGRAM_BOT_TOKEN);
-        if (from && (await p.yes(`  Это вы: ${from.username ? '@' + from.username : from.first_name} (ID ${from.id})?`))) adminId = String(from.id);
+        if (from && (await p.yes(tc('setup.adminIsYou', { who: from.username ? '@' + from.username : from.first_name, id: from.id })))) adminId = String(from.id);
       } catch (e) {
-        warn(`не удалось получить сообщения бота: ${e.message}${/conflict/i.test(e.message) ? ' — этот токен уже опрашивает другой запущенный бот (например, прежняя служба: acpgram service stop); остановите его или введите ID вручную' : ''}`);
+        warn(tc('setup.adminFetchFail', { msg: e.message, hint: /conflict/i.test(e.message) ? tc('setup.conflictHint') : '' }));
       }
-      while (!/^\d+$/.test(adminId ?? '')) adminId = await p.ask('  Введите ваш числовой Telegram ID (его покажет @userinfobot)');
+      while (!/^\d+$/.test(adminId ?? '')) adminId = await p.ask(tc('setup.adminAskId'));
       env.ALLOWED_USER_ID = adminId;
-      ok(`администратор ${adminId}`);
+      ok(tc('setup.adminOk', { id: adminId }));
     }
 
     // 3. корень проектов
-    step(3, 'Корень проектов (необязательно)');
-    console.log('  Задайте для общего сервера, где бот работает у нескольких сотрудников: проектом можно будет выбрать только папку внутри корня.');
-    console.log('  Для личной установки оставьте пустым — проектом сможет быть любая папка, по умолчанию домашняя.');
+    step(3, tc('setup.s3'));
+    console.log(tc('setup.rootNote1'));
+    console.log(tc('setup.rootNote2'));
     for (;;) {
-      const v = await p.ask('  Папка (Enter — без корня; «-» — убрать)', env.PROJECTS_ROOT);
+      const v = await p.ask(tc('setup.rootAsk'), env.PROJECTS_ROOT);
       if (!v || v === '-') {
         delete env.PROJECTS_ROOT;
-        ok('без корня: любая папка, по умолчанию домашняя');
+        ok(tc('setup.rootNone'));
         break;
       }
       const { resolveRoot } = await import('./projects.mjs');
       try {
         env.PROJECTS_ROOT = resolveRoot(v);
-        ok(`корень ${env.PROJECTS_ROOT}`);
+        ok(tc('setup.rootOk', { root: env.PROJECTS_ROOT }));
         break;
       } catch (e) {
         warn(e.message);
@@ -256,7 +256,7 @@ export async function runSetup({ fromStart = false } = {}) {
     }
 
     // 4. движки
-    step(4, 'AI-движки (проверяю установленные)');
+    step(4, tc('setup.s4'));
     const engines = Object.values(ENGINES);
     const found = {};
     for (const e of engines) {
@@ -272,65 +272,65 @@ export async function runSetup({ fromStart = false } = {}) {
         available.push(e.id);
         // полный путь: под службой PATH пользователя может быть недоступен
         env[e.envVar] = found[e.id];
-        ok(`${e.label} ${c.version ?? ''} — ${found[e.id]}`);
+        ok(tc('setup.engineOk', { label: e.label, version: c.version ?? '', path: found[e.id] }));
       } else if (c?.tooOld) {
         // запускается, но слишком старый (у Antigravity до 1.5 нет `agy acp`) — бот его не предложит
         env[e.envVar] = found[e.id];
-        warn(`${e.label}: ${c.error}. Пока не обновите, бот этот движок не предложит`);
-      } else console.log(`  ❌ ${e.label} не найден. Установка: ${e.install}`);
+        warn(tc('setup.engineOld', { label: e.label, error: c.error }));
+      } else console.log(tc('setup.engineMissing', { label: e.label, install: e.install }));
     }
-    if (!available.length) warn('ни один движок не найден — установите хотя бы один и запустите npm run setup ещё раз');
+    if (!available.length) warn(tc('setup.noEngine'));
     else {
       const def = available.includes(env.DEFAULT_ENGINE) ? env.DEFAULT_ENGINE : available.includes('gemini') ? 'gemini' : available[0];
-      let choice = available.length === 1 ? available[0] : await p.ask(`  Движок по умолчанию (${available.join(' / ')})`, def);
+      let choice = available.length === 1 ? available[0] : await p.ask(tc('setup.engineAsk', { list: available.join(' / ') }), def);
       if (!available.includes(choice)) choice = def;
       env.DEFAULT_ENGINE = choice;
-      ok(`движок по умолчанию: ${ENGINES[choice].label}`);
+      ok(tc('setup.engineDefault', { label: ENGINES[choice].label }));
     }
 
     // 5. ключи API
-    step(5, 'Ключи API (необязательно: Enter — пропустить или оставить текущий)');
+    step(5, tc('setup.s5'));
     const askKey = async (name, hint) => {
-      const v = await p.secret(`  ${name}${hint}${env[name] ? ' (задан)' : process.env[name] ? ' (есть в окружении)' : ''}`);
+      const v = await p.secret(`  ${name}${hint}${env[name] ? tc('setup.keySet') : process.env[name] ? tc('setup.keyEnv') : ''}`);
       if (v) env[name] = v;
       // Ключ есть только в переменных окружения пользователя: служба (Windows) их не видит, даже работая от этого
       // пользователя, — предлагаем сохранить в .env.
-      else if (!env[name] && process.env[name] && (await p.yes(`    Сохранить ${name} из окружения в .env (служба не видит переменные окружения пользователя)?`))) env[name] = process.env[name];
+      else if (!env[name] && process.env[name] && (await p.yes(tc('setup.keySave', { name })))) env[name] = process.env[name];
     };
     if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
-    if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', ' — Claude Code по API, без него по подписке');
-    if (available.includes('codex')) await askKey('OPENAI_API_KEY', ' — Codex по API, без него по входу ChatGPT (codex login)');
-    if (available.includes('agy')) console.log('  Antigravity CLI: ключа API нет — войдите один раз: agy acp --login');
+    if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', tc('setup.keyClaude'));
+    if (available.includes('codex')) await askKey('OPENAI_API_KEY', tc('setup.keyCodex'));
+    if (available.includes('agy')) console.log(tc('setup.agyNote'));
 
     // 6. запись
-    step(6, 'Сохраняю настройки');
+    step(6, tc('setup.s6'));
     const hadEnv = existsSync(ENV_PATH);
     try {
       writeEnvFile(env);
     } catch (e) {
-      warn(`настройки не сохранены: ${e.message}`);
+      warn(tc('setup.saveFail', { msg: e.message }));
       return { ok: false, service: false };
     }
-    ok(`${ENV_PATH}${hadEnv ? ` (прежний — ${envBackupPath()})` : ''}`);
+    ok(tc('setup.envOk', { path: ENV_PATH, prev: hadEnv ? tc('setup.envPrev', { backup: envBackupPath() }) : '' }));
     mkdirSync(DATA_DIR, { recursive: true });
     const { openDb } = await import('./db.mjs');
     openDb(join(DATA_DIR, 'bot.db')).close();
-    ok('база data/bot.db');
+    ok(tc('setup.dbOk'));
     try {
-      await api(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: adminId, text: `✅ ${APP.label} настроен. Вы — главный администратор. После запуска бота нажмите /start.` });
-      ok('тестовое сообщение отправлено вам в Telegram');
+      await api(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: adminId, text: tc('setup.testText', { label: APP.label }) });
+      ok(tc('setup.testOk'));
     } catch (e) {
-      warn(`тестовое сообщение не отправлено: ${e.message} (напишите боту /start и проверьте ID)`);
+      warn(tc('setup.testFail', { msg: e.message }));
     }
 
     // 7. служба
-    step(7, 'Запуск');
-    if (await p.yes('  Зарегистрировать бота как службу (автозапуск с системой, перезапуск при сбое)?', !fromStart)) {
+    step(7, tc('setup.s7'));
+    if (await p.yes(tc('setup.serviceAsk'), !fromStart)) {
       const { installService } = await import('./service.mjs');
       const r = await installService({ prompt: p });
       if (r.ok) return { ok: true, service: true };
-      warn(r.installed ? 'служба зарегистрирована, но не запустилась (см. выше) — бот можно запустить вручную: acpgram' : 'служба не зарегистрирована — бот можно запустить вручную: acpgram');
-    } else console.log('  Запуск вручную: acpgram   ·   служба позже: acpgram service install');
+      warn(r.installed ? tc('setup.serviceStartFail') : tc('setup.serviceFail'));
+    } else console.log(tc('setup.manual'));
     return { ok: true, service: false };
   } finally {
     p.close();
@@ -340,7 +340,7 @@ export async function runSetup({ fromStart = false } = {}) {
 // запуск напрямую: node src/setup.mjs
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   // понятная ошибка вместо трассировки (например, ввод закрылся раньше времени)
-  const r = await runSetup().catch((e) => (console.error(`\nНастройка не завершена: ${e.message}`), { ok: false }));
+  const r = await runSetup().catch((e) => (console.error(tc('main.setupFailed', { msg: e.message })), { ok: false }));
   // без process.exit(): на Windows выход сразу после закрытия readline роняет Node (UV_HANDLE_CLOSING) — даём завершиться самому
   process.exitCode = r.ok ? 0 : 1;
 }

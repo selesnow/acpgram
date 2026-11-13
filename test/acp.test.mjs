@@ -71,3 +71,17 @@ test('AcpAgent: запрос к закрытому агенту сразу от�
   assert.ok(Date.now() - t0 < 1000, 'отказ мгновенный');
   await exited;
 });
+
+test('AcpAgent: возможности агента сохраняются, prompt принимает строку и блоки', async () => {
+  const agent = new AcpAgent({ cwd: process.cwd(), command: process.execPath, args: [FAKE] });
+  const exited = new Promise((r) => (agent.onExit = r));
+  assert.deepEqual(agent.caps, {}, 'до initialize возможностей нет');
+  await agent.init();
+  assert.equal(agent.caps.promptCapabilities.image, true);
+  const byText = await agent.prompt('просто текст');
+  assert.deepEqual(byText._meta.blocks, ['text']);
+  const byBlocks = await agent.prompt([{ type: 'text', text: 'что на фото?' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }]);
+  assert.deepEqual(byBlocks._meta.blocks, ['text', 'image']);
+  agent.close();
+  await exited;
+});

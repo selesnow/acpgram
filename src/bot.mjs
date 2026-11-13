@@ -5,14 +5,17 @@ import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './eng
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
-import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, hasLang, langOf, log, say, setLang } from './ctx.mjs';
+import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, showPath } from './projects.mjs';
 import { handleProject, onNavCallback } from './projectsUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf } from './state.mjs';
-import { sendRich, tg } from './telegram.mjs';
+import { downloadFile, sendRich, tg } from './telegram.mjs';
+import { MAX_FILE_BYTES, IMAGE_BLOCK_MAX, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
+import { archiveKind, extractArchive } from './archive.mjs';
+import { createAlbumBuffer } from './albums.mjs';
 import { onPermissionCallback, runTurn } from './turn.mjs';
 import { startView } from './ui.mjs';
 
@@ -31,13 +34,12 @@ const modelLabel = (st) => {
   return model ? choiceName(engine, 'model', model) : t('auto', langOf(st.userId));
 };
 
-/** Выбор языка: три кнопки. Показываем, пока язык пользователя не выбран, и по /language. */
+/** Выбор языка: три кнопки (по /language и кнопке на экране /start). По умолчанию язык берётся из настроек Telegram. */
 const sendLangPicker = (chatId) =>
   say(chatId, LANG_PICK, { reply_markup: { inline_keyboard: [LANG_CODES.map((code) => ({ text: LANGS[code], callback_data: `lang:${code}` }))] } });
 
-/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). Без выбранного языка сначала предлагаем выбрать его (после выбора экран откроется сам). */
+/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
 const sendStart = (st) => {
-  if (!hasLang(st.userId)) return sendLangPicker(st.chatId);
   const lang = langOf(st.userId);
   const admin = isAdmin(st.userId);
   return sendRich(st.chatId, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), lang })).catch((e) => log('start:', e.message));
@@ -51,17 +53,15 @@ async function onUiCallback(st, cb) {
   if (UI_COMMANDS.has(name)) return handleText(st, `/${name}`);
 }
 
-/** Кнопка выбора языка (lang:<код>). Первый выбор сразу открывает /start. */
+/** Кнопка выбора языка (lang:<код>): запоминает выбор и заменяет меню итогом. */
 async function onLangCallback(st, cb) {
   const code = (cb.data || '').slice('lang:'.length);
   const chatId = cb.message?.chat?.id ?? st.chatId;
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
   if (!LANG_CODES.includes(code)) return;
-  const first = !hasLang(st.userId);
   setLang(st.userId, code);
   const text = t('lang.set', code, { name: LANGS[code] });
   await tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(chatId, text));
-  if (first) return sendStart(st);
 }
 
 /** /language [ru|uk|en] — без аргумента показываем выбор языка. */
@@ -110,6 +110,75 @@ async function handleText(st, text) {
 }
 
 /**
+ * Принимает файл: скачивает, сохраняет в каталог загрузок и (для архивов) распаковывает рядом.
+ * Возвращает описание файла для агента или null, если файл не принят (пользователь уже уведомлён).
+ */
+async function receiveFile(st, meta, lang) {
+  if (meta.size > MAX_FILE_BYTES) {
+    await say(st.chatId, t('file.tooBig', lang));
+    return null;
+  }
+  let data;
+  try {
+    data = await downloadFile(meta.id);
+  } catch (e) {
+    log('скачивание файла:', e.message, '| пользователь', st.userId);
+    await say(st.chatId, t('file.downloadFail', lang, { msg: e.message }));
+    return null;
+  }
+  if (data.length > MAX_FILE_BYTES) {
+    await say(st.chatId, t('file.tooBig', lang));
+    return null;
+  }
+  const path = saveUpload(uploadsDir(st.userId), meta.name, data);
+  log('файл принят', st.userId, path, `${data.length} Б`);
+  const file = { path, name: meta.name, mime: meta.mime, size: data.length };
+  if (isImageMime(meta.mime) && data.length <= IMAGE_BLOCK_MAX) file.data = data; // только картинки и только небольшие
+  const kind = archiveKind(meta.name);
+  if (kind) {
+    // архив: рядом с ним папка с содержимым; не вышло — агент получит сам архив, пользователь причину
+    const dir = `${path}_unpacked`;
+    try {
+      file.unpacked = { dir, ...extractArchive(data, kind, dir) };
+      log('архив распакован', st.userId, dir, `${file.unpacked.files.length} файлов, пропущено ${file.unpacked.skipped}`);
+    } catch (e) {
+      log('архив не распакован:', e.reason ?? e.message, '| пользователь', st.userId);
+      await say(st.chatId, t('file.archiveSkipped', lang, { name: meta.name, why: t(`file.archiveWhy.${e.reason ?? 'corrupt'}`, lang) }));
+    }
+  }
+  return file;
+}
+
+/**
+ * Фото или файлы от пользователя (одно сообщение или целый альбом): скачиваем, сохраняем и передаём агенту
+ * вместе с подписью (первая найденная подпись). Изображения уходят блоком image (если агент это умеет), остальное — путём.
+ */
+async function processAttachments(st, msgs) {
+  const lang = langOf(st.userId);
+  if (st.busy) return say(st.chatId, t('busy.running', lang));
+  const received = await Promise.all(msgs.map((m) => describeAttachment(m)).filter(Boolean).map((meta) => receiveFile(st, meta, lang)));
+  const files = received.filter(Boolean);
+  if (!files.length) return;
+  // пока качался альбом, пользователь мог отправить текст и занять агента
+  if (st.busy) return say(st.chatId, t('busy.running', lang));
+  const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
+  return runTurn(st, caption, { files });
+}
+
+// альбом приходит отдельными сообщениями с общим media_group_id: собираем и обрабатываем одним запросом
+const albums = createAlbumBuffer({
+  onFlush: (key, items) => {
+    const { st } = items[0];
+    processAttachments(st, items.map((i) => i.msg).sort((a, b) => a.message_id - b.message_id)).catch((e) => log('альбом:', e.message));
+  },
+});
+
+function handleAttachment(st, msg) {
+  if (msg.media_group_id) return albums.add(`${st.chatId}:${msg.media_group_id}`, { st, msg });
+  return processAttachments(st, [msg]);
+}
+
+/**
  * Меню команд на языке: по умолчанию — английский; русский и украинский — для клиентов Telegram с таким языком
  * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
  */
@@ -147,6 +216,7 @@ async function handleUpdate(u) {
   // бот работает только в личных чатах, поэтому id чата = id пользователя (на случай кнопки без cb.message)
   const chatId = msg?.chat.id ?? cb.message?.chat?.id ?? from.id;
 
+  noteTgLang(from.id, from.language_code); // язык по умолчанию — язык Telegram пользователя (в базу — только после проверки доступа)
   if (!hasAccess(from.id)) {
     if (cb) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('access.denied', langOf(from.id)) }).catch(() => {});
     if (msg?.text) {
@@ -155,6 +225,7 @@ async function handleUpdate(u) {
     }
     return;
   }
+  noteTgLang(from.id, from.language_code, true);
   if (!isAdmin(from.id)) db.touchUser(from.id, from.username, from.first_name);
 
   if (cb) {
@@ -171,6 +242,7 @@ async function handleUpdate(u) {
     return;
   }
   if (msg?.text) return handleText(getState(from.id, chatId), msg.text);
+  if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId), msg);
 }
 
 async function main() {
@@ -203,6 +275,17 @@ async function main() {
   const old = await tg('getUpdates', { offset: -1, timeout: 0 });
   let offset = old.length ? old[old.length - 1].update_id + 1 : 0;
   startIdleReaper();
+  // принятые и исходящие файлы хранятся FILES_KEEP_DAYS дней: чистим при старте и раз в сутки
+  const sweep = () => {
+    try {
+      const n = cleanupFiles();
+      if (n) log(`удалено старых файлов: ${n}`);
+    } catch (e) {
+      log('очистка файлов:', e.message);
+    }
+  };
+  sweep();
+  setInterval(sweep, 24 * 3600_000).unref();
   const admin = getState(ADMIN_ID, ADMIN_ID);
   log(`бот @${botInfo.username} запущен | администратор ${ADMIN_ID} | проект админа: ${admin.project} | сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length} | лимит агентов сотрудников: ${MAX_AGENTS} | простой: ${IDLE_MINUTES} мин | уровни: ${LEVEL_KEYS.join('/')}`);
 

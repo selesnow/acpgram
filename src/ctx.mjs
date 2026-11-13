@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA_DIR } from './app.mjs';
 import { openDb } from './db.mjs';
-import { DEFAULT_LANG, normLang, t } from './i18n.mjs';
+import { normLang, pickLang, t } from './i18n.mjs';
 
 export { DATA_DIR };
 import { tg } from './telegram.mjs';
@@ -22,10 +22,28 @@ export const isLevel = (key) => LEVEL_KEYS.includes(key);
 export const levelName = (key, lang) => t(`level.${key}.label`, lang);
 export const levelHint = (key, lang) => t(`level.${key}.hint`, lang);
 
-/** Язык интерфейса пользователя: выбранный (/language), иначе язык по умолчанию. */
-export const langOf = (userId) => normLang(db.getSetting(`lang:${userId}`)) ?? DEFAULT_LANG;
-/** Выбирал ли пользователь язык: при первом /start без выбора показываем выбор языка. */
-export const hasLang = (userId) => Boolean(normLang(db.getSetting(`lang:${userId}`)));
+// Язык из настроек Telegram пользователя (language_code): userId -> en | ru | uk | null (язык не поддерживается).
+// В памяти — для всех, кто пишет боту (в том числе без доступа); в базу (tglang:<id>) — для пользователей с доступом,
+// чтобы бот знал язык и до первого сообщения после перезапуска (например, при уведомлении от администратора).
+const tgLangCache = new Map();
+const tgLangSaved = new Map(); // что уже записано в базу в этом запуске: userId -> язык ('' — не поддерживается)
+const tgLang = (userId) => (tgLangCache.has(userId) ? tgLangCache.get(userId) : normLang(db.getSetting(`tglang:${userId}`)));
+
+/** Запоминает язык из Telegram (from.language_code). persist — писать в базу (только для пользователей с доступом). */
+export function noteTgLang(userId, code, persist = false) {
+  const lang = normLang(code);
+  tgLangCache.set(userId, lang);
+  if (persist && tgLangSaved.get(userId) !== (lang ?? '')) {
+    tgLangSaved.set(userId, lang ?? '');
+    db.setSetting(`tglang:${userId}`, lang ?? '');
+  }
+}
+
+/**
+ * Язык интерфейса пользователя: выбранный в боте (/language), иначе язык его Telegram (ru, uk, en),
+ * иначе язык по умолчанию (DEFAULT_LANG, английский).
+ */
+export const langOf = (userId) => pickLang(db.getSetting(`lang:${userId}`), tgLang(userId));
 export const setLang = (userId, lang) => db.setSetting(`lang:${userId}`, lang);
 
 export const botInfo = { username: null }; // заполняется при старте

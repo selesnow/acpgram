@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { HELP, isNpm, route, updateCommand, updateEnv } from '../src/cli.mjs';
+import { setCliLang } from '../src/cli-i18n.mjs';
+import { help, isNpm, route, updateCommand, updateEnv } from '../src/cli.mjs';
+
+setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -15,11 +18,12 @@ test('route: команды acpgram', () => {
   assert.deepEqual(route(['start']), { run: 'main.mjs', args: [] });
   assert.deepEqual(route(['setup']), { run: 'setup.mjs', args: [] });
   assert.deepEqual(route(['service', 'restart']), { run: 'service.mjs', args: ['restart'] });
+  assert.deepEqual(route(['service', 'stop']), { run: 'service.mjs', args: ['stop'] });
   assert.deepEqual(route(['service', 'install', '--name', 'x', '--dry-run']), { run: 'service.mjs', args: ['install', '--name', 'x', '--dry-run'] });
   assert.ok(route(['service']).error && route(['service', 'bogus']).error, 'service без действия — ошибка');
   assert.deepEqual(route(['update']), { update: true });
   for (const v of ['version', '--version', '-v']) assert.equal(route([v]).print, VERSION);
-  for (const h of ['help', '--help', '-h']) assert.equal(route([h]).print, HELP);
+  for (const h of ['help', '--help', '-h']) assert.equal(route([h]).print, help());
   assert.match(route(['nope']).error, /Неизвестная команда/);
 });
 
@@ -71,10 +75,14 @@ test('acpgram update при установке через npm: подсказк�
     mkdirSync(join(modDir, 'src'), { recursive: true });
     copyFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), join(modDir, 'package.json'));
     copyFileSync(CLI, join(modDir, 'src', 'cli.mjs'));
-    const res = spawnSync(process.execPath, [join(modDir, 'src', 'cli.mjs'), 'update'], { encoding: 'utf8' });
-    assert.equal(res.status, 0);
-    assert.ok(res.stdout.includes('npm install -g acpgram@latest'));
-    assert.ok(!res.stdout.includes('Обновляю AcpGram'));
+    copyFileSync(fileURLToPath(new URL('../src/cli-i18n.mjs', import.meta.url)), join(modDir, 'src', 'cli-i18n.mjs'));
+    for (const [lang, installed] of [['ru', 'AcpGram установлен через npm'], ['en', 'AcpGram is installed via npm'], ['uk', 'AcpGram встановлено через npm']]) {
+      const res = spawnSync(process.execPath, [join(modDir, 'src', 'cli.mjs'), 'update'], { encoding: 'utf8', env: { ...process.env, ACPGRAM_LANG: lang } });
+      assert.equal(res.status, 0, lang);
+      assert.ok(res.stdout.includes('npm install -g acpgram@latest'), lang);
+      assert.ok(res.stdout.includes(installed), `${lang}: текст на языке терминала`);
+      assert.ok(!/Обновляю AcpGram|Updating AcpGram|Оновлюю AcpGram/.test(res.stdout), lang);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -13,7 +13,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const msg = JSON.parse(line);
   switch (msg.method) {
     case 'initialize':
-      return send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } });
+      return send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: true } } } });
     case 'session/new':
       return send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 's1', modes: { currentModeId: 'default' } } });
     case 'session/set_mode':
@@ -24,7 +24,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         method: 'session/update',
         params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `pids ${process.pid} ${child.pid}` } } },
       });
-      return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } });
+      return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', _meta: { blocks: msg.params.prompt.map((b) => b.type) } } });
     default:
       if (msg.id !== undefined) send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'nope' } });
   }

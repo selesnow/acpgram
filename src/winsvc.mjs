@@ -8,6 +8,7 @@
 //   • ключи и значения реестра (DeleteFlag), столбцы CSV tasklist.
 // Текст вывода используется только для показа пользователю.
 import { win32 } from 'node:path';
+import { tc } from './cli-i18n.mjs';
 
 /** Код Windows «служба не существует» (ERROR_SERVICE_DOES_NOT_EXIST) — его возвращает sc.exe как код выхода. */
 export const ERROR_SERVICE_DOES_NOT_EXIST = 1060;
@@ -67,11 +68,12 @@ export const parseDeleteFlag = (r) => r?.status === 0 && /DeleteFlag\s+REG_DWORD
  * @param {{exists: boolean|null, marked: boolean, keyNameTaken: boolean, nssmStatus?: number|null, name: string}} d
  */
 export function diagnoseCreate({ exists, marked, keyNameTaken, nssmStatus = null, name }) {
-  if (exists && marked) return { code: 1072, text: `служба ${name} помечена для удаления (ошибка Windows 1072)` };
-  if (exists) return { code: 1073, text: `служба ${name} уже существует (ошибка Windows 1073): выполните acpgram service uninstall` };
-  if (keyNameTaken) return { code: 1078, text: `имя ${name} или отображаемое имя службы уже занято другой службой (ошибка Windows 1078)` };
-  if (exists === null) return { code: null, text: `не удалось определить причину: sc.exe недоступен${nssmStatus != null ? ` (nssm вернул код ${nssmStatus})` : ''}` };
-  return { code: null, text: `Windows отказал в создании службы${nssmStatus != null ? ` (nssm вернул код ${nssmStatus})` : ''}` };
+  if (exists && marked) return { code: 1072, text: tc('ws.marked', { name }) };
+  if (exists) return { code: 1073, text: tc('ws.exists', { name }) };
+  if (keyNameTaken) return { code: 1078, text: tc('ws.keyTaken', { name }) };
+  const status = nssmStatus != null ? tc('ws.nssmCode', { code: nssmStatus }) : '';
+  if (exists === null) return { code: null, text: tc('ws.unknown', { status }) };
+  return { code: null, text: tc('ws.refused', { status }) };
 }
 
 /** Сообщение Windows, нечитаемое в этой кодировке: nssm выводит «?», а UTF-8-разбор OEM-текста даёт U+FFFD. */

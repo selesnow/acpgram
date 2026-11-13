@@ -1,5 +1,9 @@
 // Тонкая обёртка над Telegram Bot API через fetch (новые методы 10.x не требуют библиотек).
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+
 const BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+const FILE_BASE = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
 export async function tg(method, body = {}, { signal } = {}) {
   const res = await fetch(`${BASE}/${method}`, {
@@ -11,6 +15,39 @@ export async function tg(method, body = {}, { signal } = {}) {
   const data = await res.json();
   if (!data.ok) throw new Error(`Telegram ${method}: ${data.error_code} ${data.description}`);
   return data.result;
+}
+
+/** Скачивает файл, присланный боту (до 20 МБ — лимит Bot API). Возвращает Buffer. */
+export async function downloadFile(file_id) {
+  const info = await tg('getFile', { file_id });
+  if (!info.file_path) throw new Error('Telegram getFile: нет file_path');
+  const res = await fetch(`${FILE_BASE}/${info.file_path}`);
+  if (!res.ok) throw new Error(`Telegram file: HTTP ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** Отправка файла пользователю (multipart). */
+async function uploadFile(method, field, chat_id, path, caption) {
+  const form = new FormData();
+  form.append('chat_id', String(chat_id));
+  if (caption) form.append('caption', caption);
+  form.append(field, new Blob([await readFile(path)]), basename(path));
+  const res = await fetch(`${BASE}/${method}`, { method: 'POST', body: form });
+  const data = await res.json();
+  if (!data.ok) throw new Error(`Telegram ${method}: ${data.error_code} ${data.description}`);
+  return data.result;
+}
+
+/** Файл как документ; картинку (до 10 МБ) — как фото, а если Telegram отверг фото, то документом. */
+export async function sendFile(chat_id, path, { photo = false, size = 0 } = {}) {
+  if (photo && size <= 10 * 1024 * 1024) {
+    try {
+      return await uploadFile('sendPhoto', 'photo', chat_id, path);
+    } catch (e) {
+      console.error('sendPhoto не прошёл, отправляю документом:', e.message);
+    }
+  }
+  return uploadFile('sendDocument', 'document', chat_id, path);
 }
 
 /** Экранирует текст для вставки в HTML-теги rich-разметки. */

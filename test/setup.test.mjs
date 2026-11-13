@@ -10,6 +10,9 @@ import { homedir } from 'node:os';
 import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
 import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
+import { setCliLang } from '../src/cli-i18n.mjs';
+
+setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
 
 test('serializeEnv: порядок, комментарии, прочие ранее заданные, пустые не пишутся; Node читает обратно то же', () => {
   const values = {

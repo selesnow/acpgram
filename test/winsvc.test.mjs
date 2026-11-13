@@ -4,6 +4,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from '../src/winsvc.mjs';
 import { winMessage } from '../src/service.mjs';
+import { setCliLang } from '../src/cli-i18n.mjs';
+
+setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
 
 // вывод `sc.exe query acpgram` с ноутбука на русской Windows (зависшая служба)
 const RU_STOP_PENDING = [

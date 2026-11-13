@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, normLang, plural, t } from '../src/i18n.mjs';
+import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, normLang, pickLang, plural, t } from '../src/i18n.mjs';
 
 const placeholders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
 
@@ -49,4 +49,14 @@ test('plural: английский и славянские формы', () => {
   assert.equal(plural(1, 'step', 'uk'), '1 крок');
   assert.equal(plural(3, 'step', 'uk'), '3 кроки');
   assert.equal(plural(13, 'step', 'uk'), '13 кроків');
+});
+
+test('pickLang: выбор в боте важнее языка Telegram, неподдерживаемый язык — по умолчанию', () => {
+  assert.equal(pickLang('uk', 'ru'), 'uk', 'выбранный в /language важнее');
+  assert.equal(pickLang(null, 'ru-RU'), 'ru', 'язык Telegram с регионом');
+  assert.equal(pickLang(undefined, 'UK'), 'uk');
+  assert.equal(pickLang('', 'en'), 'en');
+  assert.equal(pickLang(null, 'de'), DEFAULT_LANG, 'немецкий не поддерживается');
+  assert.equal(pickLang(null, null), DEFAULT_LANG);
+  assert.equal(pickLang(), DEFAULT_LANG);
 });

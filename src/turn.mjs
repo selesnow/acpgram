@@ -1,12 +1,15 @@
 // Один запрос пользователя: черновик со стримингом, ход работы, запросы разрешений, итоговый ответ.
+import { mkdirSync } from 'node:fs';
+import { basename } from 'node:path';
 import { db, dbg, langOf, log, say } from './ctx.mjs';
+import { buildPromptBlocks, extractSendMarks, imageMimeOf, outboxDir, resolveSendable, stripSendMarks } from './files.mjs';
 import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
 import { t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
 import { parseTool } from './tools.mjs';
-import { tg, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
+import { tg, sendFile, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
 import { composeDraft, finalExtras, finalMessages, toolMeta } from './ui.mjs';
 
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -123,9 +126,37 @@ function turnUsage(a, res, lastUsage) {
   return { ...u, model, effort, cost };
 }
 
-/** Выполняет запрос пользователя к агенту и отправляет результат. */
-export async function runTurn(st, text) {
+const MAX_FILES_PER_TURN = 10; // сколько файлов агента отправляем пользователю за один ответ
+
+/** Отправляет пользователю файлы, на которые агент поставил метки [[send:путь]]; недоступные — с причиной. */
+async function deliverFiles(st, paths, cwd, lang) {
+  const outbox = outboxDir(st.userId);
+  for (const p of paths.slice(0, MAX_FILES_PER_TURN)) {
+    const name = basename(p);
+    const r = resolveSendable(p, { cwd, outbox });
+    if (!r.ok) {
+      log(`файл агента не отправлен (${r.reason}):`, p, '| пользователь', st.userId);
+      await say(st.chatId, t('file.sendFail', lang, { name, why: t(`file.why.${r.reason}`, lang) }));
+      continue;
+    }
+    try {
+      await sendFile(st.chatId, r.path, { photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)), size: r.size });
+      log('файл отправлен пользователю', st.userId, r.path);
+    } catch (e) {
+      log('отправка файла:', e.message);
+      await say(st.chatId, t('file.sendFail', lang, { name, why: t('file.why.error', lang, { msg: e.message }) }));
+    }
+  }
+}
+
+/**
+ * Выполняет запрос пользователя к агенту и отправляет результат.
+ * @param {{files?: {path: string, name: string, mime: string, size: number, data?: Buffer}[]}} [opts] вложения запроса
+ */
+export async function runTurn(st, text, { files = [] } = {}) {
   const chatId = st.chatId;
+  // в базу — текст запроса и имена приложенных файлов, иначе запрос только с файлом выглядел бы пустым
+  const dbText = files.length ? [text, `📎 ${files.map((f) => f.name).join(', ')}`].filter(Boolean).join('\n') : text;
   const lang = langOf(st.userId);
   const engine = engineOf(st);
   const clean = engine.cleanText; // служебные вставки движка в тексте ответа
@@ -150,7 +181,7 @@ export async function runTurn(st, text) {
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, answer: clean(answer), elapsedMs: Date.now() - startedAt, lang });
+    const d = composeDraft({ thought, steps, answer: stripSendMarks(clean(answer)), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;
@@ -208,8 +239,10 @@ export async function runTurn(st, text) {
     const a = (agent = await ensureAgent(st));
     // модель и уровень рассуждений — как выбрал пользователь (/model) и разрешил администратор
     await syncSelection(st.userId, a);
-    st.requestId = db.startRequest(a.dbSessionId, text);
-    const res = await a.prompt(text);
+    st.requestId = db.startRequest(a.dbSessionId, dbText);
+    const outbox = outboxDir(st.userId);
+    mkdirSync(outbox, { recursive: true });
+    const res = await a.prompt(buildPromptBlocks({ text, files, caps: a.caps, outbox }));
     stopReason = res.stopReason;
     usage = turnUsage(a, res, lastUsage);
   } catch (e) {
@@ -230,7 +263,7 @@ export async function runTurn(st, text) {
       log('ошибка запроса:', e.message);
       answer += `\n\n${t('turn.error', lang, { msg: e.message })}`;
     }
-    if (!st.requestId) st.requestId = db.startRequest(st.agent?.dbSessionId ?? null, text);
+    if (!st.requestId) st.requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
   } finally {
     clearInterval(timer);
     st.onUpdate = null;
@@ -239,8 +272,9 @@ export async function runTurn(st, text) {
     st.lastActive = Date.now();
   }
 
-  answer = clean(answer);
-  let final = answer.trim() || t('turn.empty', lang);
+  const sent = extractSendMarks(clean(answer)); // метки [[send:путь]] убираем из текста, файлы отправим после ответа
+  answer = sent.text;
+  let final = answer.trim() || (sent.paths.length ? t('turn.filesBelow', lang) : t('turn.empty', lang));
   db.finishRequest(st.requestId, { stopReason, answer: answer.trim(), error, usage: usage ?? {} });
   st.requestId = null;
   if (st.suppress) {
@@ -255,4 +289,5 @@ export async function runTurn(st, text) {
     dbg(`final u${st.userId} stop=${stopReason}`, msg);
     await sendRich(chatId, msg).catch((e) => log('sendRich:', e.message));
   }
+  if (sent.paths.length && !limited) await deliverFiles(st, sent.paths, agent?.cwd ?? st.project, lang);
 }

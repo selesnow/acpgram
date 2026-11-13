@@ -14,6 +14,9 @@ export function normLang(v) {
 /** Язык по умолчанию: DEFAULT_LANG из .env, иначе английский. */
 export const DEFAULT_LANG = normLang(process.env.DEFAULT_LANG) ?? 'en';
 
+/** Первый поддерживаемый язык из списка кандидатов (код Telegram «ru-RU», выбор пользователя и т. п.), иначе язык по умолчанию. */
+export const pickLang = (...candidates) => candidates.map(normLang).find(Boolean) ?? DEFAULT_LANG;
+
 /** Локаль для дат (toLocaleString). */
 export const LOCALES = { en: 'en-US', ru: 'ru-RU', uk: 'uk-UA' };
 
@@ -235,6 +238,20 @@ const M = {
   'turn.stopped': { en: '⏹ Stopped.', ru: '⏹ Остановлено.', uk: '⏹ Зупинено.' },
   'turn.empty': { en: '(empty reply)', ru: '(пустой ответ)', uk: '(порожня відповідь)' },
   'turn.error': { en: '⚠️ Error: {msg}', ru: '⚠️ Ошибка: {msg}', uk: '⚠️ Помилка: {msg}' },
+  'turn.filesBelow': { en: '📎 Files are attached below.', ru: '📎 Файлы приложены ниже.', uk: '📎 Файли додано нижче.' },
+  'file.tooBig': { en: '⚠️ The file is too large: the limit is 20 MB.', ru: '⚠️ Файл слишком большой: лимит 20 МБ.', uk: '⚠️ Файл завеликий: ліміт 20 МБ.' },
+  'file.downloadFail': { en: '⚠️ Could not download the file: {msg}', ru: '⚠️ Не удалось скачать файл: {msg}', uk: '⚠️ Не вдалося завантажити файл: {msg}' },
+  'file.archiveSkipped': { en: '⚠️ The archive «{name}» was not unpacked: {why}. The agent gets it as a file.', ru: '⚠️ Архив «{name}» не распакован: {why}. Агент получит его как файл.', uk: '⚠️ Архів «{name}» не розпаковано: {why}. Агент отримає його як файл.' },
+  'file.archiveWhy.limit': { en: 'more than 500 files or 100 MB after unpacking', ru: 'больше 500 файлов или 100 МБ после распаковки', uk: 'понад 500 файлів або 100 МБ після розпакування' },
+  'file.archiveWhy.corrupt': { en: 'the archive is damaged', ru: 'архив повреждён', uk: 'архів пошкоджено' },
+  'file.archiveWhy.unsupported': { en: 'this archive type is not supported (zip64)', ru: 'этот вид архива не поддерживается (zip64)', uk: 'цей вид архіву не підтримується (zip64)' },
+  'file.sendFail': { en: '⚠️ Could not send the file «{name}»: {why}', ru: '⚠️ Не удалось отправить файл «{name}»: {why}', uk: '⚠️ Не вдалося надіслати файл «{name}»: {why}' },
+  'file.why.missing': { en: 'the file does not exist', ru: 'файл не найден', uk: 'файл не знайдено' },
+  'file.why.notfile': { en: 'this is not a regular file', ru: 'это не обычный файл', uk: 'це не звичайний файл' },
+  'file.why.denied': { en: 'the file is outside the allowed folders or is protected', ru: 'файл вне разрешённых папок или защищён', uk: 'файл поза дозволеними теками або захищений' },
+  'file.why.empty': { en: 'the file is empty', ru: 'файл пустой', uk: 'файл порожній' },
+  'file.why.big': { en: 'the file is larger than 20 MB', ru: 'файл больше 20 МБ', uk: 'файл більший за 20 МБ' },
+  'file.why.error': { en: 'Telegram rejected the file ({msg})', ru: 'Telegram не принял файл ({msg})', uk: 'Telegram не прийняв файл ({msg})' },
   'limit.slots': { en: '⏳ All {max} employee agent slots are busy right now. Try again in a minute.', ru: '⏳ Сейчас заняты все {max} слота агентов сотрудников. Попробуйте через минуту.', uk: '⏳ Зараз зайняті всі {max} слоти агентів співробітників. Спробуйте за хвилину.' },
   'state.modeViolation': { en: '⛔ The agent tried to switch to the «{mode}» mode, which is not available at your access level. The request was stopped and the session closed.', ru: '⛔ Агент попытался перейти в режим «{mode}», недоступный на вашем уровне доступа. Запрос остановлен, сессия закрыта.', uk: '⛔ Агент спробував перейти в режим «{mode}», недоступний на вашому рівні доступу. Запит зупинено, сесію закрито.' },
   'state.idle': { en: '💤 The session was closed due to inactivity ({min} min). The next request will start a new one.', ru: '💤 Сессия закрыта из-за неактивности ({min} мин). Следующий запрос начнёт новую.', uk: '💤 Сесію закрито через неактивність ({min} хв). Наступний запит почне нову.' },

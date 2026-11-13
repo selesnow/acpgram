@@ -28,6 +28,8 @@ A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **An
 - **Four engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI and Codex; the default engine is set in `.env`.
 - **Model and reasoning level** — `/model` lists the models the agent itself reports (plus `effort` for Claude Code and `thought_level` for Antigravity); the choice is remembered per user and per engine.
 - **Permission requests as buttons** — "Allow", "Allow for this session", "Reject". Options that would persist a rule forever or raise the session above the user's access level are never shown.
+- **Files and images** — send the bot a photo or a file (text, PDF, spreadsheet, etc., up to 20 MB); the caption becomes the request. The file is saved to `<data dir>/uploads/<user id>/` and the agent gets its path and reads it with its own tools. An album of several photos or files is handled as one request. `.zip`, `.tar`, `.tar.gz` and `.tgz` archives are unpacked next to the file (`…_unpacked`, at most 500 files and 100 MB; unsafe paths and links are skipped) and the agent gets the file list; `.7z` and `.rar` stay a plain file; images are also passed as an `image` block when the agent supports it. In the other direction the agent can create a file and send it to the chat: it saves the file to `<data dir>/outbox/<user id>/` (or the project folder) and puts a `[[send:path]]` marker in its reply. Only files from these two folders are sent, never secrets (`.env`, the bot's database and logs, `.git`). Files are kept for 7 days (`FILES_KEEP_DAYS`).
+- **Language** — the bot talks to each user in their Telegram language (`ru`, `uk` or `en`; any other falls back to `DEFAULT_LANG`, English by default). `/language` changes it and takes priority over the Telegram language. The `acpgram` terminal commands (setup wizard, service, update, help) speak the system language: Russian, Ukrainian, otherwise English; on Windows the system UI language is used, not the regional format.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
 - **Sessions** — `/sessions` resumes a previous conversation (in the engine it was created in), even after a restart; `/new` starts fresh; `/close` unloads the agent process.
 - **Team access** — invite links and access requests; per-user access levels, engines and model restrictions; `/active` shows who is working and lets the admin end any session.
@@ -106,7 +108,7 @@ The installer downloads the latest [release](https://github.com/selesnow/acpgram
 ```text
 acpgram                    start the bot
 acpgram setup              settings wizard
-acpgram service install    run as a service (also: restart, status, uninstall)
+acpgram service install    run as a service (also: restart, stop, status, uninstall)
 acpgram update             update to the latest release
 ```
 
@@ -132,7 +134,7 @@ Autostart with the system and restart on failure — one command:
 | Linux | `systemd --user` (to keep it running without a login session: `sudo loginctl enable-linger $USER`) | `npm run service:install` |
 | macOS | LaunchAgent (`launchd`) | `npm run service:install` |
 
-Also: `acpgram service restart` (after an update; a hung service is force-stopped), `acpgram service status`, `acpgram service uninstall` (npm: `npm run service:status`, `npm run service:uninstall`). Options go after `--` (otherwise npm takes them for itself): `npm run service:install -- --dry-run` prints the commands without running them, `-- --name <name>` sets another service name (default `acpgram`; Windows and Linux), `-- --system` installs a Windows service under LocalSystem without a terminal. Logs: `data/service.log` (Linux: `journalctl --user -u acpgram -f`; Windows PowerShell 5.1: `Get-Content <path>\data\service.log -Tail 30 -Encoding UTF8`, otherwise non-English text looks garbled).
+Also: `acpgram service restart` (after an update; a hung service is force-stopped), `acpgram service stop` (stops it without removing: the service starts again after a reboot), `acpgram service status`, `acpgram service uninstall` (npm: `npm run service:status`, `npm run service:uninstall`). Options go after `--` (otherwise npm takes them for itself): `npm run service:install -- --dry-run` prints the commands without running them, `-- --name <name>` sets another service name (default `acpgram`; Windows and Linux), `-- --system` installs a Windows service under LocalSystem without a terminal. Logs: `data/service.log` (Linux: `journalctl --user -u acpgram -f`; Windows PowerShell 5.1: `Get-Content <path>\data\service.log -Tail 30 -Encoding UTF8`, otherwise non-English text looks garbled).
 
 > On Windows the service needs your account's **password**: if you sign in with a Microsoft account, that is the Microsoft account password, not the Windows PIN (with a PIN the service fails to log on — the wizard detects this and asks again). Accounts without a password cannot run services.
 >
@@ -191,13 +193,16 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
 | `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy` or `codex`; the bot does not start if this engine is not installed |
-| `DEFAULT_LANG` | no | interface language by default: `en` (default), `ru` or `uk`. Each user changes their language with `/language` |
+| `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
+| `ACPGRAM_LANG` | no | language of the `acpgram` terminal commands: `ru`, `uk` or `en`. Usually not needed: the language comes from the system (for Docker and CI, where the system has none) |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
 | `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
 | `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE` | no | admin session mode per engine |
 | `MAX_AGENTS` | no | concurrent teammate agents (3) |
 | `IDLE_MINUTES` | no | idle session timeout, minutes (30) |
+| `FILES_DIR` | no | folder for received (`uploads`) and outgoing (`outbox`) files (the bot's data folder) |
+| `FILES_KEEP_DAYS` | no | how many days to keep those files (7) |
 | `ANIMATED_ICONS` | no | `0` — plain emoji instead of animated icons in drafts |
 
 `.env` is never committed. Keep the token and keys out of the code.
@@ -213,6 +218,7 @@ install.ps1       one-line installer for Windows
 install.sh        one-line installer for Linux and macOS
 src/
   cli.mjs         the acpgram command: start, setup, service, update, version
+  cli-i18n.mjs    terminal language (detected from the system) and the texts of the acpgram commands in en, ru, uk
   main.mjs        entry point: loads .env, runs the setup wizard on first start
   setup.mjs       setup wizard
   service.mjs     service: nssm (Windows), systemd --user (Linux), launchd (macOS)
@@ -226,7 +232,10 @@ src/
   projects.mjs    project paths (inside the root or anywhere), recent projects, search
   *Ui.mjs         /project, /sessions, /engine, /model screens
   ui.mjs          rendering: drafts, steps, final message, screens
-  telegram.mjs    Bot API calls, rich messages, long text splitting
+  telegram.mjs    Bot API calls, rich messages, long text splitting, file download and upload
+  files.mjs       attachments: names, saving, prompt blocks, [[send:path]] markers, outgoing file checks, cleanup
+  archive.mjs     safe unpacking of zip, tar, tar.gz without dependencies
+  albums.mjs      collects Telegram albums (shared media_group_id) into one request
   db.mjs          SQLite: sessions, requests, tool calls, permissions, users, usage
 test/             node:test tests and a fake ACP agent
 .github/workflows CI (tests on Windows / Linux / macOS) and releases (archives, checksums, installer checks)

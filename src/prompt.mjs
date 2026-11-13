@@ -1,6 +1,7 @@
 // Диалог в терминале для мастера настройки и установки службы: вопросы, да/нет и скрытый ввод секретов.
 import { stdin, stdout } from 'node:process';
 import readline from 'node:readline/promises';
+import { tc } from './cli-i18n.mjs';
 
 /**
  * Секрет из терминала в raw-режиме: символы не отображаются (вместо них «*»), Backspace стирает, Ctrl+C прерывает.
@@ -96,7 +97,7 @@ export function prompter() {
     },
     yes: async (q, def = true) => {
       const a = (await question(`${q} [${def ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
-      return a ? ['y', 'yes', 'д', 'да'].includes(a) : def;
+      return a ? ['y', 'yes', 'д', 'да', 'т', 'так'].includes(a) : def;
     },
     close: closeRl,
   };
@@ -105,6 +106,6 @@ export function prompter() {
 /** Ввод закончился раньше, чем мастер получил ответы. */
 export class InputClosedError extends Error {
   constructor() {
-    super('нет ввода: запустите настройку в терминале — acpgram setup');
+    super(tc('prompt.inputClosed'));
   }
 }
