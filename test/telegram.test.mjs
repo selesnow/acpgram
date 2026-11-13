@@ -43,7 +43,14 @@ test('callApi: повторов не больше retries, долгий retry_af
 test('callApi: нет ответа — понятная ошибка по тайм-ауту, без повтора', async () => {
   const f = fakeFetch('hang');
   const t0 = Date.now();
-  await assert.rejects(callApi('getUpdates', json, { fetchImpl: f.impl, timeoutMs: 200 }), /getUpdates: нет ответа за 0 с/);
+  // таймер AbortSignal.timeout не удерживает процесс (в Node 22 тест иначе обрывается раньше времени);
+  // в боте процесс держит длинный опрос Telegram, здесь — обычный таймер на время теста
+  const keepAlive = setTimeout(() => {}, 5000);
+  try {
+    await assert.rejects(callApi('getUpdates', json, { fetchImpl: f.impl, timeoutMs: 200 }), /getUpdates: нет ответа за 0 с/);
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.ok(Date.now() - t0 < 2000);
   assert.equal(f.calls.length, 1);
 });

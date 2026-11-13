@@ -1,11 +1,13 @@
 // Модули, которые при загрузке открывают базу бота (ctx.mjs, access.mjs): каталог данных — временный.
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-const home = mkdtempSync(join(tmpdir(), 'acpgram-runtime-'));
+// настоящий путь: на macOS временная папка — ссылка (/var → /private/var), на Windows бывает короткое имя (RUNNER~1),
+// а бот хранит проект настоящим путём
+const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'acpgram-runtime-')));
 process.env.ACPGRAM_HOME = home;
 delete process.env.PROJECTS_ROOT; // проект — любая папка (иначе временная папка вне корня), независимо от окружения службы
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
