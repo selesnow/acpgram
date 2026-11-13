@@ -178,3 +178,27 @@ test('projectTopicsView: кнопки-ссылки на темы, новый д�
   const inTopic = projectTopicsView(S.getState(107, 107, 101), proj);
   assert.notEqual(inTopic.text.split('\n')[1], v.text.split('\n')[1], 'в теме — свой заголовок');
 });
+
+test('одна сессия — в одном диалоге: при возобновлении в другом месте лишняя закрывается', () => {
+  S.topicsSupport.enabled = true;
+  const general = S.getState(108, 108, null);
+  const topicA = S.getState(108, 108, 51);
+  const topicB = S.getState(108, 108, 52);
+  general.agent = fakeAgent('X');
+  ctx.db.saveTopic(108, 52, { acpSessionId: 'X' });
+  topicB.resumeId = 'X';
+
+  S.releaseSessionElsewhere(topicA, 'X'); // /sessions в теме A возвращает сессию X
+  assert.equal(general.agent, null, 'в General процесс сессии X закрыт');
+  assert.equal(general.resumeId, null, 'и не возобновится там сам');
+  assert.equal(topicB.resumeId, null, 'тема B, ждавшая X, её забыла');
+  assert.equal(ctx.db.getTopic(108, 52).acp_session_id, '');
+
+  general.agent = fakeAgent('Y');
+  general.busy = true;
+  assert.throws(() => S.releaseSessionElsewhere(topicA, 'Y'), (e) => e instanceof S.LimitError, 'занятый запросом диалог не трогаем');
+  assert.ok(general.agent);
+  general.busy = false;
+  general.agent = null;
+  S.releaseSessionElsewhere(topicA, null); // без сессии — ничего
+});

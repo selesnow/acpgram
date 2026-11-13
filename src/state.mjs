@@ -256,7 +256,33 @@ export async function ensureAgent(st, { resume } = {}) {
   }
 }
 
+/**
+ * Одна сессия агента — в одном диалоге. Перед возобновлением сессии sessionId в диалоге st она закрывается во всех
+ * других диалогах пользователя (General, другие темы): иначе два процесса агента писали бы в одну историю.
+ * Там, где сессия работала, — короткое сообщение; там, где она только ждала возобновления, — тихо забываем.
+ * Занятый запросом диалог не трогаем: LimitError — пусть сначала закончит или будет остановлен.
+ */
+export function releaseSessionElsewhere(st, sessionId) {
+  if (!sessionId) return;
+  const lang = langOf(st.userId);
+  for (const other of statesOf(st.userId)) {
+    if (other === st) continue;
+    const live = other.agent && !other.agent.closed && other.agent.sessionId === sessionId;
+    if (live) {
+      if (other.busy) throw new LimitError(t('ses.busyElsewhere', lang));
+      dropPermissions(other);
+      endAgent(other, 'moved');
+      log('сессия', sessionId, 'перенесена в другой диалог и закрыта здесь | пользователь', st.userId, '| тема', other.topic);
+      say(other.to, t('ses.movedAway', lang));
+    } else if (other.resumeId === sessionId) {
+      other.resumeId = null;
+      if (other.topic) db.saveTopic(other.userId, other.topic, { acpSessionId: '' });
+    }
+  }
+}
+
 async function startAgent(st, { resume } = {}) {
+  releaseSessionElsewhere(st, resume);
   reserveSlot(st);
   const engine = engineOf(st);
   const allowed = modeFor(st.userId, engine);

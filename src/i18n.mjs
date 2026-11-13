@@ -213,6 +213,16 @@ const M = {
   'ses.list': { en: 'Sessions of project {p}.\nChoose which one to return to:', ru: 'Сессии проекта {p}.\nВыберите, к какой вернуться:', uk: 'Сесії проєкту {p}.\nОберіть, до якої повернутися:' },
   'ses.reqs': { en: '{n} req.', ru: '{n} запр.', uk: '{n} запит.' },
   'ses.alreadyActive': { en: 'This session is already active', ru: 'Эта сессия уже активна', uk: 'Ця сесія вже активна' },
+  'ses.movedAway': {
+    en: '↪️ This session was continued in another dialog, so it was closed here. The next request here starts a new session.',
+    ru: '↪️ Эту сессию продолжили в другом диалоге, поэтому здесь она закрыта. Следующий запрос здесь начнёт новую сессию.',
+    uk: '↪️ Цю сесію продовжили в іншому діалозі, тому тут її закрито. Наступний запит тут почне нову сесію.',
+  },
+  'ses.busyElsewhere': {
+    en: '⏳ This session is answering a request in another dialog right now. Wait for the answer or /stop it there, then try again.',
+    ru: '⏳ Эта сессия сейчас отвечает на запрос в другом диалоге. Дождитесь ответа или остановите его там (/stop) и повторите.',
+    uk: '⏳ Ця сесія зараз відповідає на запит в іншому діалозі. Дочекайтеся відповіді або зупиніть його там (/stop) і повторіть.',
+  },
   'ses.notFound': { en: 'The session was not found or belongs to another project. Run /sessions again.', ru: 'Сессия не найдена или относится к другому проекту. Вызовите /sessions заново.', uk: 'Сесію не знайдено або вона належить іншому проєкту. Викличте /sessions знову.' },
   'ses.engineDown': { en: '{engine} is unavailable on the server right now — the session cannot be resumed.', ru: '{engine} сейчас недоступен на сервере — сессию не возобновить.', uk: '{engine} зараз недоступний на сервері — сесію не відновити.' },
   'ses.engineOff': { en: 'The {engine} engine is not granted to you right now — the session cannot be resumed. Contact the administrator.', ru: 'Движок {engine} вам сейчас не выдан — сессию не возобновить. Обратитесь к администратору.', uk: 'Рушій {engine} вам зараз не видано — сесію не відновити. Зверніться до адміністратора.' },
