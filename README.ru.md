@@ -11,7 +11,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[English](README.md) · **Русский**
+[English](README.md) · **Русский** · [Сайт](https://alexey-seleznev.pro/acpgram/)
 
 Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Claude Code**, **Antigravity CLI** и **OpenAI Codex**: бот запускает агента как подпроцесс на той машине, где он установлен, и общается с ним по [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC через stdin/stdout). Каждый пользователь выбирает движок сам (`/engine`), движок по умолчанию задаётся в `.env`. Ответы приходят со стримингом, ходом работы агента и кнопками подтверждения действий.
 
