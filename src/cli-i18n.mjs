@@ -16,7 +16,7 @@ export function langFromLocale(value) {
     const id = parseInt(lcid[1], 16) & 0x3ff; // основной язык без региона
     return id === 0x19 ? 'ru' : id === 0x22 ? 'uk' : 'en';
   }
-  const m = /^([a-z]{2,3})(?:[_@.\-]|$)/.exec(v);
+  const m = /^([a-z]{2,3})(?:[_@.-]|$)/.exec(v);
   if (!m) return null;
   return m[1] === 'ru' ? 'ru' : m[1] === 'uk' ? 'uk' : 'en';
 }
@@ -52,7 +52,9 @@ export function detectLang({ env = process.env, platform = process.platform, reg
       let v = null;
       try {
         v = reg(key, name);
-      } catch {}
+      } catch {
+        /* параметра нет в реестре — пробуем следующий */
+      }
       const lang = v && langFromLocale(v.split(/\\0|\s/)[0]);
       if (lang) return lang;
     }

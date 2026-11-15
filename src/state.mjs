@@ -328,7 +328,7 @@ async function startAgent(st, { resume } = {}) {
     if (closedByUser) throw new ClosedError();
     if (e.code === 'START_TIMEOUT') {
       log(`⚠️ ${engine.label} не запустился за ${START_TIMEOUT_MS / 1000} с — процесс завершён | пользователь`, st.userId);
-      throw new Error(t('state.startTimeout', langOf(st.userId), { engine: engine.label, sec: START_TIMEOUT_MS / 1000 }));
+      throw new Error(t('state.startTimeout', langOf(st.userId), { engine: engine.label, sec: START_TIMEOUT_MS / 1000 }), { cause: e });
     }
     throw e;
   }

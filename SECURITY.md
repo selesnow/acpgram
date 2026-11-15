@@ -27,7 +27,7 @@ security advisory and you are credited, if you wish.
 - GitHub Actions are pinned by commit SHA and run with minimal token permissions.
 - The npm package is published from GitHub Actions with **provenance** (Trusted Publishing, no stored npm token),
   so the package can be traced back to the exact commit it was built from.
-- The package has no npm dependencies.
+- The package has no runtime npm dependencies (ESLint is a development-only tool and is not installed with the package).
 - Every GitHub Release file is signed with [Sigstore](https://www.sigstore.dev/) (keyless, `<file>.sigstore.json` next to it). To verify a download:
 
   ```sh

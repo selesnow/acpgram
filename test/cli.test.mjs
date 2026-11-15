@@ -45,6 +45,7 @@ test('updateCommand / updateEnv: тот же установщик, эта же �
 
 test('install.ps1: acpgram.cmd обновляет сам, без node.exe (защита Windows может запрещать node → PowerShell)', () => {
   const ps = readFileSync(new URL('../install.ps1', import.meta.url), 'utf8');
+  // eslint-disable-next-line no-control-regex -- проверка на любые не-ASCII символы
   assert.ok(!/[^\x00-\x7f]/.test(ps), 'установщик — только ASCII (PowerShell 5.1 читает его в кодировке консоли)');
   const update = ps.indexOf(`'if /i "%~1"=="update" ('`);
   const node = ps.indexOf('--disable-warning=ExperimentalWarning `"%~dp0..\\src\\cli.mjs`" %*');

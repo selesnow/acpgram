@@ -6,7 +6,7 @@ import { homedir, userInfo } from 'node:os';
 import { join, posix } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { APP, APP_DIR, DATA_DIR, HOME_DIR, MAIN_PATH } from './app.mjs';
+import { APP, DATA_DIR, HOME_DIR, MAIN_PATH } from './app.mjs';
 import { tc } from './cli-i18n.mjs';
 import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from './winsvc.mjs';
 

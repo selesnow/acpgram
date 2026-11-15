@@ -19,10 +19,13 @@ updates:
     commit-message:
       prefix: 'docker'
 
-  # the package has no npm dependencies today; this starts working as soon as one appears
+  # development-only tools (ESLint); the package has no runtime npm dependencies
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: 'deps'
+    groups:
+      dev-dependencies:
+        dependency-type: development

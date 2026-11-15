@@ -89,7 +89,7 @@ export function decodeOutput(buf, oemcp = 0) {
   const b = Buffer.from(buf);
   let zeroOdd = 0;
   for (let i = 1; i < b.length; i += 2) if (b[i] === 0) zeroOdd++;
-  if (b.length >= 4 && zeroOdd >= b.length / 4) return b.toString('utf16le').replace(/^﻿/, '');
+  if (b.length >= 4 && zeroOdd >= b.length / 4) return b.toString('utf16le').replace(/^\uFEFF/, '');
   const plain = b.includes(0) ? Buffer.from(b.filter((x) => x !== 0)) : b;
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(plain);

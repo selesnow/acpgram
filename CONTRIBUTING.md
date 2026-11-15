@@ -27,8 +27,10 @@ released under the [MIT license](LICENSE) of the project.
 - **Tests.** The project has an automated test suite (`npm test`, Node's built-in `node:test`, files in `test/`).
   A new feature or a bug fix must come with tests that fail without the change; a pull request that adds major
   functionality without tests is not accepted.
-- **No runtime dependencies.** AcpGram is plain Node.js (>= 22.13, ES modules, `.mjs`) with no npm dependencies; please do
-  not add any. A development-only dependency needs a clear reason.
+- **No runtime dependencies.** AcpGram is plain Node.js (>= 22.13, ES modules, `.mjs`) with no runtime npm dependencies; please
+  do not add any. A development-only dependency needs a clear reason (today only ESLint).
+- **Lint.** `npm run lint` (ESLint) must pass with no warnings; CI runs it on every pull request. Fix the code instead of
+  silencing a rule; where a rule is disabled on purpose, say why in the comment next to it.
 - **Code style.** Follow the style of the surrounding code: ES modules, 2-space indent, single quotes, semicolons,
   small functions with a short comment that explains the reason, not the obvious.
 - **Texts for users.** Every string the bot shows goes through `src/i18n.mjs` and must exist in all three languages
@@ -46,7 +48,8 @@ released under the [MIT license](LICENSE) of the project.
 ```sh
 git clone https://github.com/selesnow/acpgram.git
 cd acpgram
-npm test            # no install step: there are no dependencies
+npm test            # tests need no install step: there are no runtime dependencies
+npm ci && npm run lint   # ESLint (development-only)
 cp .env.example .env # fill in TELEGRAM_BOT_TOKEN and ALLOWED_USER_ID to run the bot
 npm start
 ```

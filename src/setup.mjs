@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
-import { APP, APP_DIR, DATA_DIR, ENV_PATH, HOME_DIR } from './app.mjs';
+import { APP, DATA_DIR, ENV_PATH, HOME_DIR } from './app.mjs';
 import { getCliLang, tc } from './cli-i18n.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';

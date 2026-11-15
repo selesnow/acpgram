@@ -43,7 +43,7 @@ export async function callApi(method, makeInit, { timeoutMs = TIMEOUT_MS, retrie
       const res = await fetchImpl(`${BASE}/${method}`, { method: 'POST', ...(await makeInit()), signal: signal ? AbortSignal.any([signal, limit]) : limit });
       data = await res.json();
     } catch (e) {
-      if (limit.aborted && !signal?.aborted) throw new Error(`Telegram ${method}: нет ответа за ${Math.round(timeoutMs / 1000)} с`);
+      if (limit.aborted && !signal?.aborted) throw new Error(`Telegram ${method}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, { cause: e });
       throw e;
     }
     if (data.ok) return data.result;

@@ -37,7 +37,9 @@ export function killTree(proc, graceMs = 3000) {
   const signal = (sig) => {
     try {
       process.kill(-proc.pid, sig);
-    } catch {} // группа уже завершилась
+    } catch {
+      /* группа уже завершилась */
+    }
   };
   signal('SIGTERM');
   setTimeout(() => signal('SIGKILL'), graceMs).unref();

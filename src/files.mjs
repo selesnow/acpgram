@@ -42,6 +42,7 @@ export function describeAttachment(msg) {
 /** Безопасное имя файла: без путей, управляющих и запрещённых в Windows символов, зарезервированных имён. */
 export function safeFileName(name, fallback = 'file') {
   let n = basename(String(name ?? '').replace(/\\/g, '/'))
+    // eslint-disable-next-line no-control-regex -- управляющие символы в имени файла нужно заменять намеренно
     .replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
     .replace(/^\.+/, '')
     .replace(/[. ]+$/, '')
@@ -87,7 +88,9 @@ export function cleanupOldFiles(root, maxAgeMs, now = Date.now()) {
           rmSync(p, { recursive: true, force: true });
           removed++;
         }
-      } catch {}
+      } catch {
+        /* файл исчез или занят — пропускаем */
+      }
     }
   }
   return removed;
@@ -208,6 +211,7 @@ export function splitCode(text) {
 
 /** Заглушка на месте метки: туда потом встаёт сам файл (блок rich-сообщения). Символы \u0000 в ответе агента не встречаются. */
 export const filePlaceholder = (i) => `\u0000${i}\u0000`;
+// eslint-disable-next-line no-control-regex -- \u0000 — служебная метка места файла в тексте ответа
 export const FILE_PLACEHOLDER = /\u0000(\d+)\u0000/g;
 
 /**
@@ -279,6 +283,7 @@ export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () =>
   };
   // заглушки, идущие подряд, вместе с пробелами и переводами строк вокруг → блоки через пустую строку;
   // остальной текст (и код в нём) не трогаем
+  // eslint-disable-next-line no-control-regex -- \u0000 — служебная метка места файла в тексте ответа
   const out = String(text ?? '').replace(/[ \t]*\n*(?:\u0000\d+\u0000[ \t]*\n*)+/g, (run) => {
     const blocks = [...run.matchAll(FILE_PLACEHOLDER)].map((m) => place(m[1])).filter(Boolean);
     return blocks.length ? `\n\n${blocks.join('\n\n')}\n\n` : '\n\n';

@@ -1,6 +1,6 @@
 {
   "name": "acpgram",
-  "version": "1.19.5",
+  "version": "1.19.6",
   "type": "module",
   "description": "Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex) over the Agent Client Protocol",
   "license": "MIT",
@@ -47,6 +47,12 @@
     "service:uninstall": "node src/service.mjs uninstall",
     "service:status": "node src/service.mjs status",
     "test": "node --test \"test/**/*.test.mjs\"",
+    "lint": "eslint . --max-warnings 0",
     "prepublishOnly": "npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
   }
 }

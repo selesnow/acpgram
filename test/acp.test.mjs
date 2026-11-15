@@ -111,7 +111,7 @@ test('AcpAgent: тайм-аут запуска не мешает агенту, �
 test('quietStderrFilter: служебный блок (трассировка AttachConsole) пропускается целиком, прочие ошибки — нет', () => {
   const skip = quietStderrFilter(/^\[session\//, { start: /conpty_console_list_agent\.js/, end: /^Node\.js v\d/ });
   const trace = [
-    'C:\npm\node_modules\@lydell\node-pty\conpty_console_list_agent.js:11',
+    'C:\\npm\\node_modules\\@lydell\\node-pty\\conpty_console_list_agent.js:11',
     'var consoleProcessList = getConsoleProcessList(shellPid);',
     '                         ^',
     '',

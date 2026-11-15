@@ -18,7 +18,7 @@
 
 A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI** and **OpenAI Codex**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
 
-- No npm dependencies — plain Node.js 24 (built-in `node:sqlite`, `fetch`).
+- No runtime npm dependencies — plain Node.js 24 (built-in `node:sqlite`, `fetch`); ESLint is used for development only.
 - Windows, Linux and macOS. Tested on Windows Server and Linux (Ubuntu in WSL); macOS uses the same code as Linux.
 - Multi-user: the main admin invites teammates and controls what each of them can do.
 
@@ -219,6 +219,7 @@ New teammates get only the default engine; the admin grants other engines and ca
 
 ```bash
 npm test     # node:test, no dependencies, no Telegram
+npm ci && npm run lint   # ESLint (development-only), warnings are errors
 ```
 
 ```
