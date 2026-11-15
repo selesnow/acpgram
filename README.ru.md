@@ -21,6 +21,14 @@ Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Cl
 
 Бот кроссплатформенный (Windows, Linux, macOS): его можно поставить на любой сервер, ПК или ноутбук, заполнив `.env`. Проверено на Windows Server и Linux (Ubuntu в WSL); на macOS используется тот же код, что и на Linux, но отдельно не проверялся.
 
+## Проверяемые релизы
+
+**Публикуется с npm provenance: точный коммит за каждым релизом можно проверить.** Каждая версия AcpGram собирается из публичного кода в GitHub Actions и подписывается там же, а не загружается вручную. Блок «Provenance» на [странице пакета в npm](https://www.npmjs.com/package/acpgram) ведёт на конкретный коммит, файл workflow и запись в публичном журнале прозрачности.
+
+<p align="center"><img src="https://raw.githubusercontent.com/selesnow/acpgram/main/docs/images/npm-provenance.png" alt="Блок Provenance на странице npm: собрано и подписано в GitHub Actions, с исходным коммитом, файлом сборки и записью в публичном журнале" width="420"></p>
+
+Проверить самому после установки: `npm audit signatures` проверяет подпись реестра и provenance пакета. Файлы GitHub Release тоже подписаны Sigstore (как проверить — в [SECURITY.md](SECURITY.md)). У пакета нет runtime-зависимостей, код проверяет CodeQL, а у проекта есть бейдж OpenSSF Best Practices «passing».
+
 ## Что умеет
 
 - **Стриминг ответа** в черновике сообщения, с кнопкой остановки:

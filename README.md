@@ -25,6 +25,14 @@ A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **An
 
 > The bot's default language is English. It also speaks Russian and Ukrainian: each user gets the language of their Telegram app (`ru`, `uk` or `en`), and `/language` changes it.
 
+## Verified releases
+
+**Published with npm provenance: verify the exact commit behind every release.** Every version of AcpGram is built from the public code in GitHub Actions and signed there; it is never uploaded by hand. The "Provenance" block on the [npm page](https://www.npmjs.com/package/acpgram) links to the exact commit, the workflow file and the public transparency log entry.
+
+<p align="center"><img src="https://raw.githubusercontent.com/selesnow/acpgram/main/docs/images/npm-provenance.png" alt="The Provenance block on the npm page: built and signed on GitHub Actions, with the source commit, the build file and the public ledger entry" width="420"></p>
+
+Check it yourself after installing: `npm audit signatures` verifies the registry signature and the provenance of the package. GitHub Release files are also signed with Sigstore (how to verify: [SECURITY.md](SECURITY.md)). The package has no runtime dependencies, the code is scanned by CodeQL, and the project has the OpenSSF Best Practices "passing" badge.
+
 ## Features
 
 - **Streaming replies** in a Telegram draft with a stop button: the agent's thoughts, the steps it takes (reading files, running commands, searching, editing) and the elapsed time, then the answer itself.
