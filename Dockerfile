@@ -2,7 +2,7 @@
 # Агент видит только смонтированную папку проектов (/projects) — в отличие от установки напрямую,
 # где он работает с правами учётной записи во всей системе.
 # Базовый образ закреплён по digest (воспроизводимая сборка); новый digest предлагает Dependabot.
-FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+FROM node:26-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 
 # Какие движки ставить в образ (через пробел): gemini claude codex agy.
 # Облегчить образ: docker compose build --build-arg ENGINES="gemini claude"
