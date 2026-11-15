@@ -10,6 +10,8 @@
 [![npm version](https://img.shields.io/npm/v/acpgram.svg)](https://www.npmjs.com/package/acpgram)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CodeQL](https://github.com/selesnow/acpgram/actions/workflows/codeql.yml/badge.svg)](https://github.com/selesnow/acpgram/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/selesnow/acpgram/badge)](https://scorecard.dev/viewer/?uri=github.com/selesnow/acpgram)
 
 [English](README.md) · **Русский** · [Сайт](https://alexey-seleznev.pro/acpgram/)
 

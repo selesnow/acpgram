@@ -10,6 +10,8 @@
 [![npm version](https://img.shields.io/npm/v/acpgram.svg)](https://www.npmjs.com/package/acpgram)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CodeQL](https://github.com/selesnow/acpgram/actions/workflows/codeql.yml/badge.svg)](https://github.com/selesnow/acpgram/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/selesnow/acpgram/badge)](https://scorecard.dev/viewer/?uri=github.com/selesnow/acpgram)
 
 **English** · [Русский](README.ru.md) · [Website](https://alexey-seleznev.pro/acpgram/)
 
@@ -19,7 +21,7 @@ A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **An
 - Windows, Linux and macOS. Tested on Windows Server and Linux (Ubuntu in WSL); macOS uses the same code as Linux.
 - Multi-user: the main admin invites teammates and controls what each of them can do.
 
-> The bot's interface is currently in Russian.
+> The bot's default language is English. It also speaks Russian and Ukrainian: each user gets the language of their Telegram app (`ru`, `uk` or `en`), and `/language` changes it.
 
 ## Features
 
