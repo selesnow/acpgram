@@ -54,7 +54,9 @@ export function updateCommand(platform = process.platform, env = process.env) {
   if (platform !== 'win32') return ['sh', ['-c', `f="$(mktemp)" && curl -fsSL ${base}/install.sh -o "$f" && bash "$f"; r=$?; rm -f "$f"; exit $r`]];
   // Windows PowerShell — по полному пути: папки WindowsPowerShell может не быть в PATH, а терминал при этом открыт
   // из меню «Пуск» и работает (так было на ноутбуке: `acpgram update` молча завершался с кодом 1)
-  const root = env.SystemRoot || env.SYSTEMROOT || env.windir || 'C:\\Windows';
+  // путь из окружения попадает в командную строку (в том числе через cmd.exe): допускаем только обычный путь диска
+  // без кавычек, &, |, ^, % и других служебных символов, иначе — стандартный C:\Windows
+  const root = [env.SystemRoot, env.SYSTEMROOT, env.windir].find((r) => r && /^[A-Za-z]:\\[\w .()\\-]*$/.test(r)) || 'C:\\Windows';
   const ps = win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return [existsSync(ps) ? ps : 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${base}/install.ps1 | iex`]];
 }

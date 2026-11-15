@@ -1,7 +1,8 @@
 # Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex) в контейнере.
 # Агент видит только смонтированную папку проектов (/projects) — в отличие от установки напрямую,
 # где он работает с правами учётной записи во всей системе.
-FROM node:24-slim
+# Базовый образ закреплён по digest (воспроизводимая сборка); новый digest предлагает Dependabot.
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 # Какие движки ставить в образ (через пробел): gemini claude codex agy.
 # Облегчить образ: docker compose build --build-arg ENGINES="gemini claude"

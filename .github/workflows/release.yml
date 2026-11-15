@@ -49,6 +49,26 @@ jobs:
           git log -1 --format=%B "$GITHUB_REF_NAME" | grep -v '^Co-Authored-By:' > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --title "AcpGram $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
 
+  # Keyless Sigstore signatures (cosign) for every release file: <file>.sigstore.json. A separate job, so a signing
+  # problem never affects the release itself. Verify with the command in SECURITY.md.
+  sign:
+    name: Sign release assets
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload the signatures to the release
+      id-token: write # keyless signing identity of this workflow
+    steps:
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Sign and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          for f in *; do cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"; done
+          gh release upload "$GITHUB_REF_NAME" ./*.sigstore.json --repo "$GITHUB_REPOSITORY"
+
   installers:
     name: Installer (${{ matrix.os }})
     needs: release

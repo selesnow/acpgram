@@ -11,6 +11,14 @@ updates:
       github-actions:
         patterns: ['*']
 
+  # the base image of the Dockerfile is pinned by digest; this keeps the digest up to date
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: 'docker'
+
   # the package has no npm dependencies today; this starts working as soon as one appears
   - package-ecosystem: npm
     directory: /

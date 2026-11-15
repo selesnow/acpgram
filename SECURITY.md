@@ -28,6 +28,14 @@ security advisory and you are credited, if you wish.
 - The npm package is published from GitHub Actions with **provenance** (Trusted Publishing, no stored npm token),
   so the package can be traced back to the exact commit it was built from.
 - The package has no npm dependencies.
+- Every GitHub Release file is signed with [Sigstore](https://www.sigstore.dev/) (keyless, `<file>.sigstore.json` next to it). To verify a download:
+
+  ```sh
+  cosign verify-blob --bundle acpgram-vX.Y.Z.tar.gz.sigstore.json \
+    --certificate-identity-regexp '^https://github.com/selesnow/acpgram/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    acpgram-vX.Y.Z.tar.gz
+  ```
 
 ## Scope and safety notes
 

@@ -81,10 +81,14 @@ export const envBackupPath = (dataDir = DATA_DIR) => join(dataDir, '.env.bak');
 export function writeEnvFile(values, path = ENV_PATH, backup = envBackupPath()) {
   const text = serializeEnv(values); // сначала проверяем, что всё записывается, — до изменения файлов
   mkdirSync(dirname(path), { recursive: true }); // при установке через npm каталога (~/.acpgram) ещё нет
-  if (existsSync(path)) {
+  // без проверки existsSync перед копированием: между проверкой и копированием файл мог измениться (гонка);
+  // если прежнего .env нет — copyFileSync сообщает ENOENT, и это не ошибка
+  try {
     mkdirSync(dirname(backup), { recursive: true });
     copyFileSync(path, backup);
     chmodSync(backup, 0o600);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
   }
   writeFileSync(path, text, { encoding: 'utf8', mode: 0o600 });
   chmodSync(path, 0o600);
