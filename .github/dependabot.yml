@@ -18,6 +18,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: 'docker'
+    # the base image follows the Node.js version the project targets; a new major version is a deliberate decision
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
 
   # development-only tools (ESLint); the package has no runtime npm dependencies
   - package-ecosystem: npm
