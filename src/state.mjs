@@ -288,6 +288,8 @@ async function startAgent(st, { resume } = {}) {
   const allowed = modeFor(st.userId, engine);
   const a = createAgent(engine, {
     cwd: st.project,
+    // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
+    who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {
       // пока агент запускается, он может «проигрывать» историю возобновлённой сессии — в текущий ответ она не идёт
       if (!a.ready) return;

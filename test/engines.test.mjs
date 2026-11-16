@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_ENGINE, ENGINES, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin,
+  DEFAULT_ENGINE, ENGINES, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin, opencodeConfig, opencodeGoogleKey, parseCatalog, parseOpencodeModels, vendorName,
 } from '../src/engines.mjs';
 import { parseTool } from '../src/tools.mjs';
 
@@ -58,6 +58,7 @@ test('доступность: недоступный движок не выби�
       { engine: ENGINES.claude, ok: false, error: 'not found' },
       { engine: ENGINES.agy, ok: false, timeout: true }, // медленный, но установлен — считаем доступным
       { engine: ENGINES.codex, ok: false, error: 'not found' },
+      { engine: ENGINES.opencode, ok: false, error: 'not found' },
     ]);
     assert.equal(isAvailable('claude'), false);
     assert.equal(isAvailable('agy'), true);
@@ -211,4 +212,129 @@ test('needsLogin: отметка ставится и снимается', () => 
   assert.equal(needsLogin('claude'), false);
   setNeedsLogin('agy', false);
   assert.equal(needsLogin('agy'), false);
+});
+
+// ---------- OpenCode ----------
+
+test('OpenCode: запуск opencode acp, режимы plan / build, без своего «навсегда»', () => {
+  const o = ENGINES.opencode;
+  assert.deepEqual(o.args, ['acp']);
+  assert.equal(o.defaultCommand, 'opencode');
+  assert.equal(engineMode(o, { level: 'read' }), 'plan');
+  assert.equal(engineMode(o, { level: 'normal' }), 'build');
+  assert.equal(engineMode(o, { level: 'full' }), 'build');
+  assert.equal(engineMode(o, { admin: true }), 'build');
+  assert.equal(modeAllowed(o, 'build', 'plan'), false);
+  // «always» у OpenCode живёт в памяти процесса (проверено на 1.19.5) — это «на эту сессию», его оставляем
+  const opts = [{ optionId: 'once', kind: 'allow_once' }, { optionId: 'always', kind: 'allow_always' }, { optionId: 'reject', kind: 'reject_once' }];
+  assert.deepEqual(permissionOptions(o, opts, 'build').map((x) => x.optionId), ['once', 'always', 'reject']);
+});
+
+test('opencodeConfig: права по уровню доступа, неизвестный уровень — чтение', () => {
+  assert.deepEqual(opencodeConfig({ level: 'read' }).permission, { edit: 'deny', bash: 'deny', webfetch: 'ask' });
+  assert.deepEqual(opencodeConfig({ level: 'normal' }).permission, { edit: 'ask', bash: 'ask', webfetch: 'ask' });
+  assert.equal(opencodeConfig({ level: 'full' }).permission.bash, 'allow');
+  assert.equal(opencodeConfig({ admin: true, level: 'read' }).permission.edit, 'allow');
+  assert.equal(opencodeConfig({ level: 'constructor' }).permission.edit, 'deny');
+  assert.equal(opencodeConfig({}).permission.bash, 'deny');
+  const env = ENGINES.opencode.processEnv({ level: 'normal' });
+  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT), { permission: { edit: 'ask', bash: 'ask', webfetch: 'ask' } });
+});
+
+test('opencodeGoogleKey: ключ Google для OpenCode из GEMINI_API_KEY / GOOGLE_API_KEY, свой не перезаписывается', () => {
+  assert.deepEqual(opencodeGoogleKey({ GEMINI_API_KEY: 'g' }), { GOOGLE_GENERATIVE_AI_API_KEY: 'g' });
+  assert.deepEqual(opencodeGoogleKey({ GOOGLE_API_KEY: 'k' }), { GOOGLE_GENERATIVE_AI_API_KEY: 'k' });
+  assert.deepEqual(opencodeGoogleKey({ GEMINI_API_KEY: 'g', GOOGLE_API_KEY: 'k' }), { GOOGLE_GENERATIVE_AI_API_KEY: 'g' });
+  assert.deepEqual(opencodeGoogleKey({ GOOGLE_GENERATIVE_AI_API_KEY: 'own', GEMINI_API_KEY: 'g' }), {});
+  assert.deepEqual(opencodeGoogleKey({}), {});
+});
+
+test('createAgent: переменные движка (processEnv) доходят до процесса агента, без who — не передаются', async () => {
+  const fake = { ...ENGINES.gemini, id: 'fake', label: 'Fake', envVar: 'TEST_FAKE_AGENT_CMD', defaultCommand: process.execPath, args: [FAKE], processEnv: (who) => ({ ACPGRAM_TEST_ENV: `level=${who.level}` }) };
+  for (const [who, want] of [[{ level: 'normal' }, 'level=normal'], [undefined, null]]) {
+    const a = createAgent(fake, { cwd: process.cwd(), ...(who ? { who } : {}) });
+    await a.init(null);
+    const res = await a.prompt('hi');
+    assert.equal(res._meta.env, want);
+    const exited = new Promise((r) => (a.onExit = r));
+    a.close();
+    await exited;
+  }
+});
+
+test('parseOpencodeModels: цена и умение вызывать инструменты из opencode models --verbose', () => {
+  const block = (id, cost, toolcall = true, status = 'active') =>
+    `${id}\n${JSON.stringify({ id, status, ...(cost ? { cost } : {}), capabilities: { toolcall } }, null, 2)}`;
+  const text = [
+    block('opencode/big-pickle', { input: 0, output: 0, cache: { read: 0, write: 0 } }),
+    block('anthropic/claude-haiku-4-5', { input: 1, output: 5 }),
+    block('google/lyria-3-pro-preview', { input: 0, output: 0 }, false),
+    block('openai/old', { input: 1, output: 1 }, true, 'deprecated'),
+    block('x/no-cost', null),
+    'opencode/broken\n{ не JSON',
+  ].join('\r\n');
+  const m = parseOpencodeModels(text);
+  assert.deepEqual(m.get('opencode/big-pickle'), { free: true, tools: true });
+  assert.deepEqual(m.get('anthropic/claude-haiku-4-5'), { free: false, tools: true });
+  assert.equal(m.get('google/lyria-3-pro-preview').tools, false, 'генерация музыки: цена 0, но без инструментов');
+  assert.equal(m.get('openai/old').tools, false, 'устаревшая модель');
+  assert.equal(m.get('x/no-cost').free, false, 'неизвестная цена — не бесплатная');
+  assert.equal(m.has('opencode/broken'), false);
+  assert.equal(parseOpencodeModels('').size, 0);
+});
+
+test('parseCatalog: модели OpenCode с группами провайдеров, пометкой бесплатных и без моделей без инструментов', () => {
+  const res = {
+    configOptions: [
+      {
+        id: 'model',
+        currentValue: 'opencode/big-pickle',
+        options: [
+          { value: 'anthropic/claude-haiku-4-5', name: 'Anthropic/Claude Haiku 4.5' },
+          { value: 'google/lyria-3-pro-preview', name: 'Google/Lyria 3 Pro' },
+          { value: 'opencode/big-pickle', name: 'OpenCode Zen/Big Pickle' },
+        ],
+      },
+      { id: 'mode', currentValue: 'build', options: [{ value: 'build' }, { value: 'plan' }] },
+    ],
+  };
+  const meta = new Map([
+    ['anthropic/claude-haiku-4-5', { free: false, tools: true }],
+    ['google/lyria-3-pro-preview', { free: true, tools: false }],
+    ['opencode/big-pickle', { free: true, tools: true }],
+  ]);
+  const c = parseCatalog(ENGINES.opencode, res, meta);
+  assert.deepEqual(c.models, [
+    { id: 'anthropic/claude-haiku-4-5', name: 'Anthropic/Claude Haiku 4.5', group: 'anthropic', groupLabel: 'Anthropic', short: 'Claude Haiku 4.5' },
+    { id: 'opencode/big-pickle', name: 'OpenCode Zen/Big Pickle', group: 'opencode', groupLabel: 'OpenCode Zen', short: 'Big Pickle', free: true },
+  ]);
+  assert.equal(c.defaultModel, 'opencode/big-pickle');
+  assert.deepEqual(c.efforts, []);
+  // без сведений о моделях — все модели, без пометок
+  assert.equal(parseCatalog(ENGINES.opencode, res).models.length, 3);
+  // у движков без групп модели как раньше
+  const claude = parseCatalog(ENGINES.claude, { configOptions: [{ id: 'model', options: [{ value: 'opus', name: 'Opus' }] }] });
+  assert.deepEqual(claude.models, [{ id: 'opus', name: 'Opus' }]);
+});
+
+test('parseCatalog: у моделей OpenRouter — вендор (sub) и его название из «Вендор: модель»', () => {
+  const res = { configOptions: [{ id: 'model', options: [
+    { value: 'openrouter/anthropic/claude-sonnet-4.5', name: 'OpenRouter/Anthropic: Claude Sonnet 4.5' },
+    { value: 'openrouter/qwen/qwen3-coder:free', name: 'OpenRouter/qwen3-coder' },
+    { value: 'anthropic/claude-haiku-4-5', name: 'Anthropic/Claude Haiku 4.5' },
+    { value: 'openrouter/~openai/gpt-latest', name: 'OpenRouter/GPT Latest' },
+    { value: 'openrouter/z-ai/glm-5', name: 'OpenRouter/GLM 5' },
+  ] }] };
+  const [a, q, h, latest, z] = parseCatalog(ENGINES.opencode, res).models;
+  assert.equal(a.group, 'openrouter');
+  assert.equal(a.sub, 'anthropic');
+  assert.equal(a.subLabel, 'Anthropic');
+  assert.equal(a.short, 'Anthropic: Claude Sonnet 4.5');
+  assert.equal(q.sub, 'qwen');
+  assert.equal(q.subLabel, 'Qwen', 'без «Вендор:» в названии — по id вендора');
+  assert.equal(h.sub, undefined, 'у обычного провайдера вендора нет');
+  assert.equal(latest.sub, 'openai', '«~openai» — псевдоним «последняя версия», тот же вендор');
+  assert.equal(latest.subLabel, 'OpenAI');
+  assert.equal(z.subLabel, 'Z.ai');
+  assert.equal(vendorName('somecorp'), 'Somecorp');
 });

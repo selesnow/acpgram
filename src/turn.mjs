@@ -5,6 +5,7 @@ import { FILE_PLACEHOLDER, attachFiles, buildPromptBlocks, extractSendMarks, out
 import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
+import { SESSION_OPTION_ID, allowOnceOption, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
 import { parseTool } from './tools.mjs';
@@ -51,11 +52,22 @@ async function askPermission(st, params) {
   const engine = engineOf(st);
   const info = parseTool(tc, engine);
   // ни постоянных правил, ни выхода в режим выше уровня доступа пользователя из чата не даём
-  const options = permissionOptions(engine, params.options || [], modeFor(st.userId, engine));
+  const allowed = permissionOptions(engine, params.options || [], modeFor(st.userId, engine));
   const what = info.description || info.title || info.tool;
   const meta = toolMeta(info.tool, info.kind, lang);
   const head = `${meta.icon} ${meta.label}`;
   const dbId = () => db.permissionAsked(st.requestId, tc.toolCallId, info.title || what, params.options);
+
+  // «Разрешить на эту сессию» от бота (permRules.mjs): правила — в процессе агента, который спрашивает
+  const agent = st.agent;
+  const keys = permissionKeys({ kind: info.kind, tool: info.tool, command: info.kind === 'execute' ? tc.rawInput?.command || info.title : null });
+  const once = allowOnceOption(allowed, engine.optionMode);
+  if (once && rulesAllow(agent?.sessionRules, keys)) {
+    db.permissionAnswered(dbId(), once.optionId, 'auto-allowed');
+    log('разрешено правилом сессии', st.userId, keys.join(' '));
+    return { outcome: 'selected', optionId: once.optionId };
+  }
+  const options = withSessionOption(allowed, keys, engine.optionMode);
 
   // разрешать на этом уровне нечего (например, выход из режима плана при доступе «Чтение») — отклоняем сами
   if (!options.some((o) => o.kind.startsWith('allow'))) {
@@ -96,6 +108,9 @@ async function askPermission(st, params) {
     st.perms.set(seq, {
       options, // только показанные варианты
       engine,
+      agent, // процесс агента, в котором запоминается правило «на эту сессию»
+      keys,
+      once,
       title: `${head}: ${what}`,
       dbId: permId,
       messageId: msg.message_id,
@@ -121,7 +136,15 @@ export async function onPermissionCallback(st, cb) {
   if (!opt) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('perm.badOption', lang) }).catch(() => {});
   st.perms.delete(Number(m[1]));
   db.permissionAnswered(p.dbId, opt.optionId, 'selected');
-  p.resolve({ outcome: 'selected', optionId: opt.optionId });
+  if (opt.optionId === SESSION_OPTION_ID) {
+    // вариант бота: агенту — «один раз», правило — в процесс агента (следующие такие же запросы пройдут без вопроса)
+    if (p.agent) {
+      p.agent.sessionRules ??= new Set();
+      for (const k of p.keys) p.agent.sessionRules.add(k);
+      log('правило сессии добавлено', st.userId, p.keys.join(' '));
+    }
+    p.resolve({ outcome: 'selected', optionId: p.once.optionId });
+  } else p.resolve({ outcome: 'selected', optionId: opt.optionId });
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
   const label = resultLabel(p.engine, opt, lang);
   await settlePermissionMessage(p.chatId, p.messageId, label, optionStyle(p.engine, opt), `${label}\n${p.title}`);

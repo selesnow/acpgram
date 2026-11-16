@@ -1,5 +1,5 @@
 // Минимальный клиент Agent Client Protocol (JSON-RPC 2.0, построчный JSON по stdin/stdout)
-// для запуска ACP-агента (Gemini CLI, Claude Code, Antigravity CLI) как подпроцесса. Движки — в engines.mjs.
+// для запуска ACP-агента (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) как подпроцесса. Движки — в engines.mjs.
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
 
@@ -105,17 +105,19 @@ export class AcpAgent {
    * @param {string} o.command         команда запуска агента
    * @param {string[]} [o.args]         аргументы режима ACP
    * @param {string} [o.name]           название агента для логов
+   * @param {Record<string,string>} [o.env]  дополнительные переменные окружения процесса агента (поверх окружения бота)
    * @param {(p:object)=>Promise<object>} [o.onPermission]  обработчик session/request_permission, возвращает outcome
    * @param {(u:object)=>void} [o.onUpdate]                 обработчик session/update
    * @param {(code:number|null)=>void} [o.onExit]
    */
-  constructor({ cwd, command, args = [], name = command, quietStderr = null, quietStderrBlock = null, onPermission, onUpdate, onExit }) {
+  constructor({ cwd, command, args = [], name = command, env = null, quietStderr = null, quietStderrBlock = null, onPermission, onUpdate, onExit }) {
     this.quietStderr = quietStderr; // RegExp служебных строк stderr, которые не пишем в лог бота
     this.quietStderrBlock = quietStderrBlock; // {start, end}: многострочный служебный блок stderr (трассировка), пропускается целиком
     this.cwd = cwd;
     this.name = name;
     this.command = command;
     this.args = args;
+    this.env = env;
     this.onPermission = onPermission;
     this.onUpdate = onUpdate;
     this.onExit = onExit;
@@ -128,7 +130,9 @@ export class AcpAgent {
   }
 
   start() {
-    this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    // без своих переменных процесс наследует окружение бота как есть
+    const env = this.env ? { ...process.env, ...this.env } : undefined;
+    this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], ...(env ? { env } : {}) });
     readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l));
     const skip = quietStderrFilter(this.quietStderr, this.quietStderrBlock);
     readline.createInterface({ input: this.proc.stderr }).on('line', (l) => {

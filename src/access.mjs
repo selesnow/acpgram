@@ -6,7 +6,8 @@
 // - Каталог (список моделей и уровней рассуждений) присылает сам агент в ответе session/new; бот хранит его в settings.
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
-import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
+import { checkCommand } from './acp.mjs';
+import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, engineCommand, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
 import { t } from './i18n.mjs';
 
 const parseJson = (s, fallback) => {
@@ -44,8 +45,8 @@ export function catalogFresh(catalog, version, now = Date.now()) {
  * Сохраняет каталог из ответа session/new чистой сессии (probeCatalog). Пустой список не затирает ранее полученный:
  * агент мог ответить урезанно (сбой, другая модель с другим набором уровней рассуждений).
  */
-export function saveCatalog(engine, res) {
-  const c = parseCatalog(engine, res);
+export function saveCatalog(engine, res, meta = null) {
+  const c = parseCatalog(engine, res, meta);
   const old = getCatalog(engine.id);
   if (!c.models.length && !c.efforts.length) return old;
   const catalog = {
@@ -69,6 +70,21 @@ export function killProbes() {
   for (const a of probeAgents) a.close();
   probeAgents.clear();
 }
+/**
+ * Сведения о моделях движка (цена, умеет ли вызывать инструменты) отдельной командой — у OpenCode `opencode models --verbose`.
+ * Не получилось — null: каталог сохраняется без пометок, как раньше.
+ */
+async function modelMeta(engine) {
+  if (!engine.modelMeta) return null;
+  const r = await checkCommand(engineCommand(engine), engine.modelMeta.args, 60_000);
+  if (!r.ok) {
+    log(`${engine.label}: сведения о моделях не получены — ${r.error}`);
+    return null;
+  }
+  const meta = engine.modelMeta.parse(r.version); // checkCommand возвращает весь вывод команды в version
+  return meta.size ? meta : null;
+}
+
 const probeFailedAt = new Map(); // движок → время неудачи (пауза перед повтором)
 const PROBE_RETRY_MS = 5 * 60_000;
 
@@ -86,7 +102,7 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
       const res = await a.init(null, { timeoutMs });
       probeFailedAt.delete(engine.id);
       setNeedsLogin(engine.id, false);
-      return saveCatalog(engine, res);
+      return saveCatalog(engine, res, await modelMeta(engine));
     } catch (e) {
       probeFailedAt.set(engine.id, Date.now());
       setNeedsLogin(engine.id, isAuthError(e)); // нужен вход или ключ API — движок виден, но с предупреждением в /engine
@@ -196,6 +212,23 @@ const choiceKey = (userId, engineId, kind) => `${kind}:${userId}:${engineId}`;
 
 /** Запоминает выбор модели или уровня рассуждений; null — «Авто» (как у агента по умолчанию). */
 export const saveChoice = (userId, engineId, kind, value) => db.setSetting(choiceKey(userId, engineId, kind), value ?? null);
+
+/** Сколько недавних моделей показывать кнопками «🕘» на экране /model. */
+export const RECENT_MODELS = 4;
+const recentKey = (userId, engineId) => `recentModels:${userId}:${engineId}`;
+
+/** Недавно выбранные модели пользователя в движке (свежие первыми). Модели, ставшие недоступными, отсеивает экран /model. */
+export function recentModels(userId, engineId) {
+  const list = parseJson(db.getSetting(recentKey(userId, engineId)), []);
+  return Array.isArray(list) ? list.filter((x) => typeof x === 'string').slice(0, RECENT_MODELS) : [];
+}
+
+/** Запоминает выбранную модель в начале списка недавних (без повторов, не больше RECENT_MODELS). */
+export function pushRecentModel(userId, engineId, modelId) {
+  const list = [modelId, ...recentModels(userId, engineId).filter((x) => x !== modelId)].slice(0, RECENT_MODELS);
+  db.setSetting(recentKey(userId, engineId), JSON.stringify(list));
+  return list;
+}
 
 /**
  * Модель и уровень рассуждений, с которыми пользователь должен работать в движке.

@@ -25,7 +25,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         method: 'session/update',
         params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `pids ${process.pid} ${child.pid}` } } },
       });
-      return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', _meta: { blocks: msg.params.prompt.map((b) => b.type) } } });
+      // env — переменная, которую движок передаёт своему процессу (processEnv): проверка, что окружение доходит до агента
+      return send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', _meta: { blocks: msg.params.prompt.map((b) => b.type), env: process.env.ACPGRAM_TEST_ENV ?? null } } });
     default:
       if (msg.id !== undefined) send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'nope' } });
   }

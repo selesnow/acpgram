@@ -17,7 +17,7 @@
 
 **English** · [Русский](README.ru.md) · [Website](https://alexey-seleznev.pro/acpgram/)
 
-A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI** and **OpenAI Codex**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
+A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI**, **OpenAI Codex** and **OpenCode**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
 
 - No runtime npm dependencies — plain Node.js 24 (built-in `node:sqlite`, `fetch`); ESLint is used for development only.
 - Windows, Linux and macOS. Tested on Windows Server and Linux (Ubuntu in WSL); macOS uses the same code as Linux.
@@ -36,12 +36,12 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 ## Features
 
 - **Streaming replies** in a Telegram draft with a stop button: the agent's thoughts, the steps it takes (reading files, running commands, searching, editing) and the elapsed time, then the answer itself.
-- **Rich final answer** — headings, lists, tables, code blocks — with a collapsible "work log" of every step and a footer showing the engine, the actual model, reasoning level, tokens, cost (Claude Code) and time.
-- **Four engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI and Codex; the default engine is set in `.env`.
-- **Model and reasoning level** — `/model` lists the models the agent itself reports (plus `effort` for Claude Code and `thought_level` for Antigravity); the choice is remembered per user and per engine.
-- **Permission requests as buttons** — "Allow", "Allow for this session", "Reject". Options that would persist a rule forever or raise the session above the user's access level are never shown.
+- **Rich final answer** — headings, lists, tables, code blocks — with a collapsible "work log" of every step and a footer showing the engine, the actual model, reasoning level, tokens, cost (Claude Code and OpenCode) and time.
+- **Five engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI, Codex and OpenCode; the default engine is set in `.env`.
+- **Model and reasoning level** — `/model` lists the models the agent itself reports (plus `effort` for Claude Code and `thought_level` for Antigravity); the choice is remembered per user and per engine. OpenCode reports hundreds of models (every connected provider), so `/model` first offers groups — "🆓 Free" and the providers — and pages through 20 models at a time; models that cannot call tools (image or music generation) are hidden. Aggregators like OpenRouter (hundreds of models) are split further by model vendor — OpenAI, Anthropic, Qwen… (vendors with 1–2 models go to "Other"). The quickest way is search: `/model sonnet` lists every matching model as buttons; the top of `/model` also has "🕘" buttons with your recently chosen models.
+- **Permission requests as buttons** — "Allow", "Allow for this session", "Reject". Options that would persist a rule forever or raise the session above the user's access level are never shown. "Allow for this session" is available in every engine: when the agent has no such option of its own (Claude Code), the bot adds it and keeps the rule for as long as the agent process lives (until `/new`, `/close`, the idle timeout or a bot restart). File edits are allowed as a whole, commands by program name (allowing `git status` lets every `git …` through; every part of a compound command must be allowed); commands run through a shell wrapper (`bash -c`, `powershell`, `cmd /c`, `sudo`), with substitutions or writing to a file (`>`) match only exactly.
 - **Files and images** — send the bot a photo or a file (text, PDF, spreadsheet, etc., up to 20 MB); the caption becomes the request. The file is saved to `<data dir>/uploads/<user id>/` and the agent gets its path and reads it with its own tools. An album of several photos or files is handled as one request. `.zip`, `.tar`, `.tar.gz` and `.tgz` archives are unpacked next to the file (`…_unpacked`, at most 500 files and 100 MB; unsafe paths and links are skipped) and the agent gets the file list; `.7z` and `.rar` stay a plain file; images are also passed as an `image` block when the agent supports it. In the other direction the agent can create a file and send it to the chat: it saves the file to `<data dir>/outbox/<user id>/` (or the project folder) and puts a `[[send:path]]` marker in its reply. The file appears right inside the reply, where the marker was: JPEG and PNG as an image, everything else as a document. If Telegram rejects such a message or the files together exceed 45 MB, they arrive as separate messages after the reply. A marker inside code (backticks or a code block) is ignored. Only files from these two folders are sent, never secrets (`.env`, the bot's database and logs, `.git`). Files are kept for 7 days (`FILES_KEEP_DAYS`).
-- **Dialogs mode (topics)** — if topics in private chats are turned on for the bot (@BotFather), each topic of the chat is a separate dialog with the agent, with its own project, engine and history. You can work in several topics at once and come back to a topic later to continue where you left off: the agent session resumes by itself. `/new` creates a new topic, and the agent names it after the first answer (with a short project name in front); General works as a regular dialog, and `/project` there shows the dialogs of the chosen project as buttons that open the topic. A topic stays in its own project. Everyone picks the mode with `/topics`: "Dialogs" or "One chat". A teammate runs up to `MAX_AGENTS_PER_USER` agents at once (2), the admin up to `ADMIN_MAX_AGENTS` (4); when there is no room, the user's own oldest idle agent is unloaded, and that dialog continues when the user comes back to it.
+- **Dialogs mode (topics)** — if topics in private chats are turned on for the bot (@BotFather), each topic of the chat is a separate dialog with the agent, with its own project, engine and history. You can work in several topics at once and come back to a topic later to continue where you left off: the agent session resumes by itself. `/new` creates a new topic, and the agent names it after the first answer (with a short project name in front); General works as a regular dialog, and `/project` there shows the dialogs of the chosen project as buttons that open the topic. A command sent from the chat list rather than from inside a topic (Telegram creates a new topic for such a message by itself) runs in General, and the empty topic is deleted. A topic stays in its own project. Everyone picks the mode with `/topics`: "Dialogs" or "One chat". A teammate runs up to `MAX_AGENTS_PER_USER` agents at once (2), the admin up to `ADMIN_MAX_AGENTS` (4); when there is no room, the user's own oldest idle agent is unloaded, and that dialog continues when the user comes back to it.
 - **Language** — the bot talks to each user in their Telegram language (`ru`, `uk` or `en`; any other falls back to `DEFAULT_LANG`, English by default). `/language` changes it and takes priority over the Telegram language. The `acpgram` terminal commands (setup wizard, service, update, help) speak the system language: Russian, Ukrainian, otherwise English; on Windows the system UI language is used, not the regional format.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
 - **Sessions** — `/sessions` resumes a previous conversation (in the engine it was created in), even after a restart; `/new` starts fresh; `/close` unloads the agent process.
@@ -55,6 +55,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini --acp` | `npm i -g @google/gemini-cli` | `GEMINI_API_KEY` or Gemini CLI login |
 | [Claude Code](https://www.anthropic.com/claude-code) | `claude-agent-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)) | `npm i -g @agentclientprotocol/claude-agent-acp` | `ANTHROPIC_API_KEY` or Claude Code login |
 | [Antigravity CLI](https://antigravity.google/docs/cli/acp/) 1.5+ | `agy acp` | see Antigravity docs | Google sign-in once: `agy acp --login` |
+| [OpenCode](https://opencode.ai) | `opencode acp` | `npm i -g opencode-ai` | provider keys in the bot environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) or `opencode auth login`; free OpenCode Zen models need no key (they may use requests for training — keep secrets out) |
 | [OpenAI Codex](https://github.com/openai/codex) | `codex-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)) | `npm i -g @agentclientprotocol/codex-acp` (Codex CLI required) | `OPENAI_API_KEY` or `codex login`; on Windows `read-only`/`workspace-write` need a working Codex sandbox |
 
 Only the default engine (`DEFAULT_ENGINE`, Gemini CLI unless set) is required; the others are optional — engines that are not installed are simply not offered.
@@ -132,7 +133,7 @@ The **setup wizard** (`acpgram setup` / `npm run setup`, safe to re-run — curr
 1. bot token — checked right away with `getMe`;
 2. main admin — just send any message to your bot, the wizard picks up your Telegram ID;
 3. projects root — optional (see `PROJECTS_ROOT` below);
-4. engines — finds installed Gemini CLI, Claude Code and Antigravity CLI, stores their full paths (so they are found under a service too), asks for the default engine;
+4. engines — finds installed Gemini CLI, Claude Code, Antigravity CLI, Codex and OpenCode, stores their full paths (so they are found under a service too), asks for the default engine — OpenCode is suggested first (works right away, no keys, on free models), then Gemini CLI; a re-run suggests the engine already chosen. For OpenCode the wizard asks whether to add provider keys now (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral) or shows the path to `.env` to add them later. If no engine is installed at all, the wizard offers to install OpenCode right away (`npm i -g opencode-ai` with the same Node installation), so the bot works without a single key;
 5. API keys — optional; the token, keys and passwords are typed hidden;
 6. writes `.env` (owner-only permissions; the previous one goes to `data/.env.bak`), creates the database and sends you a test message;
 7. offers to install the bot as a service.
@@ -160,11 +161,11 @@ cp .env.example .env     # set TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, engine API k
 docker compose up -d --build
 ```
 
-In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all four engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge) and Antigravity CLI. To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
+In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all five engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge), Antigravity CLI and OpenCode (`opencode-ai`). To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
 
-- Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY` (all from `.env`).
+- Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY`; OpenCode - any of these keys (models of those providers) plus free models without a key (all from `.env`).
 - Antigravity CLI has no API keys: log in once with your Google account (a link and a code, no browser needed on the server): `docker compose exec -it bot agy acp --login`. The login is kept in the `gemini-home` volume. The build fails if Antigravity cannot be installed or lacks the `acp` subcommand (1.5+) - then drop `agy` from `ENGINES`.
-- Volumes: `bot-data`, `gemini-home`, `claude-home`, `codex-home` survive container re-creation; `docker compose down -v` removes them.
+- Volumes: `bot-data`, `gemini-home`, `claude-home`, `codex-home`, `opencode-home` survive container re-creation; `docker compose down -v` removes them.
 - An engine that starts but is not authenticated is shown as "login needed" in `/engine`.
 
 ## Bot commands
@@ -173,8 +174,8 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 |---|---|---|
 | `/start` | everyone | welcome screen: engine, model, access level, project |
 | `/project [name or path]` | everyone | choose the working folder |
-| `/engine [gemini, claude, agy, codex]` | everyone | choose the engine |
-| `/model` | everyone | choose the model and reasoning level |
+| `/engine [gemini, claude, agy, codex, opencode]` | everyone | choose the engine |
+| `/model [name]` | everyone | choose the model and reasoning level; with a name — search for a model (`/model sonnet`) |
 | `/new` | everyone | new session |
 | `/sessions` | everyone | resume a previous session in this project |
 | `/stop` | everyone | stop the running request |
@@ -187,12 +188,14 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 
 The main admin is set by `ALLOWED_USER_ID`. Everyone else gets access through an invite link or by asking (the request goes to the admin with buttons).
 
-| Level | Gemini CLI | Claude Code | Antigravity CLI | Codex | Meaning |
-|---|---|---|---|---|---|
-| Read | `plan` | `plan` | `plan` | `read-only` | the agent only reads and analyzes |
-| Normal | `default` | `default` | `default` | `workspace-write` | permission requests go to the user |
-| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | edits without confirmation (Claude Code: no confirmations at all) |
-| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE` |
+| Level | Gemini CLI | Claude Code | Antigravity CLI | Codex | OpenCode | Meaning |
+|---|---|---|---|---|---|---|
+| Read | `plan` | `plan` | `plan` | `read-only` | `plan` | the agent only reads and analyzes |
+| Normal | `default` | `default` | `default` | `workspace-write` | `build` | permission requests go to the user |
+| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | edits without confirmation (Claude Code: no confirmations at all) |
+| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE` |
+
+OpenCode has only two modes (`plan` and `build`); what the agent may do is set by a permission config the bot passes to the agent process in `OPENCODE_CONFIG_CONTENT`: Read — edits and commands are denied (the model does not even see them), page fetches need confirmation; Normal — edits, commands and page fetches need confirmation; Full and admin — everything without confirmation, including folders outside the project.
 
 New teammates get only the default engine; the admin grants other engines and can restrict models per user and per engine. At most `MAX_AGENTS` (3) teammate agents run at once across all engines (the admin is not counted); idle sessions close after `IDLE_MINUTES` (30).
 
@@ -205,13 +208,14 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `TELEGRAM_BOT_TOKEN` | yes | bot token |
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
-| `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy` or `codex`; the bot does not start if this engine is not installed |
+| `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex` or `opencode`; the bot does not start if this engine is not installed |
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
 | `ACPGRAM_LANG` | no | language of the `acpgram` terminal commands: `ru`, `uk` or `en`. Usually not needed: the language comes from the system (for Docker and CI, where the system has none) |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
-| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
-| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE` | no | admin session mode per engine |
+| `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY` | no | provider keys for OpenCode: each adds a group of models to `/model` (OpenRouter gives hundreds of models from different providers with one key). Other OpenCode providers work too with their own variables (`XAI_API_KEY`, `FIREWORKS_API_KEY`, etc.) |
+| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND`, `OPENCODE_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
+| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE` | no | admin session mode per engine |
 | `MAX_AGENTS` | no | concurrent teammate agents (3) |
 | `MAX_AGENTS_PER_USER` | no | concurrent agents of one teammate across topics (2) |
 | `ADMIN_MAX_AGENTS` | no | the same for the admin (4) |

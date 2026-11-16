@@ -1,4 +1,4 @@
-// Команда /engine: выбор движка (Gemini CLI, Claude Code, Antigravity CLI). Выбор запоминается для пользователя.
+// Команда /engine: выбор движка (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode). Выбор запоминается для пользователя.
 import { langOf, log, say } from './ctx.mjs';
 import { canUseEngine, grantedEngines, userEngines } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, isAvailable, needsLogin } from './engines.mjs';
@@ -7,7 +7,7 @@ import { endAgent, engineOf, isAdmin, saveEngine } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { engineMenu } from './ui.mjs';
 
-/** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity», «codex». */
+/** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity», «codex», «opencode». */
 export const findEngine = (q) => {
   const s = q.trim().toLowerCase();
   return Object.values(ENGINES).find((e) => [e.id, e.short.toLowerCase(), e.label.toLowerCase()].includes(s)) ?? null;

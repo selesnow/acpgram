@@ -45,10 +45,35 @@ const LAYOUT = [
   ['CLAUDE_COMMAND', null],
   ['AGY_COMMAND', null],
   ['CODEX_COMMAND', null],
+  ['OPENCODE_COMMAND', null],
   ['GEMINI_API_KEY', 'env.c.keys'],
   ['ANTHROPIC_API_KEY', null],
   ['OPENAI_API_KEY', null],
+  ['OPENROUTER_API_KEY', null],
+  ['GROQ_API_KEY', null],
+  ['DEEPSEEK_API_KEY', null],
+  ['MISTRAL_API_KEY', null],
 ];
+
+/**
+ * Ключи провайдеров для OpenCode (имена переменных — как в справочнике провайдеров OpenCode, models.dev).
+ * Каждый ключ добавляет модели своего провайдера — отдельной группой в /model.
+ */
+export const OPENCODE_KEYS = [
+  ['GEMINI_API_KEY', 'Google Gemini'],
+  ['ANTHROPIC_API_KEY', 'Anthropic Claude'],
+  ['OPENAI_API_KEY', 'OpenAI'],
+  ['OPENROUTER_API_KEY', 'OpenRouter'],
+  ['GROQ_API_KEY', 'Groq'],
+  ['DEEPSEEK_API_KEY', 'DeepSeek'],
+  ['MISTRAL_API_KEY', 'Mistral'],
+];
+
+/** Ключи для OpenCode, которые мастер ещё не спросил: ключи Gemini, Claude Code и Codex уже спрошены, если те установлены. */
+export function opencodeKeysToAsk(available) {
+  const askedFor = { GEMINI_API_KEY: 'gemini', ANTHROPIC_API_KEY: 'claude', OPENAI_API_KEY: 'codex' };
+  return OPENCODE_KEYS.filter(([name]) => !available.includes(askedFor[name]));
+}
 
 /**
  * Текст .env: основные переменные по порядку с комментариями, затем остальные ранее заданные (не теряем ручные настройки).
@@ -131,6 +156,20 @@ async function api(token, method, body = {}) {
   return data.result;
 }
 
+/** Предпочтение мастера для движка по умолчанию: OpenCode работает сразу, без ключей (бесплатные модели), затем остальные. */
+const DEFAULT_ENGINE_ORDER = ['opencode', 'gemini', 'claude', 'codex', 'agy'];
+
+/**
+ * Движок, который мастер предлагает по умолчанию: уже выбранный (повторный запуск не меняет настройку), иначе первый
+ * установленный по DEFAULT_ENGINE_ORDER, иначе первый установленный.
+ * @param {string[]} available установленные движки
+ * @param {string} [current] DEFAULT_ENGINE из .env
+ */
+export function suggestDefaultEngine(available, current) {
+  if (current && available.includes(current)) return current;
+  return DEFAULT_ENGINE_ORDER.find((id) => available.includes(id)) ?? available[0] ?? null;
+}
+
 /** Автор первого личного сообщения боту (не бота) из списка обновлений, или null. */
 export function pickAdmin(updates) {
   for (const u of updates ?? []) {
@@ -169,6 +208,38 @@ export function resolveCommandPath(cmd) {
   const r = spawnSync('sh', ['-c', `command -v "${cmd.replace(/"/g, '')}"`], { encoding: 'utf8' });
   if (r.status !== 0) return null;
   return r.stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null;
+}
+
+/**
+ * npm той же установки Node, что и мастер (у установщика может быть свой Node, которого нет в PATH): [команда, аргументы].
+ * Если npm-cli.js рядом с node не найден — npm из PATH.
+ */
+export function npmCommand(execPath = process.execPath, platform = process.platform, exists = existsSync) {
+  const dir = dirname(execPath);
+  const cli = platform === 'win32' ? join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js') : join(dir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  return exists(cli) ? [execPath, [cli]] : [platform === 'win32' ? 'npm.cmd' : 'npm', []];
+}
+
+/** Папка, куда `npm i -g` кладёт команды: на Windows — сама папка prefix, иначе prefix/bin. */
+export const globalBinDir = (prefix, platform = process.platform) => (platform === 'win32' ? prefix : join(prefix, 'bin'));
+
+/** Запуск npm: свой npm-cli.js — через node без оболочки, npm из PATH — через оболочку (на Windows это .cmd). */
+function runNpm(args, opts = {}) {
+  const [cmd, base] = npmCommand();
+  if (base.length) return spawnSync(cmd, [...base, ...args], opts);
+  return spawnSync([cmd, ...args].join(' '), { ...opts, shell: true });
+}
+
+/**
+ * Ставит OpenCode (`npm i -g opencode-ai`) — движок, который работает сразу, без ключей, на бесплатных моделях.
+ * Возвращает полный путь к команде opencode или null, если установить не удалось.
+ */
+function installOpencode() {
+  const r = runNpm(['install', '-g', 'opencode-ai'], { stdio: 'inherit' });
+  if (r.status !== 0) return null;
+  const prefix = runNpm(['prefix', '-g'], { encoding: 'utf8' }).stdout?.trim();
+  const full = prefix ? join(globalBinDir(prefix), IS_WIN ? 'opencode.cmd' : 'opencode') : null;
+  return full && existsSync(full) ? full : resolveCommandPath('opencode');
 }
 
 // ---------- диалог (prompt.mjs) ----------
@@ -283,9 +354,20 @@ export async function runSetup({ fromStart = false } = {}) {
         warn(tc('setup.engineOld', { label: e.label, error: c.error }));
       } else console.log(tc('setup.engineMissing', { label: e.label, install: e.install }));
     }
+    // ни одного движка: предлагаем поставить OpenCode — бот заработает сразу, без ключей (бесплатные модели)
+    if (!available.length && (await p.yes(tc('setup.opencodeOffer')))) {
+      console.log(tc('setup.opencodeInstalling'));
+      const full = installOpencode();
+      const [c] = full ? await checkEngines([{ ...ENGINES.opencode, defaultCommand: full, envVar: '__SETUP_NONE__' }], 60_000) : [];
+      if (c?.ok || c?.timeout) {
+        available.push('opencode');
+        env.OPENCODE_COMMAND = full;
+        ok(tc('setup.engineOk', { label: ENGINES.opencode.label, version: c.version ?? '', path: full }));
+      } else warn(tc('setup.opencodeFail', { install: ENGINES.opencode.install }));
+    }
     if (!available.length) warn(tc('setup.noEngine'));
     else {
-      const def = available.includes(env.DEFAULT_ENGINE) ? env.DEFAULT_ENGINE : available.includes('gemini') ? 'gemini' : available[0];
+      const def = suggestDefaultEngine(available, env.DEFAULT_ENGINE);
       let choice = available.length === 1 ? available[0] : await p.ask(tc('setup.engineAsk', { list: available.join(' / ') }), def);
       if (!available.includes(choice)) choice = def;
       env.DEFAULT_ENGINE = choice;
@@ -304,6 +386,13 @@ export async function runSetup({ fromStart = false } = {}) {
     if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
     if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', tc('setup.keyClaude'));
     if (available.includes('codex')) await askKey('OPENAI_API_KEY', tc('setup.keyCodex'));
+    // OpenCode работает с моделями тех провайдеров, чьи ключи есть в окружении: ключи — сейчас или позже в .env
+    if (available.includes('opencode')) {
+      console.log(tc('setup.opencodeNote'));
+      const keys = opencodeKeysToAsk(available);
+      if (await p.yes(tc('setup.opencodeKeysAsk'), false)) for (const [name, label] of keys) await askKey(name, ` — ${label}`);
+      else console.log(tc('setup.opencodeKeysLater', { path: ENV_PATH, list: keys.map(([name]) => name).join(', ') }));
+    }
     if (available.includes('agy')) console.log(tc('setup.agyNote'));
 
     // 6. запись

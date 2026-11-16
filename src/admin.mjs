@@ -131,6 +131,9 @@ function userCard(u) {
 }
 
 /** Все кнопки adm:* — только от главного администратора (проверяется в bot.mjs). */
+/** Открытая администратором группа и страница моделей сотрудника в движке (`${userId}:${движок}` → {group, page}). */
+const grantsPage = new Map();
+
 export async function onAdminCallback(cb) {
   const [, action, a, b] = cb.data.split(':');
   const al = adminLang();
@@ -244,16 +247,28 @@ export async function onAdminCallback(cb) {
       engine: ENGINES[eid],
       models: getCatalog(eid)?.models ?? [],
       allowed: modelRestriction(id, eid) ? allowedModels(id, eid).map((m) => m.id) : null,
+      // открытая группа моделей (OpenCode): после переключения модели остаёмся на той же странице
+      ...(grantsPage.get(`${id}:${eid}`) ?? {}),
     });
   if (action === 'mm') {
     await ack();
     const v = overview();
     return edit(v.text, v.markup);
   }
-  if (action === 'me' || action === 'mt' || action === 'ma') {
+  if (action === 'me' || action === 'mt' || action === 'ma' || action === 'mg' || action === 'ms') {
     if (!grantedEngines(id).includes(b)) return ack(t('adm.ackNoEngine', al));
     const models = getCatalog(b)?.models ?? [];
     if (!models.length) return ack(t('adm.ackNoCatalog', al));
+    if (action === 'me') grantsPage.delete(`${id}:${b}`); // к списку групп
+    // группа (adm:mg:<id>:<движок>:<группа>:<стр>) или вендор в ней (adm:ms:<id>:<движок>:<группа>:<вендор>:<стр>)
+    if (action === 'mg' || action === 'ms') {
+      const parts = cb.data.split(':');
+      const [group, sub, page] = action === 'mg' ? [parts[4], null, parts[5]] : [parts[4], parts[5], parts[6]];
+      grantsPage.set(`${id}:${b}`, { group, sub, page: Number(page) || 0 });
+      await ack();
+      const v = engineModels(b);
+      return edit(v.text, v.markup);
+    }
     if (action === 'mt') {
       // id модели (или #номер для длинных id); модели нет в текущем каталоге — список изменился, показываем заново
       const key = cb.data.split(':').slice(4).join(':');

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { plural, t } from '../src/i18n.mjs';
 import { fixTables, mediaBlock, mediaIdsOf, richToPlain, splitRich, stripMedia } from '../src/telegram.mjs';
-import { ANIM, activeSessionsView, composeDraft, engineMenu, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, skillName, startView, stepLine } from '../src/ui.mjs';
+import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, engineMenu, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
 
 const step = (o) => ({ toolCallId: 'x', tool: 'read_file', kind: 'read', title: 'src/a.mjs', description: '', status: null, ...o });
 const RU = { lang: 'ru' };
@@ -219,4 +219,176 @@ test('lastThoughtTitle: заголовок мыслей по фрагмента�
   assert.equal(thought, 'Запускаю тесты');
   assert.equal(buf, 'ещё текст **Запускаю тесты** и дальше');
   assert.deepEqual(lastThoughtTitle('без заголовка\nхвост'), { title: null, rest: 'хвост' });
+});
+
+// ---------- группы моделей (OpenCode) ----------
+
+const OC = { id: 'opencode', label: 'OpenCode' };
+const ocModels = () => [
+  { id: 'anthropic/claude-haiku-4-5', name: 'Anthropic/Claude Haiku 4.5', group: 'anthropic', groupLabel: 'Anthropic', short: 'Claude Haiku 4.5' },
+  ...Array.from({ length: 25 }, (_, i) => ({ id: `google/m${i}`, name: `Google/M${i}`, group: 'google', groupLabel: 'Google', short: `M${i}`, ...(i === 0 ? { free: true } : {}) })),
+  { id: 'opencode/big-pickle', name: 'OpenCode Zen/Big Pickle', group: 'opencode', groupLabel: 'OpenCode Zen', short: 'Big Pickle', free: true },
+];
+const buttons = (markup) => markup.inline_keyboard.flat();
+
+test('modelGroupsOf: бесплатные первыми, затем провайдеры; без групп — пусто', () => {
+  assert.deepEqual(modelGroupsOf(ocModels()), [
+    { id: FREE_GROUP, label: null, count: 2 },
+    { id: 'anthropic', label: 'Anthropic', count: 1 },
+    { id: 'google', label: 'Google', count: 25 },
+    { id: 'opencode', label: 'OpenCode Zen', count: 1 },
+  ]);
+  assert.deepEqual(modelGroupsOf([{ id: 'opus', name: 'Opus' }]), []);
+});
+
+test('modelMenu: у OpenCode — кнопки групп с количеством, группа текущей модели отмечена', () => {
+  const v = modelMenu({ engine: OC, models: ocModels(), model: 'anthropic/claude-haiku-4-5', effort: null, ...RU });
+  const b = buttons(v.markup);
+  assert.deepEqual(b.map((x) => x.text), ['Авто', '🆓 Бесплатные (2)', '✓ Anthropic (1)', 'Google (25)', 'OpenCode Zen (1)']);
+  assert.equal(b[1].callback_data, `mdl:opencode:g:${FREE_GROUP}:0`);
+  assert.match(v.text, /Сейчас: Anthropic\/Claude Haiku 4\.5/);
+  assert.match(v.text, /Выберите группу/);
+  // у движков без групп — список моделей, как раньше
+  const flat = modelMenu({ engine: { id: 'claude', label: 'Claude Code' }, models: [{ id: 'opus', name: 'Opus' }], model: null, effort: null, ...RU });
+  assert.deepEqual(buttons(flat.markup).map((x) => x.callback_data), ['mdl:claude:m:~', 'mdl:claude:m:opus']);
+});
+
+test('modelGroupMenu: страницы по MODEL_PAGE, короткие названия, номер модели — во всём списке', () => {
+  const models = ocModels();
+  const p0 = modelGroupMenu({ engine: OC, models, group: 'google', page: 0, model: 'google/m1', ...RU });
+  const b0 = buttons(p0.markup);
+  const modelBtns = b0.filter((x) => x.callback_data.startsWith('mdl:opencode:m:'));
+  assert.equal(modelBtns.length, MODEL_PAGE);
+  assert.equal(modelBtns[0].text, '🆓 M0', 'бесплатная в группе провайдера — с пометкой');
+  assert.equal(modelBtns[1].text, '✓ M1');
+  assert.ok(b0.some((x) => x.text === '1/2') && b0.some((x) => x.callback_data === 'mdl:opencode:g:google:1'));
+  assert.equal(b0.at(-1).callback_data, 'mdl:opencode:g:~');
+  const p1 = buttons(modelGroupMenu({ engine: OC, models, group: 'google', page: 1, model: null, ...RU }).markup);
+  assert.equal(p1.filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).length, 5);
+  assert.ok(p1.some((x) => x.callback_data === 'mdl:opencode:g:google:0'));
+  // страница за пределами — последняя
+  assert.ok(buttons(modelGroupMenu({ engine: OC, models, group: 'google', page: 99, model: null, ...RU }).markup).some((x) => x.text === '2/2'));
+  // бесплатные: полное название с провайдером и предупреждение о данных
+  const free = modelGroupMenu({ engine: OC, models, group: FREE_GROUP, model: null, ...RU });
+  assert.deepEqual(buttons(free.markup).filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).map((x) => x.text), ['Google/M0', 'OpenCode Zen/Big Pickle']);
+  assert.match(free.text, /могут использовать запросы для обучения/);
+  // длинный id — номер модели во всём списке, а не на странице
+  const long = [...models, { id: `google/${'x'.repeat(60)}`, name: 'Google/X', group: 'google', groupLabel: 'Google', short: 'X' }];
+  const p = buttons(modelGroupMenu({ engine: OC, models: long, group: 'google', page: 1, model: null, ...RU }).markup);
+  assert.ok(p.some((x) => x.callback_data === `mdl:opencode:m:#${long.length - 1}`));
+});
+
+test('modelGrantsView: у OpenCode — группы «разрешено/всего», внутри группы — переключатели постранично', () => {
+  const models = ocModels();
+  const top = modelGrantsView({ userId: 7, name: 'Ник', engine: OC, models, allowed: ['opencode/big-pickle', 'google/m0'], ...RU });
+  assert.deepEqual(buttons(top.markup).map((x) => x.text).slice(0, 4), ['🆓 Бесплатные 2/2', 'Anthropic 0/1', 'Google 1/25', 'OpenCode Zen 1/1']);
+  assert.equal(buttons(top.markup)[2].callback_data, 'adm:mg:7:opencode:google:0');
+  assert.equal(buttons(top.markup).at(-1).callback_data, 'adm:mm:7');
+  const g = modelGrantsView({ userId: 7, name: 'Ник', engine: OC, models, allowed: null, group: 'google', page: 1, ...RU });
+  const gb = buttons(g.markup);
+  assert.equal(gb.filter((x) => x.callback_data.startsWith('adm:mt:')).length, 5);
+  assert.equal(gb.find((x) => x.callback_data.startsWith('adm:mt:')).text, '✅ M20');
+  assert.ok(gb.some((x) => x.callback_data === 'adm:mg:7:opencode:google:0'));
+  assert.equal(gb.at(-1).callback_data, 'adm:me:7:opencode', 'из группы — назад к группам');
+  // неизвестная группа (каталог обновился) — снова список групп
+  assert.ok(buttons(modelGrantsView({ userId: 7, name: 'Ник', engine: OC, models, allowed: null, group: 'gone', ...RU }).markup).some((x) => x.callback_data.startsWith('adm:mg:')));
+});
+
+// ---------- OpenRouter: вендоры, поиск, недавние ----------
+
+const orModels = () => {
+  const list = [];
+  const add = (vendor, label, n) => {
+    for (let i = 0; i < n; i++) list.push({ id: `openrouter/${vendor}/m${i}`, name: `OpenRouter/${label}: M${i}`, group: 'openrouter', groupLabel: 'OpenRouter', short: `${label}: M${i}`, sub: vendor, subLabel: label });
+  };
+  add('openai', 'OpenAI', 12);
+  add('anthropic', 'Anthropic', 8);
+  add('tiny1', 'Tiny1', 1);
+  add('tiny2', 'Tiny2', 2);
+  list.push({ id: 'opencode/big-pickle', name: 'OpenCode Zen/Big Pickle', group: 'opencode', groupLabel: 'OpenCode Zen', short: 'Big Pickle', free: true });
+  return list;
+};
+
+test('modelSubgroupsOf: вендоры по числу моделей, вендоры с 1–2 моделями — в «Прочие»', () => {
+  const { subs, small } = modelSubgroupsOf(orModels().filter((m) => m.group === 'openrouter'));
+  assert.deepEqual(subs.map((s) => `${s.id}:${s.count}`), ['openai:12', 'anthropic:8', `${OTHER_SUB}:3`]);
+  assert.deepEqual([...small].sort(), ['tiny1', 'tiny2']);
+  // один мелкий вендор в «Прочие» не прячем
+  assert.deepEqual(modelSubgroupsOf(orModels().filter((m) => m.group === 'openrouter' && m.sub !== 'tiny2')).subs.map((s) => s.id), ['openai', 'anthropic', 'tiny1']);
+  assert.deepEqual(modelSubgroupsOf([{ id: 'a', name: 'A' }]).subs, []);
+});
+
+test('modelGroupMenu: большая группа OpenRouter — вендоры, внутри вендора — модели без названия вендора', () => {
+  const models = orModels();
+  const top = modelGroupMenu({ engine: OC, models, group: 'openrouter', model: 'openrouter/anthropic/m1', ...RU });
+  const tb = buttons(top.markup);
+  assert.deepEqual(tb.map((x) => x.text).slice(0, 3), ['OpenAI (12)', '✓ Anthropic (8)', 'Прочие (3)']);
+  assert.equal(tb[1].callback_data, 'mdl:opencode:s:openrouter:anthropic:0');
+  assert.equal(tb.at(-1).callback_data, 'mdl:opencode:g:~');
+  assert.match(top.text, /Выберите разработчика/);
+  const sub = modelGroupMenu({ engine: OC, models, group: 'openrouter', sub: 'anthropic', model: 'openrouter/anthropic/m1', ...RU });
+  const sb = buttons(sub.markup);
+  assert.equal(sb.filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).length, 8);
+  assert.equal(sb[1].text, '✓ M1', 'без «Anthropic: »');
+  assert.equal(sb.at(-1).callback_data, 'mdl:opencode:g:openrouter:0', 'назад — к вендорам');
+  assert.match(sub.text, /OpenRouter › Anthropic: 8/);
+  const other = buttons(modelGroupMenu({ engine: OC, models, group: 'openrouter', sub: OTHER_SUB, model: null, ...RU }).markup);
+  assert.deepEqual(other.filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).map((x) => x.text), ['Tiny1: M0', 'Tiny2: M0', 'Tiny2: M1'], 'в «Прочих» — с названием вендора');
+  // маленькая группа без вендоров — сразу модели
+  assert.equal(browseGroup(models, 'opencode').mode, 'models');
+});
+
+test('searchModels / modelSearchMenu: все слова запроса, без учёта регистра, не больше страницы', () => {
+  const models = orModels();
+  assert.deepEqual(searchModels(models, 'anthropic m1').map(({ m }) => m.id), ['openrouter/anthropic/m1']);
+  assert.equal(searchModels(models, 'PICKLE').length, 1);
+  assert.equal(searchModels(models, '   ').length, 0);
+  const v = modelSearchMenu({ engine: OC, models, query: 'openrouter', model: 'openrouter/openai/m0', ...RU });
+  const b = buttons(v.markup);
+  assert.match(v.text, /найдено 23/);
+  assert.match(v.text, /Показаны первые 20/);
+  assert.equal(b.filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).length, MODEL_PAGE);
+  assert.equal(b[0].text, '✓ OpenRouter/OpenAI: M0');
+  assert.equal(b.at(-1).callback_data, 'mdl:opencode:g:~');
+  assert.match(modelSearchMenu({ engine: OC, models, query: 'нет такой', model: null, ...RU }).text, /ничего не найдено/);
+  assert.equal(buttons(modelSearchMenu({ engine: OC, models, query: 'pickle', model: null, ...RU }).markup)[0].text, '🆓 OpenCode Zen/Big Pickle');
+});
+
+test('modelMenu: недавние модели кнопками «🕘» сверху, исчезнувшие — не показываются', () => {
+  const v = modelMenu({ engine: OC, models: orModels(), model: 'openrouter/openai/m0', effort: null, recent: ['openrouter/openai/m0', 'gone/model', 'opencode/big-pickle'], ...RU });
+  const b = buttons(v.markup);
+  assert.deepEqual(b.slice(0, 2).map((x) => x.text), ['✓ 🕘 OpenRouter/OpenAI: M0', '🕘 OpenCode Zen/Big Pickle']);
+  assert.equal(b[1].callback_data, 'mdl:opencode:m:opencode/big-pickle');
+  assert.match(v.text, /Поиск по названию: \/model sonnet/);
+  // у движков без групп недавних нет: все модели и так на экране
+  assert.equal(buttons(modelMenu({ engine: { id: 'claude', label: 'Claude' }, models: [{ id: 'opus', name: 'Opus' }], model: null, effort: null, recent: ['opus'], ...RU }).markup).length, 2);
+});
+
+test('modelGrantsView: вендоры OpenRouter с «разрешено / всего», внутри вендора — переключатели', () => {
+  const models = orModels();
+  const v = modelGrantsView({ userId: 7, name: 'Ник', engine: OC, models, allowed: ['openrouter/anthropic/m0', 'openrouter/tiny1/m0'], group: 'openrouter', ...RU });
+  const b = buttons(v.markup);
+  assert.deepEqual(b.slice(0, 3).map((x) => x.text), ['OpenAI 0/12', 'Anthropic 1/8', 'Прочие 1/3']);
+  assert.equal(b[1].callback_data, 'adm:ms:7:opencode:openrouter:anthropic:0');
+  assert.equal(b.at(-1).callback_data, 'adm:me:7:opencode');
+  const s = buttons(modelGrantsView({ userId: 7, name: 'Ник', engine: OC, models, allowed: null, group: 'openrouter', sub: 'anthropic', ...RU }).markup);
+  assert.equal(s.filter((x) => x.callback_data.startsWith('adm:mt:')).length, 8);
+  assert.equal(s.at(-1).callback_data, 'adm:mg:7:opencode:openrouter:0', 'назад — к вендорам');
+});
+
+test('OpenRouter: в «Прочих» вендор перед названием, длинный id вендора — номером в callback_data', () => {
+  const models = orModels().map((m) => (m.sub === 'tiny1' ? { ...m, short: 'Ember-1' } : m));
+  const other = buttons(modelGroupMenu({ engine: OC, models, group: 'openrouter', sub: OTHER_SUB, model: null, ...RU }).markup);
+  assert.equal(other.find((x) => x.callback_data.startsWith('mdl:opencode:m:')).text, 'Tiny1 · Ember-1');
+  // вендор с очень длинным id: кнопка — «#номер», и по номеру открывается тот же вендор
+  const long = 'v'.repeat(50);
+  const many = [...orModels(), ...Array.from({ length: 5 }, (_, i) => ({ id: `openrouter/${long}/x${i}`, name: `OpenRouter/X${i}`, group: 'openrouter', groupLabel: 'OpenRouter', short: `X${i}`, sub: long, subLabel: 'Long' }))];
+  const top = buttons(modelGroupMenu({ engine: OC, models: many, group: 'openrouter', model: null, ...RU }).markup);
+  const btn = top.find((x) => x.text.startsWith('Long'));
+  assert.match(btn.callback_data, /^mdl:opencode:s:openrouter:#\d+:0$/);
+  for (const b of top) assert.ok(Buffer.byteLength(b.callback_data) <= 64, b.callback_data);
+  const ref = btn.callback_data.split(':')[4];
+  const opened = modelGroupMenu({ engine: OC, models: many, group: 'openrouter', sub: ref, model: null, ...RU });
+  assert.equal(buttons(opened.markup).filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).length, 5);
+  assert.match(opened.text, /OpenRouter › Long: 5/);
 });

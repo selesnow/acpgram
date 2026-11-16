@@ -222,6 +222,7 @@ export function openDb(path = 'data/bot.db') {
       'SELECT * FROM topics WHERE user_id = ? AND lower(project) = lower(?) AND hidden = 0 ORDER BY updated_at DESC LIMIT ? OFFSET ?',
     ),
     countTopics: db.prepare('SELECT COUNT(*) AS n FROM topics WHERE user_id = ? AND lower(project) = lower(?) AND hidden = 0'),
+    deleteTopic: db.prepare('DELETE FROM topics WHERE user_id = ? AND thread_id = ?'),
   };
 
   // Любая ошибка БД не должна ронять бота — журнал вторичен по отношению к работе.
@@ -289,6 +290,8 @@ export function openDb(path = 'data/bot.db') {
     /** Темы пользователя в проекте (кроме убранных из списка), свежие первыми; total — сколько всего. */
     listTopics: (userId, project, limit = 10, offset = 0) =>
       safe(() => ({ items: q.listTopics.all(userId, project, limit, offset), total: q.countTopics.get(userId, project).n }))() ?? { items: [], total: 0 },
+    /** Забывает тему (удалённую в Telegram). */
+    deleteTopic: safe((userId, threadId) => q.deleteTopic.run(userId, threadId)),
     close: () => db.close(),
   };
 }

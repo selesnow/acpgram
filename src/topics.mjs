@@ -88,6 +88,27 @@ export function stripTitle(text) {
   return extractTitle(s).text;
 }
 
+/** Имя команды бота из текста («/model@bot arg» → «model») или null. */
+export const commandName = (text) => /^\/(\w+)(?:@\w+)?(?:\s|$)/.exec(String(text ?? ''))?.[1]?.toLowerCase() ?? null;
+
+/**
+ * Служебная команда, ради которой Telegram сам создал тему: пользователь отправил её из общего вида чата, а не изнутри
+ * темы, и Telegram (если пользователям разрешено создавать темы) завёл новую тему с названием по тексту сообщения.
+ * Признаки: тема боту ещё не известна, название дано неявно (is_name_implicit) и это известная боту команда.
+ * @param {object} msg сообщение из темы
+ * @param {boolean} known тема уже была известна боту до этого сообщения
+ * @param {Set<string>} commands команды бота
+ */
+export function isAutoTopicCommand(msg, known, commands) {
+  if (known || !msg?.text) return false;
+  const name = commandName(msg.text);
+  if (!name || !commands.has(name)) return false;
+  return Boolean(topicInfoOf(msg)?.implicit);
+}
+
+/** Удаляет тему в личном чате вместе с сообщениями (Bot API 9.4). */
+export const deleteTopic = (chatId, threadId) => tg('deleteForumTopic', { chat_id: chatId, message_thread_id: threadId });
+
 /** Создаёт тему в личном чате с пользователем (Bot API 9.4). Возвращает message_thread_id. */
 export async function createTopic(chatId, name) {
   const r = await tg('createForumTopic', { chat_id: chatId, name: [...String(name)].slice(0, NAME_MAX).join('') });

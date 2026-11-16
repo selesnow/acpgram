@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanTitle, extractTitle, projectLabel, stripTitle, titleFromRequest, topicInfoOf, topicLink, topicName } from '../src/topics.mjs';
+import { cleanTitle, commandName, extractTitle, isAutoTopicCommand, projectLabel, stripTitle, titleFromRequest, topicInfoOf, topicLink, topicName } from '../src/topics.mjs';
 import { dest } from '../src/telegram.mjs';
 
 const FENCE = '`'.repeat(3);
@@ -49,4 +49,19 @@ test('projectLabel и topicName: короткое имя проекта в на�
   assert.equal([...projectLabel('C:\\x\\очень_длинное_название_проекта')].length, 16);
   assert.equal(topicName('C:\\work\\sales_reports', 'Отчёт по списаниям'), 'sales_reports · Отчёт по списаниям');
   assert.equal(topicName(null, 'Отчёт'), 'Отчёт');
+});
+
+test('isAutoTopicCommand: команда в теме, которую Telegram создал из этого сообщения', () => {
+  const cmds = new Set(['model', 'project', 'new']);
+  // так приходит /model, отправленный из общего вида чата (снято с журнала бота): тема названа по тексту, неявно
+  const msg = { text: '/model', is_topic_message: true, message_thread_id: 946377, reply_to_message: { forum_topic_created: { name: '/model', is_name_implicit: true } } };
+  assert.equal(isAutoTopicCommand(msg, false, cmds), true);
+  assert.equal(isAutoTopicCommand({ ...msg, text: '/model@acp_bot' }, false, cmds), true);
+  assert.equal(isAutoTopicCommand(msg, true, cmds), false, 'тема уже известна — это команда внутри диалога');
+  assert.equal(isAutoTopicCommand({ ...msg, text: 'посмотри /model' }, false, cmds), false, 'обычный запрос');
+  assert.equal(isAutoTopicCommand({ ...msg, text: '/unknown' }, false, cmds), false, 'неизвестная команда уходит агенту');
+  assert.equal(isAutoTopicCommand({ ...msg, reply_to_message: { forum_topic_created: { name: 'Мой', is_name_implicit: false } } }, false, cmds), false, 'тему назвал пользователь');
+  assert.equal(isAutoTopicCommand({ text: '/model' }, false, cmds), false, 'нет сведений о создании темы');
+  assert.equal(commandName('/Model arg'), 'model');
+  assert.equal(commandName('text'), null);
 });

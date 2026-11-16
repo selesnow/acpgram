@@ -1,11 +1,12 @@
 // Команда /model: модель и уровень рассуждений текущего движка. Выбор запоминается для пользователя отдельно по движкам
 // и применяется к живой сессии перед следующим запросом (turn.mjs → syncSelection).
-import { allowedModels, effectiveSelection, getCatalog, modelRestriction, probeCatalog, saveChoice } from './access.mjs';
+// /model <запрос> — поиск модели по названию (при большом каталоге, как у OpenCode, — самый быстрый путь).
+import { allowedModels, effectiveSelection, getCatalog, modelRestriction, probeCatalog, pushRecentModel, recentModels, saveChoice } from './access.mjs';
 import { langOf, log, say } from './ctx.mjs';
 import { t } from './i18n.mjs';
 import { engineOf } from './state.mjs';
 import { tg } from './telegram.mjs';
-import { modelChosen, modelMenu } from './ui.mjs';
+import { modelChosen, modelGroupMenu, modelMenu, modelSearchMenu } from './ui.mjs';
 
 /** Каталог движка; если его ещё нет — запрашиваем у агента в фоне (один запуск на движок, с паузой после неудачи). */
 function catalogOf(engine) {
@@ -23,27 +24,47 @@ function view(st, engine, catalog) {
     model: sel.model,
     effort: sel.effort,
     restricted: Boolean(modelRestriction(st.userId, engine.id)),
+    recent: recentModels(st.userId, engine.id),
     lang: langOf(st.userId),
   });
 }
 
-export async function handleModel(st) {
+/** /model — экран выбора; /model <запрос> — модели, в названии или id которых есть все слова запроса. */
+export async function handleModel(st, query = '') {
   const engine = engineOf(st);
   const catalog = catalogOf(engine);
-  if (!catalog) return say(st.to, t('model.loading', langOf(st.userId), { engine: engine.label }));
-  const v = view(st, engine, catalog);
+  const lang = langOf(st.userId);
+  if (!catalog) return say(st.to, t('model.loading', lang, { engine: engine.label }));
+  const q = String(query ?? '').trim();
+  const v = q
+    ? modelSearchMenu({ engine, models: allowedModels(st.userId, engine.id), query: q, model: effectiveSelection(st.userId, engine).model, lang })
+    : view(st, engine, catalog);
   return say(st.to, v.text, { reply_markup: v.markup });
 }
 
-/** Кнопка mdl:<движок>:<m|e>:<id | #номер | ~>. */
+/**
+ * Кнопки /model:
+ *   mdl:<движок>:<m|e>:<id | #номер | ~>        — выбор модели или уровня рассуждений (~ — «Авто»);
+ *   mdl:<движок>:g:<группа>:<страница> | g:~     — экран группы моделей или «Назад» к группам;
+ *   mdl:<движок>:s:<группа>:<вендор>:<страница>  — модели вендора внутри группы (OpenRouter).
+ */
 export async function onModelCallback(st, cb) {
-  const m = /^mdl:([a-z]+):([me]):(.+)$/.exec(cb.data || '');
+  const m = /^mdl:([a-z]+):([megs]):(.+)$/.exec(cb.data || '');
   const lang = langOf(st.userId);
   const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
   const engine = engineOf(st);
   if (!m || m[1] !== engine.id) return ack(t('model.engineChanged', lang));
   const catalog = getCatalog(engine.id);
   if (!catalog) return ack(t('model.noCatalog', lang));
+  if (m[2] === 'g' || m[2] === 's') {
+    // группа или вендор (или «Назад» к группам, ~): меню меняется на месте, выбор не сохраняется
+    await ack();
+    const parts = m[3].split(':');
+    const [group, sub, page] = m[2] === 'g' ? [parts[0], null, parts[1]] : parts;
+    const sel = effectiveSelection(st.userId, engine);
+    const v = group === '~' ? view(st, engine, catalog) : modelGroupMenu({ engine, models: allowedModels(st.userId, engine.id), group, sub, page: Number(page) || 0, model: sel.model, lang });
+    return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, reply_markup: v.markup }).catch((e) => log('model menu:', e.message));
+  }
   const kind = m[2] === 'm' ? 'model' : 'effort';
   // выбирать можно только из того, что показали: разрешённые модели или уровни рассуждений движка
   const list = kind === 'model' ? allowedModels(st.userId, engine.id) : engine.effortConfig ? catalog.efforts : [];
@@ -55,6 +76,7 @@ export async function onModelCallback(st, cb) {
     return ack(t('model.noAuto', lang));
   }
   saveChoice(st.userId, engine.id, kind, value);
+  if (kind === 'model' && value) pushRecentModel(st.userId, engine.id, value); // кнопки «🕘» на экране /model
   log(`${kind} выбран:`, st.userId, engine.id, value ?? 'auto');
   await ack(t(kind === 'model' ? 'model.set' : 'effort.set', lang));
   // как в /engine: меню заменяется итогом выбора, кнопки убираются

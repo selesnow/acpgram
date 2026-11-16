@@ -86,7 +86,7 @@ export const setCliLang = (lang) => {
 export const CLI_MESSAGES = {
   // ---------- acpgram (cli.mjs) ----------
   'cli.help': {
-    en: `AcpGram — Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex)
+    en: `AcpGram — Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
 
   acpgram [start]          start the bot (the first run without settings opens the wizard)
   acpgram setup            setup wizard
@@ -99,7 +99,7 @@ export const CLI_MESSAGES = {
 
 Service options: --name <name>, --dry-run, --system (Windows: run as LocalSystem, no terminal).
 https://github.com/{repo}`,
-    ru: `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex)
+    ru: `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
 
   acpgram [start]          запустить бота (первый запуск без настроек откроет мастер)
   acpgram setup            мастер настройки
@@ -112,7 +112,7 @@ https://github.com/{repo}`,
 
 Параметры службы: --name <имя>, --dry-run, --system (Windows: от LocalSystem без терминала).
 https://github.com/{repo}`,
-    uk: `AcpGram — Telegram-шлюз до AI-агентів розробки (Gemini CLI, Claude Code, Antigravity CLI, Codex)
+    uk: `AcpGram — Telegram-шлюз до AI-агентів розробки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
 
   acpgram [start]          запустити бота (перший запуск без налаштувань відкриє майстер)
   acpgram setup            майстер налаштування
@@ -176,7 +176,7 @@ https://github.com/{repo}`,
     ru: 'Корень проектов (необязательно): без него проектом может быть любая папка, по умолчанию домашняя',
     uk: 'Корінь проєктів (необов’язково): без нього проєктом може бути будь-яка тека, за замовчуванням домашня',
   },
-  'env.c.engine': { en: 'Default engine: gemini | claude | agy | codex', ru: 'Движок по умолчанию: gemini | claude | agy | codex', uk: 'Рушій за замовчуванням: gemini | claude | agy | codex' },
+  'env.c.engine': { en: 'Default engine: gemini | claude | agy | codex | opencode', ru: 'Движок по умолчанию: gemini | claude | agy | codex | opencode', uk: 'Рушій за замовчуванням: gemini | claude | agy | codex | opencode' },
   'env.c.keys': { en: 'API keys are passed to the agents through the bot environment', ru: 'Ключи API передаются агентам через окружение бота', uk: 'Ключі API передаються агентам через оточення бота' },
   'env.rest': { en: 'Other settings', ru: 'Прочие настройки', uk: 'Інші налаштування' },
 
@@ -245,6 +245,17 @@ https://github.com/{repo}`,
     uk: '{label}: {error}. Доки не оновите, бот цей рушій не запропонує',
   },
   'setup.engineMissing': { en: '  ❌ {label} not found. Install: {install}', ru: '  ❌ {label} не найден. Установка: {install}', uk: '  ❌ {label} не знайдено. Встановлення: {install}' },
+  'setup.opencodeOffer': {
+    en: '  No engine is installed. Install OpenCode now (npm i -g opencode-ai)? It works right away on free models, no API keys needed',
+    ru: '  Ни один движок не установлен. Установить OpenCode сейчас (npm i -g opencode-ai)? Он работает сразу на бесплатных моделях, без ключей API',
+    uk: '  Жодного рушія не встановлено. Встановити OpenCode зараз (npm i -g opencode-ai)? Він працює одразу на безкоштовних моделях, без ключів API',
+  },
+  'setup.opencodeInstalling': { en: '  Installing OpenCode…', ru: '  Устанавливаю OpenCode…', uk: '  Встановлюю OpenCode…' },
+  'setup.opencodeFail': {
+    en: 'OpenCode could not be installed — install it manually: {install}',
+    ru: 'OpenCode установить не удалось — установите вручную: {install}',
+    uk: 'OpenCode встановити не вдалося — встановіть вручну: {install}',
+  },
   'setup.noEngine': {
     en: 'no engine found — install at least one and run npm run setup again',
     ru: 'ни один движок не найден — установите хотя бы один и запустите npm run setup ещё раз',
@@ -266,6 +277,21 @@ https://github.com/{repo}`,
   },
   'setup.keyClaude': { en: ' — Claude Code via API, without it via subscription', ru: ' — Claude Code по API, без него по подписке', uk: ' — Claude Code через API, без нього за підпискою' },
   'setup.keyCodex': { en: ' — Codex via API, without it via ChatGPT sign-in (codex login)', ru: ' — Codex по API, без него по входу ChatGPT (codex login)', uk: ' — Codex через API, без нього за входом ChatGPT (codex login)' },
+  'setup.opencodeNote': {
+    en: '  OpenCode: free OpenCode Zen models work without a key; each provider key adds that provider’s models (a separate group in /model). OpenRouter gives hundreds of models from different providers with one key',
+    ru: '  OpenCode: бесплатные модели OpenCode Zen работают без ключа; каждый ключ провайдера добавляет его модели (отдельная группа в /model). OpenRouter по одному ключу даёт сотни моделей разных провайдеров',
+    uk: '  OpenCode: безкоштовні моделі OpenCode Zen працюють без ключа; кожен ключ провайдера додає його моделі (окрема група в /model). OpenRouter за одним ключем дає сотні моделей різних провайдерів',
+  },
+  'setup.opencodeKeysAsk': {
+    en: '  Add provider keys for OpenCode now (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral)?',
+    ru: '  Добавить ключи провайдеров для OpenCode сейчас (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral)?',
+    uk: '  Додати ключі провайдерів для OpenCode зараз (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral)?',
+  },
+  'setup.opencodeKeysLater': {
+    en: '  Keys can be added later to {path} (one per line, e.g. OPENROUTER_API_KEY=...): {list}. Then restart the bot',
+    ru: '  Ключи можно добавить позже в {path} (по одному в строке, например OPENROUTER_API_KEY=...): {list}. Затем перезапустите бота',
+    uk: '  Ключі можна додати пізніше в {path} (по одному в рядку, наприклад OPENROUTER_API_KEY=...): {list}. Потім перезапустіть бота',
+  },
   'setup.agyNote': {
     en: '  Antigravity CLI: there is no API key — sign in once: agy acp --login',
     ru: '  Antigravity CLI: ключа API нет — войдите один раз: agy acp --login',

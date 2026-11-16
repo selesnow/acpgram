@@ -1,4 +1,4 @@
-// Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex) через ACP.
+// Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) через ACP.
 // Доступ: главный администратор (ALLOWED_USER_ID) и сотрудники, которым он выдал доступ. Остальным бот не отвечает,
 // кроме запроса доступа администратору.
 import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './engines.mjs';
@@ -13,7 +13,7 @@ import { handleProject, onNavCallback, onTopicListCallback } from './projectsUi.
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
-import { topicInfoOf } from './topics.mjs';
+import { deleteTopic, isAutoTopicCommand, topicInfoOf } from './topics.mjs';
 import { setSyncKill } from './acp.mjs';
 import { downloadFile, sendRich, tg } from './telegram.mjs';
 import { MAX_FILE_BYTES, IMAGE_BLOCK_MAX, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
@@ -88,7 +88,7 @@ async function handleText(st, text) {
   if (name === 'language' || name === 'lang') return languageCommand(st, arg);
   if (name === 'project') return handleProject(st, arg);
   if (name === 'engine') return handleEngine(st, arg);
-  if (name === 'model') return handleModel(st);
+  if (name === 'model') return handleModel(st, arg);
   if (name === 'sessions') return handleSessions(st);
   if (name === 'topics') return handleTopics(st);
   if (name === 'stop') {
@@ -240,6 +240,10 @@ async function handleUpdate(u) {
   // тема, откуда пришло сообщение или нажата кнопка (темы в личном чате с ботом); null — общий чат
   const source = msg ?? cb?.message;
   const threadId = source?.is_topic_message && source.message_thread_id ? source.message_thread_id : null;
+  // команду отправили из общего вида чата, и Telegram сам завёл под неё тему: выполняем её в General, пустую тему удаляем
+  if (msg && threadId && topicsOn(from.id) && isAutoTopicCommand(msg, Boolean(db.getTopic(from.id, threadId)), BOT_COMMANDS)) {
+    if (await dropAutoTopic(from.id, chatId, threadId)) return handleText(getState(from.id, chatId, null), msg.text);
+  }
   if (msg && threadId && noteTopic(from.id, threadId, msg)) return; // служебное сообщение о теме — запомнили, отвечать не нужно
 
   if (cb) {
@@ -259,6 +263,25 @@ async function handleUpdate(u) {
   }
   if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text);
   if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId, threadId), msg);
+}
+
+/** Команды бота (handleText): только они переносятся из темы, созданной Telegram, в General. */
+const BOT_COMMANDS = new Set(['start', 'language', 'lang', 'project', 'engine', 'model', 'sessions', 'topics', 'stop', 'close', 'exit', 'new', 'invite', 'users', 'active']);
+
+/**
+ * Удаляет тему, которую Telegram создал под команду, отправленную из общего вида чата. Не удалось (нет прав, старый
+ * Telegram) — false: команда выполнится в самой теме, как раньше.
+ */
+async function dropAutoTopic(userId, chatId, threadId) {
+  try {
+    await deleteTopic(chatId, threadId);
+    db.deleteTopic(userId, threadId);
+    log('тема, созданная Telegram под команду, удалена', threadId, '| команда выполнена в General | пользователь', userId);
+    return true;
+  } catch (e) {
+    log('удаление темы под команду:', e.message, '| пользователь', userId);
+    return false;
+  }
 }
 
 /**
@@ -285,7 +308,7 @@ function noteTopic(userId, threadId, msg) {
 async function main() {
   // все движки проверяем параллельно; без движка по умолчанию (DEFAULT_ENGINE) бот не запускается, остальные — по возможности
   const asked = process.env.DEFAULT_ENGINE?.trim().toLowerCase();
-  if (asked && asked !== DEFAULT_ENGINE) log(`⚠️ DEFAULT_ENGINE=${asked} не распознан (gemini | claude | agy | codex), используется ${DEFAULT_ENGINE}`);
+  if (asked && asked !== DEFAULT_ENGINE) log(`⚠️ DEFAULT_ENGINE=${asked} не распознан (gemini | claude | agy | codex | opencode), используется ${DEFAULT_ENGINE}`);
   const checks = await checkEngines();
   setAvailability(checks);
   for (const r of checks) {

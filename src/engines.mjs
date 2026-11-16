@@ -10,7 +10,8 @@
 //   события: onUpdate(update ACP session/update), onPermission(params) → outcome, onExit(code)
 // Если появится движок без ACP, ему достаточно реализовать этот же контракт отдельным классом.
 //
-// Ключи API (GEMINI_API_KEY, ANTHROPIC_API_KEY) процессы агентов получают из окружения бота.
+// Ключи API (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY) процессы агентов получают из окружения бота;
+// движок может добавить свои переменные (processEnv) — например, конфиг прав OpenCode по уровню доступа.
 import { AcpAgent, checkCommand } from './acp.mjs';
 
 /** Служебная строка Gemini «[MODE_UPDATE] <режим>» приходит как текст ответа — убираем её из начала. */
@@ -32,6 +33,9 @@ const stripGeminiModeUpdate = (s) => s.replace(/^\s*\[MODE_UPDATE\]\s*(?:default
  * @property {(u:object)=>string} toolName             имя инструмента из события tool_call / tool_call_update
  * @property {(u:object)=>string} [toolDescription]    описание действия от агента (если движок присылает его отдельно)
  * @property {RegExp} [quietStderr]    служебные строки stderr агента, которые не пишутся в лог бота
+ * @property {(who:{admin?:boolean, level?:string})=>Record<string,string>} [processEnv]  свои переменные окружения процесса агента
+ * @property {boolean} [modelGroups]    модели «провайдер/модель»: в /model — по группам (бесплатные, провайдеры)
+ * @property {{args: string[], parse: (out:string)=>Map<string,{free:boolean,tools:boolean}>}} [modelMeta]  команда со сведениями о моделях
  */
 
 /** Имя инструмента по умолчанию: метаданные Claude Code, имя или вид действия. */
@@ -50,6 +54,67 @@ const CLAUDE_EXIT_PLAN = {
   'exit-plan-bypass': 'bypassPermissions',
   'exit-plan-clear-bypass': 'bypassPermissions',
 };
+
+// Права OpenCode по уровням доступа. Режима ACP «без подтверждений» у OpenCode нет (build / plan), права задаются
+// конфигом: бот передаёт его процессу агента в OPENCODE_CONFIG_CONTENT. Без него в build правки и команды идут без вопросов,
+// а в plan запрещены только правки (bash остаётся) — поэтому конфиг передаётся всегда, на любом уровне.
+// deny — инструмент вообще не доступен модели; ask — запрос разрешения кнопками в Telegram.
+const OPENCODE_PERMISSIONS = {
+  read: { edit: 'deny', bash: 'deny', webfetch: 'ask' },
+  normal: { edit: 'ask', bash: 'ask', webfetch: 'ask' },
+  full: { edit: 'allow', bash: 'allow', webfetch: 'allow', external_directory: 'allow' },
+};
+
+/** Конфиг прав OpenCode для уровня доступа (администратор — «Полный»; неизвестный уровень — «Чтение»). */
+export function opencodeConfig({ admin = false, level } = {}) {
+  const key = admin ? 'full' : Object.hasOwn(OPENCODE_PERMISSIONS, level ?? '') ? level : 'read';
+  return { permission: OPENCODE_PERMISSIONS[key] };
+}
+
+/**
+ * Ключ Google для OpenCode. Провайдера Google OpenCode находит по GEMINI_API_KEY / GOOGLE_API_KEY и показывает его модели,
+ * но запросы его библиотека шлёт только с GOOGLE_GENERATIVE_AI_API_KEY — без неё «provider authentication required»
+ * (проверено на 1.19.5). Если эта переменная не задана, передаём в неё имеющийся ключ.
+ */
+export function opencodeGoogleKey(env = process.env) {
+  if (env.GOOGLE_GENERATIVE_AI_API_KEY) return {};
+  const key = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
+  return key ? { GOOGLE_GENERATIVE_AI_API_KEY: key } : {};
+}
+
+/**
+ * Сведения о моделях из `opencode models --verbose`: блоки «провайдер/модель» + JSON с ценой и возможностями.
+ * free — нулевая цена ввода и вывода; tools — модель умеет вызывать инструменты (без этого агент работать не может:
+ * так отсеиваются модели генерации картинок и музыки, у которых цена тоже 0).
+ * @returns {Map<string, {free: boolean, tools: boolean}>}
+ */
+export function parseOpencodeModels(text) {
+  const meta = new Map();
+  let id = null;
+  let buf = [];
+  const flush = () => {
+    if (!id) return;
+    try {
+      const j = JSON.parse(buf.join('\n'));
+      const c = j.cost ?? {};
+      meta.set(id, {
+        free: Number(c.input) === 0 && Number(c.output) === 0 && c.input != null && c.output != null,
+        tools: j.capabilities?.toolcall !== false && j.status !== 'deprecated',
+      });
+    } catch {
+      /* блок не разобрался — о модели ничего не знаем, она остаётся без пометок */
+    }
+  };
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (/^[^\s{}"[\]]+\/[^\s{}"[\]]+$/.test(line)) {
+      flush();
+      id = line;
+      buf = [];
+    } else if (id) buf.push(line);
+  }
+  flush();
+  return meta;
+}
 
 /** @type {Record<string, Engine>} Без прототипа: id из кнопки (eng:constructor и т.п.) не находит унаследованных свойств. */
 export const ENGINES = Object.assign(Object.create(null), {
@@ -151,10 +216,38 @@ export const ENGINES = Object.assign(Object.create(null), {
     toolName: genericToolName,
     toolDescription: (u) => u.rawInput?.description || '',
   },
+  opencode: {
+    id: 'opencode',
+    label: 'OpenCode',
+    short: 'OpenCode',
+    envVar: 'OPENCODE_COMMAND',
+    defaultCommand: 'opencode',
+    args: ['acp'],
+    versionArgs: ['--version'],
+    install: 'npm i -g opencode-ai (модели: ключи API провайдеров в окружении или opencode auth login; бесплатные модели OpenCode Zen — без ключа)',
+    update: 'npm i -g opencode-ai@latest',
+    // режимы ACP — build и plan; разница между «Обычным» и «Полным» — в конфиге прав (processEnv)
+    modes: { read: 'plan', normal: 'build', full: 'build' },
+    modeRank: ['plan', 'build'],
+    // модели — configOptions model («провайдер/модель», только подключённые провайдеры); уровня рассуждений в ACP нет
+    modelSource: 'config',
+    effortConfig: null,
+    // моделей много (сотни у подключённых провайдеров): в /model — по группам «Бесплатные» и провайдеры
+    modelGroups: true,
+    // цена и возможности моделей — отдельной командой (в ACP их нет)
+    modelMeta: { args: ['models', '--verbose'], parse: parseOpencodeModels },
+    adminMode: process.env.OPENCODE_ADMIN_MODE || 'build',
+    processEnv: (who) => ({ OPENCODE_CONFIG_CONTENT: JSON.stringify(opencodeConfig(who)), ...opencodeGoogleKey() }),
+    cleanText: (s) => s,
+    // имя инструмента (bash, todowrite, webfetch…) — в title начального tool_call; в обновлениях и запросах разрешения
+    // title — уже путь к файлу или команда, там — вид действия
+    toolName: (u) => (u.sessionUpdate === 'tool_call' && u.title) || u.kind || u.toolCallId || 'tool',
+    toolDescription: (u) => u.rawInput?.description || '',
+  },
 });
 Object.freeze(ENGINES);
 
-/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy | codex), иначе Gemini. */
+/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy | codex | opencode), иначе Gemini. */
 export const DEFAULT_ENGINE = ENGINES[process.env.DEFAULT_ENGINE?.trim().toLowerCase()] ? process.env.DEFAULT_ENGINE.trim().toLowerCase() : 'gemini';
 
 /** Движок по умолчанию обязателен: без него бот не запускается. Остальные — по возможности. */
@@ -252,12 +345,54 @@ const configValues = (opt) =>
     .filter((o) => o && o.value != null)
     .map((o) => ({ id: String(o.value), name: o.name || String(o.value) }));
 
+/** Названия вендоров OpenRouter, которые не получаются из id простой заглавной буквой. */
+const VENDOR_NAMES = {
+  openai: 'OpenAI', 'z-ai': 'Z.ai', 'x-ai': 'xAI', mistralai: 'Mistral AI', deepseek: 'DeepSeek', nvidia: 'NVIDIA', meta: 'Meta',
+  'meta-llama': 'Meta Llama', moonshotai: 'Moonshot AI', minimax: 'MiniMax', 'bytedance-seed': 'ByteDance Seed', stepfun: 'StepFun',
+  'aion-labs': 'Aion Labs', inclusionai: 'inclusionAI', thinkingmachines: 'Thinking Machines', ai21: 'AI21', 'arcee-ai': 'Arcee AI',
+  baidu: 'Baidu', ibm: 'IBM', microsoft: 'Microsoft', nousresearch: 'Nous Research',
+};
+
+/** Название вендора по id: известное или с заглавной буквы («qwen» → «Qwen»). */
+export const vendorName = (id) => VENDOR_NAMES[id] ?? `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
+
+/**
+ * Модель с группой (движки с modelGroups): id «провайдер/модель», название «Провайдер/Модель».
+ * group — id провайдера, groupLabel — его название, short — название модели без провайдера (для кнопок внутри группы).
+ * У агрегаторов (OpenRouter: «openrouter/anthropic/claude-…») ещё и вендор: sub — его id, subLabel — название
+ * (из «Anthropic: Claude …» в названии модели, иначе id).
+ * meta — сведения из modelMeta: free (бесплатная). Модели, которые не умеют вызывать инструменты (tools: false), отсеиваются.
+ */
+function groupModels(models, meta) {
+  return models
+    .filter((m) => meta?.get(m.id)?.tools !== false)
+    .map((m) => {
+      const slash = m.id.indexOf('/');
+      if (slash < 1) return { ...m, ...(meta?.get(m.id)?.free ? { free: true } : {}) };
+      const group = m.id.slice(0, slash);
+      const nameSlash = m.name.indexOf('/');
+      const short = nameSlash > 0 ? m.name.slice(nameSlash + 1) : m.name;
+      const rest = m.id.slice(slash + 1);
+      // «~openai/gpt-latest» — псевдоним OpenRouter «последняя версия»: тот же вендор
+      const sub = rest.includes('/') ? rest.slice(0, rest.indexOf('/')).replace(/^~/, '') || null : null;
+      return {
+        ...m,
+        group,
+        groupLabel: nameSlash > 0 ? m.name.slice(0, nameSlash) : group,
+        short,
+        ...(sub ? { sub, subLabel: /^([^:/]{1,40}):\s/.exec(short)?.[1] ?? vendorName(sub) } : {}),
+        ...(meta?.get(m.id)?.free ? { free: true } : {}),
+      };
+    });
+}
+
 /**
  * Каталог движка из ответа session/new: модели, уровни рассуждений и значения агента по умолчанию.
  * «Авто» агента (auto у Gemini, default у Claude Code) в списки не входит — это отдельная кнопка «Авто».
- * @returns {{models: {id,name}[], efforts: {id,name}[], defaultModel: string|null, defaultEffort: string|null}}
+ * @param {Map<string,{free:boolean,tools:boolean}>} [meta] сведения о моделях (modelMeta движка), если удалось получить
+ * @returns {{models: {id,name,group?,groupLabel?,short?,free?}[], efforts: {id,name}[], defaultModel: string|null, defaultEffort: string|null}}
  */
-export function parseCatalog(engine, res) {
+export function parseCatalog(engine, res, meta = null) {
   const cfg = (id) => res?.configOptions?.find((o) => o.id === id);
   let models;
   let defaultModel;
@@ -269,8 +404,9 @@ export function parseCatalog(engine, res) {
     defaultModel = cfg('model')?.currentValue ?? null;
   }
   const effort = engine.effortConfig ? cfg(engine.effortConfig) : null;
+  models = models.filter((m) => m.id !== engine.autoModel);
   return {
-    models: models.filter((m) => m.id !== engine.autoModel),
+    models: engine.modelGroups ? groupModels(models, meta) : models,
     efforts: configValues(effort).filter((e) => e.id !== engine.autoEffort),
     defaultModel: defaultModel == null ? null : String(defaultModel),
     defaultEffort: effort?.currentValue == null ? null : String(effort.currentValue),
@@ -315,10 +451,13 @@ export function parseUsage(res, usageUpdate) {
 /**
  * Создаёт клиент агента (AgentClient) для движка.
  * @param {Engine} engine
- * @param {{cwd: string, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
+ * @param {{cwd: string, who?: {admin?: boolean, level?: string}, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
+ *   who — кто работает в сессии: от этого зависят переменные окружения движка (processEnv; у OpenCode — конфиг прав).
+ *   Без who (запуск за списком моделей) — окружение бота как есть.
  */
-export function createAgent(engine, opts) {
-  const agent = new AcpAgent({ ...opts, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
+export function createAgent(engine, { who, ...opts }) {
+  const env = who && engine.processEnv ? engine.processEnv(who) : null;
+  const agent = new AcpAgent({ ...opts, env, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
   agent.engine = engine;
   return agent;
 }

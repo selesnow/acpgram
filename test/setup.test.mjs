@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { resolveHomeDir } from '../src/app.mjs';
 import { homedir } from 'node:os';
-import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, serializeEnv, writeEnvFile } from '../src/setup.mjs';
+import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, serializeEnv, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
 import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 import { setCliLang } from '../src/cli-i18n.mjs';
@@ -231,4 +231,34 @@ test('copyLegacyDb: копирует базу с WAL-файлами и не пе
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('suggestDefaultEngine: OpenCode первым, уже выбранный движок не меняется', () => {
+  assert.equal(suggestDefaultEngine(['gemini', 'claude', 'opencode']), 'opencode');
+  assert.equal(suggestDefaultEngine(['gemini', 'claude', 'opencode'], 'claude'), 'claude', 'повторный запуск мастера');
+  assert.equal(suggestDefaultEngine(['gemini', 'opencode'], 'codex'), 'opencode', 'выбранный раньше движок больше не установлен');
+  assert.equal(suggestDefaultEngine(['claude', 'gemini']), 'gemini');
+  assert.equal(suggestDefaultEngine(['agy']), 'agy');
+  assert.equal(suggestDefaultEngine([]), null);
+});
+
+test('npmCommand / globalBinDir: npm той же установки Node, куда npm -g кладёт команды', () => {
+  const win = 'C:/node/node.exe';
+  assert.deepEqual(npmCommand(win, 'win32', () => true), [win, [join('C:/node', 'node_modules', 'npm', 'bin', 'npm-cli.js')]]);
+  assert.deepEqual(npmCommand(win, 'win32', () => false), ['npm.cmd', []], 'npm-cli.js рядом нет — npm из PATH');
+  const nix = '/opt/acpgram/node/bin/node';
+  assert.deepEqual(npmCommand(nix, 'linux', () => true), [nix, [join('/opt/acpgram/node/bin', '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')]]);
+  assert.deepEqual(npmCommand(nix, 'linux', () => false), ['npm', []]);
+  assert.equal(globalBinDir('C:/Users/u/AppData/Roaming/npm', 'win32'), 'C:/Users/u/AppData/Roaming/npm');
+  assert.equal(globalBinDir('/usr/local', 'linux'), join('/usr/local', 'bin'));
+});
+
+test('opencodeKeysToAsk: ключи провайдеров для OpenCode без уже спрошенных для других движков', () => {
+  const names = (list) => list.map(([n]) => n);
+  assert.deepEqual(names(opencodeKeysToAsk(['opencode'])), ['GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY']);
+  assert.deepEqual(names(opencodeKeysToAsk(['gemini', 'claude', 'codex', 'opencode'])), ['OPENROUTER_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY']);
+  assert.deepEqual(names(opencodeKeysToAsk(['claude', 'opencode'])), ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY']);
+  // ключи провайдеров идут в .env сразу после основных, а не в конец
+  const text = serializeEnv({ TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1', OPENROUTER_API_KEY: 'or', MISTRAL_API_KEY: 'm', ZZZ: 'z' }, { lang: 'en' });
+  assert.ok(text.indexOf('OPENROUTER_API_KEY=or') < text.indexOf('MISTRAL_API_KEY=m') && text.indexOf('MISTRAL_API_KEY=m') < text.indexOf('ZZZ=z'));
 });
