@@ -180,6 +180,7 @@ const M = {
   'model.restricted': { en: 'The model list is limited by the administrator.', ru: 'Список моделей ограничен администратором.', uk: 'Список моделей обмежено адміністратором.' },
   'model.saved': { en: 'The choice is remembered for this engine and applies from the next request.', ru: 'Выбор запоминается для этого движка и применяется со следующего запроса.', uk: 'Вибір запам’ятовується для цього рушія і діє з наступного запиту.' },
   'model.loading': { en: '⏳ The model list for {engine} is still loading. Try again in a minute.', ru: '⏳ Список моделей {engine} ещё загружается. Попробуйте через минуту.', uk: '⏳ Список моделей {engine} ще завантажується. Спробуйте за хвилину.' },
+  'model.refreshing': { en: '🔄 Updating the model list for {engine} (up to a minute)…', ru: '🔄 Обновляю список моделей {engine} (до минуты)…', uk: '🔄 Оновлюю список моделей {engine} (до хвилини)…' },
   'model.noAuto': { en: '“Auto” is unavailable: the model list is limited by the administrator', ru: '«Авто» недоступно: список моделей ограничен администратором', uk: '«Авто» недоступно: список моделей обмежено адміністратором' },
   'model.badOption': { en: 'This option is unavailable', ru: 'Этот вариант недоступен', uk: 'Цей варіант недоступний' },
   'model.engineChanged': { en: 'The engine has changed — open /model again', ru: 'Движок сменился — откройте /model заново', uk: 'Рушій змінився — відкрийте /model знову' },

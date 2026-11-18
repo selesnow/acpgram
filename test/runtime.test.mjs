@@ -13,7 +13,7 @@ delete process.env.PROJECTS_ROOT; // проект — любая папка (и�
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
 process.env.ALLOWED_USER_ID ??= '1';
 const ctx = await import('../src/ctx.mjs');
-const { CATALOG_TTL_MS, catalogFresh } = await import('../src/access.mjs');
+const { CATALOG_TTL_MS, catalogFresh, catalogStaleReason, envSignature } =await import('../src/access.mjs');
 after(() => {
   ctx.db.close();
   rmSync(home, { recursive: true, force: true });
@@ -38,13 +38,25 @@ test('createDebugLog: запись по очереди, при превышен�
 
 test('catalogFresh: свежий каталог той же версии движка не запрашивается заново', () => {
   const now = Date.parse('2026-11-13T12:00:00Z');
-  const cat = (hoursAgo, extra = {}) => ({ models: [{ id: 'm', name: 'M' }], efforts: [], at: new Date(now - hoursAgo * 3600_000).toISOString(), version: '1.2.3', ...extra });
-  assert.equal(catalogFresh(cat(1), '1.2.3', now), true);
-  assert.equal(catalogFresh(cat(CATALOG_TTL_MS / 3600_000 + 1), '1.2.3', now), false, 'старше суток');
-  assert.equal(catalogFresh(cat(1), '1.3.0', now), false, 'движок обновился');
-  assert.equal(catalogFresh(cat(1, { version: undefined }), '1.2.3', now), false, 'каталог до 1.16 — без версии');
-  assert.equal(catalogFresh(cat(1, { models: [], efforts: [] }), '1.2.3', now), false, 'пустой');
-  assert.equal(catalogFresh(null, '1.2.3', now), false);
+  const cat = (hoursAgo, extra = {}) => ({ models: [{ id: 'm', name: 'M' }], efforts: [], at: new Date(now - hoursAgo * 3600_000).toISOString(), version: '1.2.3', envSig: 'sig1', ...extra });
+  assert.equal(catalogFresh(cat(1), '1.2.3', now, 'sig1'), true);
+  assert.equal(catalogFresh(cat(CATALOG_TTL_MS / 3600_000 + 1), '1.2.3', now, 'sig1'), false, 'старше суток');
+  assert.equal(catalogFresh(cat(1), '1.3.0', now, 'sig1'), false, 'движок обновился');
+  assert.equal(catalogFresh(cat(1, { version: undefined }), '1.2.3', now, 'sig1'), false, 'каталог до 1.16 — без версии');
+  assert.equal(catalogFresh(cat(1, { models: [], efforts: [] }), '1.2.3', now, 'sig1'), false, 'пустой');
+  assert.equal(catalogFresh(null, '1.2.3', now, 'sig1'), false);
+  assert.equal(catalogFresh(cat(1), '1.2.3', now, 'sig2'), false, 'изменился набор ключей API');
+  assert.equal(catalogFresh(cat(1, { envSig: undefined }), '1.2.3', now, 'sig1'), false, 'каталог до 1.20.1 — без отпечатка ключей');
+  assert.match(catalogStaleReason(cat(1), '1.2.3', now, 'sig2'), /ключей/);
+  assert.equal(catalogStaleReason(cat(1), '1.2.3', now, 'sig1'), null);
+});
+
+test('envSignature: зависит от набора заданных *_API_KEY, но не от значений и порядка', () => {
+  const a = envSignature({ OPENAI_API_KEY: 'x', GROQ_API_KEY: 'y', PATH: 'p' });
+  assert.equal(a, envSignature({ GROQ_API_KEY: 'другое', OPENAI_API_KEY: 'значение' }), 'значения и порядок не важны');
+  assert.notEqual(a, envSignature({ OPENAI_API_KEY: 'x', GROQ_API_KEY: 'y', OPENROUTER_API_KEY: 'z' }), 'добавлен ключ');
+  assert.equal(a, envSignature({ OPENAI_API_KEY: 'x', GROQ_API_KEY: 'y', OPENROUTER_API_KEY: '' }), 'пустой ключ не считается');
+  assert.doesNotMatch(a, /x|y/, 'значения в отпечаток не попадают');
 });
 
 // ---- диалоги и темы (state.mjs) ----

@@ -4,6 +4,7 @@
 // - Модели: по умолчанию все модели движка; администратор может оставить сотруднику только часть (отдельно по движкам).
 // - Администратору доступно всё.
 // - Каталог (список моделей и уровней рассуждений) присылает сам агент в ответе session/new; бот хранит его в settings.
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
 import { checkCommand } from './acp.mjs';
@@ -34,12 +35,27 @@ export function getCatalog(engineId) {
 /** Каталог считается свежим сутки, если движок с тех пор не обновлялся. */
 export const CATALOG_TTL_MS = 24 * 3600_000;
 
-/** Можно ли не запускать агента за списком моделей: каталог есть, моложе CATALOG_TTL_MS и версия движка та же. */
-export function catalogFresh(catalog, version, now = Date.now()) {
-  if (!catalog || !(catalog.models?.length || catalog.efforts?.length)) return false;
-  const age = now - Date.parse(catalog.at);
-  return age >= 0 && age < CATALOG_TTL_MS && (catalog.version ?? null) === (version ?? null);
+/**
+ * Отпечаток окружения агента: хэш отсортированных имён заданных переменных *_API_KEY (значения не читаются и не хранятся).
+ * Модели движков вроде OpenCode зависят от набора ключей провайдеров, поэтому каталог, снятый с другим набором, устарел.
+ */
+export function envSignature(env = process.env) {
+  const names = Object.keys(env).filter((k) => /_API_KEY$/.test(k) && env[k]).sort();
+  return createHash('sha256').update(names.join('\n')).digest('hex').slice(0, 12);
 }
+
+/** Почему каталог придётся запросить заново (текст для лога); null — каталог свежий. */
+export function catalogStaleReason(catalog, version, now = Date.now(), sig = envSignature()) {
+  if (!catalog || !(catalog.models?.length || catalog.efforts?.length)) return 'каталога нет';
+  const age = now - Date.parse(catalog.at);
+  if (!(age >= 0 && age < CATALOG_TTL_MS)) return 'каталог старше суток';
+  if ((catalog.version ?? null) !== (version ?? null)) return 'версия движка изменилась';
+  if ((catalog.envSig ?? null) !== sig) return 'изменился набор ключей API';
+  return null;
+}
+
+/** Можно ли не запускать агента за списком моделей: каталог моложе CATALOG_TTL_MS, версия движка и набор ключей API те же. */
+export const catalogFresh = (catalog, version, now = Date.now(), sig = envSignature()) => catalogStaleReason(catalog, version, now, sig) === null;
 
 /**
  * Сохраняет каталог из ответа session/new чистой сессии (probeCatalog). Пустой список не затирает ранее полученный:
@@ -56,6 +72,7 @@ export function saveCatalog(engine, res, meta = null) {
     defaultEffort: c.defaultEffort ?? old?.defaultEffort ?? null,
     at: new Date().toISOString(),
     version: engineVersion(engine.id), // обновился движок — каталог запрашивается заново (catalogFresh)
+    envSig: envSignature(), // сменился набор ключей API — тоже
   };
   db.setSetting(`catalog:${engine.id}`, JSON.stringify(catalog));
   catalogCache.set(engine.id, catalog);
@@ -123,10 +140,12 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
  */
 export async function refreshCatalogs({ force = false } = {}) {
   for (const e of Object.values(ENGINES).filter((x) => isAvailable(x.id))) {
-    if (!force && catalogFresh(getCatalog(e.id), engineVersion(e.id))) {
+    const reason = catalogStaleReason(getCatalog(e.id), engineVersion(e.id));
+    if (!force && reason === null) {
       log(`${e.label}: список моделей свежий (${getCatalog(e.id).at}), агент не запускается`);
       continue;
     }
+    log(`${e.label}: список моделей запрашивается заново — ${force ? 'принудительно' : reason}`);
     try {
       const c = await probeCatalog(e);
       log(`${e.label}: моделей ${c?.models.length ?? 0}, уровней рассуждений ${c?.efforts.length ?? 0}`);

@@ -1,18 +1,36 @@
 // Команда /model: модель и уровень рассуждений текущего движка. Выбор запоминается для пользователя отдельно по движкам
 // и применяется к живой сессии перед следующим запросом (turn.mjs → syncSelection).
 // /model <запрос> — поиск модели по названию (при большом каталоге, как у OpenCode, — самый быстрый путь).
-import { allowedModels, effectiveSelection, getCatalog, modelRestriction, probeCatalog, pushRecentModel, recentModels, saveChoice } from './access.mjs';
+import { allowedModels, catalogStaleReason, effectiveSelection, getCatalog, modelRestriction, probeCatalog, pushRecentModel, recentModels, saveChoice } from './access.mjs';
 import { langOf, log, say } from './ctx.mjs';
+import { engineVersion } from './engines.mjs';
 import { t } from './i18n.mjs';
 import { engineOf } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { modelChosen, modelGroupMenu, modelMenu, modelSearchMenu } from './ui.mjs';
 
-/** Каталог движка; если его ещё нет — запрашиваем у агента в фоне (один запуск на движок, с паузой после неудачи). */
-function catalogOf(engine) {
+/**
+ * Каталог движка. Нет каталога — запрашиваем у агента в фоне, пользователю «ещё загружается». Каталог устарел (сутки,
+ * новая версия движка, другой набор ключей API) — запрашиваем заново и ждём, чтобы список был актуальным; не получилось —
+ * показываем прежний. Один запуск на движок, после неудачи пауза.
+ */
+async function catalogOf(engine, lang, to) {
   const c = getCatalog(engine.id);
-  if (!c) probeCatalog(engine).catch((e) => log(`${engine.label}: список моделей не получен — ${e.message}`));
-  return c;
+  const reason = catalogStaleReason(c, engineVersion(engine.id));
+  if (reason === null) return c;
+  const run = probeCatalog(engine);
+  if (!c) {
+    run.catch((e) => log(`${engine.label}: список моделей не получен — ${e.message}`));
+    return c;
+  }
+  log(`${engine.label}: список моделей обновляется по запросу /model — ${reason}`);
+  await say(to, t('model.refreshing', lang, { engine: engine.label }));
+  try {
+    return (await run) ?? c;
+  } catch (e) {
+    log(`${engine.label}: список моделей не обновлён, показан прежний — ${e.message}`);
+    return c;
+  }
 }
 
 function view(st, engine, catalog) {
@@ -32,8 +50,8 @@ function view(st, engine, catalog) {
 /** /model — экран выбора; /model <запрос> — модели, в названии или id которых есть все слова запроса. */
 export async function handleModel(st, query = '') {
   const engine = engineOf(st);
-  const catalog = catalogOf(engine);
   const lang = langOf(st.userId);
+  const catalog = await catalogOf(engine, lang, st.to);
   if (!catalog) return say(st.to, t('model.loading', lang, { engine: engine.label }));
   const q = String(query ?? '').trim();
   const v = q

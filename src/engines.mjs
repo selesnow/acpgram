@@ -181,7 +181,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     defaultCommand: 'agy',
     args: ['acp'],
     versionArgs: ['--version'],
-    install: 'Antigravity CLI 1.5+ (с подкомандой acp); войдите один раз: agy acp --login',
+    install: 'Antigravity CLI 1.5+ (с подкомандой acp); войдите один раз (agy acp --login) или задайте ключ Gemini API (GEMINI_API_KEY и "modelProvider": "gemini" в settings.json)',
     // подкоманда `agy acp` появилась в 1.5: более старая версия запускается, но работать с ботом не может
     minVersion: '1.5.0',
     update: 'agy update',

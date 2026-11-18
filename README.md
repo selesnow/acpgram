@@ -54,7 +54,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 |---|---|---|---|
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini --acp` | `npm i -g @google/gemini-cli` | `GEMINI_API_KEY` or Gemini CLI login |
 | [Claude Code](https://www.anthropic.com/claude-code) | `claude-agent-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)) | `npm i -g @agentclientprotocol/claude-agent-acp` | `ANTHROPIC_API_KEY` or Claude Code login |
-| [Antigravity CLI](https://antigravity.google/docs/cli/acp/) 1.5+ | `agy acp` | see Antigravity docs | Google sign-in once: `agy acp --login` |
+| [Antigravity CLI](https://antigravity.google/docs/cli/acp/) 1.5+ | `agy acp` | see Antigravity docs | Google sign-in once (`agy acp --login`) or a Gemini API key: `GEMINI_API_KEY` plus `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` |
 | [OpenCode](https://opencode.ai) | `opencode acp` | `npm i -g opencode-ai` | provider keys in the bot environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) or `opencode auth login`; free OpenCode Zen models need no key (they may use requests for training — keep secrets out) |
 | [OpenAI Codex](https://github.com/openai/codex) | `codex-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)) | `npm i -g @agentclientprotocol/codex-acp` (Codex CLI required) | `OPENAI_API_KEY` or `codex login`; on Windows `read-only`/`workspace-write` need a working Codex sandbox |
 
@@ -164,7 +164,7 @@ docker compose up -d --build
 In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all five engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge), Antigravity CLI and OpenCode (`opencode-ai`). To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
 
 - Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY`; OpenCode - any of these keys (models of those providers) plus free models without a key (all from `.env`).
-- Antigravity CLI has no API keys: log in once with your Google account (a link and a code, no browser needed on the server): `docker compose exec -it bot agy acp --login`. The login is kept in the `gemini-home` volume. The build fails if Antigravity cannot be installed or lacks the `acp` subcommand (1.5+) - then drop `agy` from `ENGINES`.
+- Antigravity CLI: either log in once with your Google account (a link and a code, no browser needed on the server): `docker compose exec -it bot agy acp --login`, or use a Gemini API key: set `GEMINI_API_KEY` in `.env` and add `"modelProvider": "gemini"` to `/home/node/.gemini/antigravity-cli/settings.json` inside the container (it lives in the `gemini-home` volume). The login and settings are kept in the `gemini-home` volume. The build fails if Antigravity cannot be installed or lacks the `acp` subcommand (1.5+) - then drop `agy` from `ENGINES`.
 - Volumes: `bot-data`, `gemini-home`, `claude-home`, `codex-home`, `opencode-home` survive container re-creation; `docker compose down -v` removes them.
 - An engine that starts but is not authenticated is shown as "login needed" in `/engine`.
 

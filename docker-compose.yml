@@ -1,6 +1,6 @@
 # Запуск: docker compose up -d --build
 # Настройки берутся из .env (TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, PROJECTS_DIR, DEFAULT_ENGINE и ключи API движков:
-# GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY; OpenCode берёт модели тех же провайдеров, бесплатные — без ключа). Antigravity CLI ключей API не поддерживает — вход один раз:
+# GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY; OpenCode берёт модели тех же провайдеров, бесплатные — без ключа). Antigravity CLI — вход один раз (или ключ Gemini API: GEMINI_API_KEY и "modelProvider": "gemini" в ~/.gemini/antigravity-cli/settings.json):
 #   docker compose exec -it bot agy acp --login
 services:
   bot:
