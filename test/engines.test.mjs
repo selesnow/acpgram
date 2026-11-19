@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_ENGINE, ENGINES, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin, opencodeConfig, opencodeGoogleKey, parseCatalog, parseOpencodeModels, vendorName,
+  DEFAULT_ENGINE, ENGINES, PROVIDER_KEYS, agentEnv, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin, opencodeConfig, opencodeGoogleKey, parseCatalog, parseOpencodeModels, vendorName,
 } from '../src/engines.mjs';
 import { parseTool } from '../src/tools.mjs';
 
@@ -337,4 +337,45 @@ test('parseCatalog: у моделей OpenRouter — вендор (sub) и ег�
   assert.equal(latest.subLabel, 'OpenAI');
   assert.equal(z.subLabel, 'Z.ai');
   assert.equal(vendorName('somecorp'), 'Somecorp');
+});
+
+test('agentEnv: токен бота и ключи чужих провайдеров до процесса агента не доходят', () => {
+  const env = {
+    PATH: '/bin', HTTPS_PROXY: 'http://p', PLANFIX_API_KEY: 'pf', Telegram_Bot_Token: 't', TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1', ALLOWED_USERNAME: 'u',
+    GEMINI_API_KEY: 'g', GOOGLE_API_KEY: 'gg', ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o', OPENROUTER_API_KEY: 'r', GROQ_API_KEY: 'q',
+  };
+  const keys = (id) => Object.keys(agentEnv(ENGINES[id], env)).sort();
+  const common = ['HTTPS_PROXY', 'PATH', 'PLANFIX_API_KEY']; // переменные скриптов проекта и системы — как есть
+  assert.deepEqual(keys('claude'), ['ANTHROPIC_API_KEY', ...common]);
+  assert.deepEqual(keys('codex'), [...common.slice(0, 1), 'OPENAI_API_KEY', ...common.slice(1)]);
+  assert.deepEqual(keys('gemini'), ['GEMINI_API_KEY', 'GOOGLE_API_KEY', ...common]);
+  assert.deepEqual(keys('agy'), keys('gemini'));
+  // OpenCode работает с моделями всех провайдеров — ключи все, но не переменные бота
+  assert.deepEqual(keys('opencode'), ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'HTTPS_PROXY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PATH', 'PLANFIX_API_KEY']);
+  assert.equal(env.TELEGRAM_BOT_TOKEN, 't', 'исходное окружение не меняется');
+  // у каждого движка ключи заданы явно: забытое поле означало бы «все ключи»
+  for (const e of Object.values(ENGINES)) assert.ok(e.apiKeys === null ? e.id === 'opencode' : e.apiKeys.every((k) => PROVIDER_KEYS.has(k)), e.id);
+});
+
+test('createAgent: процесс агента не видит токен бота и чужие ключи, свои — видит', async () => {
+  const saved = { ...process.env };
+  Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'bot-token', ANTHROPIC_API_KEY: 'a-key', GEMINI_API_KEY: 'g-key' });
+  // фальшивый агент возвращает в _meta.env значение ACPGRAM_TEST_ENV — в него собираем то, что он видит
+  const probe = { ...ENGINES.gemini, id: 'fake', label: 'Fake', envVar: 'TEST_FAKE_AGENT_CMD', defaultCommand: process.execPath, args: [FAKE] };
+  try {
+    const a = createAgent(probe, { cwd: process.cwd() });
+    assert.equal(a.env.TELEGRAM_BOT_TOKEN, undefined);
+    assert.equal(a.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(a.env.GEMINI_API_KEY, 'g-key');
+    assert.ok(a.env.PATH ?? a.env.Path, 'PATH передаётся');
+    await a.init(null);
+    const exited = new Promise((r) => (a.onExit = r));
+    a.close();
+    await exited;
+  } finally {
+    for (const k of ['TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY']) {
+      if (k in saved) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+  }
 });

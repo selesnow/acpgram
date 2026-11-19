@@ -181,6 +181,17 @@ test('resolveSendable: разрешены каталог исходящих и �
   assert.equal(resolveSendable(join(project, 'a.txt'), ctx).ok, true);
   assert.equal(resolveSendable('a.txt', ctx).ok, true, 'относительный путь — от папки проекта');
   assert.equal(resolveSendable(join(outbox, 'o.txt'), ctx).ok, true);
+  // секрет, скопированный в каталог исходящих, по имени не отправляется (раньше там не проверялось ничего)
+  mkdirSync(join(outbox, '.ssh'), { recursive: true });
+  for (const f of ['.env', 'id_rsa', 'server.pem', join('.ssh', 'known')]) {
+    writeFileSync(join(outbox, f), 'secret');
+    assert.equal(resolveSendable(join(outbox, f), ctx).reason, 'denied', f);
+  }
+  // сам каталог исходящих может лежать в папке с «секретным» именем (~/.acpgram/data/outbox) — это не мешает
+  const hidden = join(tmp, '.acpgram', 'data', 'outbox', '1');
+  mkdirSync(hidden, { recursive: true });
+  writeFileSync(join(hidden, 'report.txt'), 'out');
+  assert.equal(resolveSendable(join(hidden, 'report.txt'), { cwd: project, outbox: hidden }).ok, true);
   assert.equal(resolveSendable(join(project, 'нет.txt'), ctx).reason, 'missing');
   assert.equal(resolveSendable(project, ctx).reason, 'notfile');
   assert.equal(resolveSendable(join(project, 'empty.txt'), ctx).reason, 'empty');

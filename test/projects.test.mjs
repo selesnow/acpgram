@@ -59,8 +59,8 @@ test('isWithin / samePath: регистр по правилам ОС', () => {
   assert.equal(P.isWithin(root + '2', root), false);
 });
 
-test('findDirs: поиск без учёта регистра', () => {
-  const { results } = P.findDirs('A B');
+test('findDirs: поиск без учёта регистра', async () => {
+  const { results } = await P.findDirs('A B');
   assert.deepEqual(results, [join(root, 'a', 'b')]);
 });
 
@@ -103,8 +103,8 @@ test('навигация: «Вверх» до корня проектов или
   assert.equal(P.navStart(parse(root).root, null), parse(root).root);
 });
 
-test('findDirs: поиск от заданной папки (без корня — от домашней)', () => {
-  assert.deepEqual(P.findDirs('outside', { base }).results, [join(base, 'outside')]);
+test('findDirs: поиск от заданной папки (без корня — от домашней)', async () => {
+  assert.deepEqual((await P.findDirs('outside', { base })).results, [join(base, 'outside')]);
 });
 
 test('pushRecent: прежний проект — первым, без текущего и повторов, не больше лимита', () => {
@@ -116,4 +116,16 @@ test('pushRecent: прежний проект — первым, без теку�
   assert.deepEqual(P.pushRecent([up('/p/a')], '/p/a', '/p/z').length, P.CASE_INSENSITIVE_FS ? 1 : 2);
   assert.deepEqual(P.pushRecent(['/1', '/2', '/3', '/4', '/5', '/6'], '/0', '/x', 6), ['/0', '/1', '/2', '/3', '/4', '/5']);
   assert.deepEqual(P.pushRecent([null, 5, '/q'], null, '/x'), ['/q'], 'мусор из базы отбрасывается');
+});
+
+test('findDirs: уступает циклу событий и останавливается на maxVisited', async () => {
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 0);
+  try {
+    const r = await P.findDirs('zzz-нет-такой', { base, maxVisited: 1 });
+    assert.deepEqual(r.results, []);
+    assert.equal(r.truncated, true, 'обход оборван по лимиту');
+  } finally {
+    clearInterval(timer);
+  }
 });

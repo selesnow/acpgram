@@ -94,7 +94,7 @@ export async function handleProject(st, arg) {
   }
   const direct = resolveAsPath(q); // запрос может быть путём: абсолютным, «~/…» или от корня (без корня — от домашней папки)
   if (direct) return selectProject(st, direct);
-  const { results, truncated } = findDirs(q);
+  const { results, truncated } = await findDirs(q);
   if (!results.length) return say(st.to, t('proj.none', lang, { q }));
   if (results.length === 1) return selectProject(st, results[0]);
   const note = truncated ? `\n${t('proj.moreResults', lang)}` : '';

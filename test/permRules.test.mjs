@@ -1,15 +1,33 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ENGINES } from '../src/engines.mjs';
-import { SESSION_OPTION_ID, allowOnceOption, commandRoots, permissionKeys, rulesAllow, withSessionOption } from '../src/permRules.mjs';
+import { SESSION_OPTION_ID, allowOnceOption, commandRoots, describeRule, permissionKeys, rulesAllow, withSessionOption } from '../src/permRules.mjs';
 
-test('commandRoots: имена программ составной команды', () => {
-  assert.deepEqual(commandRoots('git status'), ['git']);
-  assert.deepEqual(commandRoots(String.raw`cd /d C:\proj && "C:\R\bin\Rscript.exe" run.R 2>&1`), ['cd', 'rscript']);
-  assert.deepEqual(commandRoots('git log | head -5; git status'), ['git', 'head']);
-  assert.deepEqual(commandRoots('LANG=C sort a.txt > nul'), ['sort']);
-  assert.deepEqual(commandRoots('npm test 2>/dev/null'), ['npm']);
-  assert.deepEqual(commandRoots('& npm.cmd run lint'), ['npm']);
+test('commandRoots: имена программ составной команды; у программ с подкомандами — вместе с подкомандой', () => {
+  assert.deepEqual(commandRoots('ls -la'), ['ls']);
+  assert.deepEqual(commandRoots(String.raw`cd /d C:\proj && "C:\tools\rg.exe" TODO src 2>&1`), ['cd', 'rg']);
+  assert.deepEqual(commandRoots('sort a.txt > nul'), ['sort']);
+  assert.deepEqual(commandRoots('git status'), ['git status']);
+  assert.deepEqual(commandRoots('git log | head -5; git status'), ['git log', 'head', 'git status']);
+  assert.deepEqual(commandRoots('npm test 2>/dev/null'), ['npm test']);
+  assert.deepEqual(commandRoots('& npm.cmd run lint'), ['npm run']);
+  assert.deepEqual(commandRoots('GIT STATUS'), ['git status'], 'регистр не важен');
+});
+
+test('commandRoots: «git status» не открывает другие подкоманды; параметр перед подкомандой — только точная команда', () => {
+  assert.notDeepEqual(commandRoots('git push --force'), commandRoots('git status'));
+  for (const cmd of ['git', 'git -c core.sshCommand=evil status', 'docker --host tcp://x ps', 'npm --prefix /tmp run x']) {
+    assert.equal(commandRoots(cmd), null, cmd);
+  }
+});
+
+test('commandRoots: интерпретаторы и переменные перед программой — только точная команда', () => {
+  const exact = [
+    'python script.py', 'python3 -c "import os"', 'py -3 x.py', 'node build.mjs', String.raw`"C:\R\bin\Rscript.exe" run.R`, 'npx cowsay hi',
+    'find . -name x -exec rm {} +', 'ssh host uptime', 'awk "{print}" f', 'perl -e 1', 'ls && node -e 1',
+    'LANG=C sort a.txt', 'PATH=/tmp/evil:$PATH git status', 'GIT_SSH_COMMAND=evil git fetch',
+  ];
+  for (const cmd of exact) assert.equal(commandRoots(cmd), null, cmd);
 });
 
 test('commandRoots: обёртки, подстановки и запись в файл — только точная команда', () => {
@@ -19,7 +37,8 @@ test('commandRoots: обёртки, подстановки и запись в ф
 });
 
 test('permissionKeys: команды по программам, правки целиком, прочее по виду и инструменту', () => {
-  assert.deepEqual(permissionKeys({ kind: 'execute', command: 'git add . && git commit -m x' }), ['exec:git']);
+  assert.deepEqual(permissionKeys({ kind: 'execute', command: 'git add . && git commit -m x' }), ['exec:git add', 'exec:git commit']);
+  assert.deepEqual(permissionKeys({ kind: 'execute', command: 'python run.py' }), ['exec=python run.py'], 'интерпретатор — только эта команда');
   assert.deepEqual(permissionKeys({ kind: 'execute', command: 'bash -c "x"' }), ['exec=bash -c "x"']);
   assert.equal(permissionKeys({ kind: 'execute', command: '' }), null);
   assert.deepEqual(permissionKeys({ kind: 'edit', tool: 'Edit' }), ['kind:edit']);
@@ -57,4 +76,24 @@ test('withSessionOption: свой вариант агента, нет ключе
   const exitPlan = [{ optionId: 'exit-plan-default', kind: 'allow_once' }, { optionId: 'reject', kind: 'reject_once' }];
   assert.deepEqual(ids(withSessionOption(exitPlan, ['tool:other:ExitPlanMode'], ENGINES.claude.optionMode)), ['exit-plan-default', 'reject']);
   assert.equal(allowOnceOption(exitPlan, ENGINES.claude.optionMode), null);
+});
+
+test('describeRule: что разрешит правило — для подписи кнопки', () => {
+  assert.deepEqual(describeRule(['exec:git status', 'exec:head']), { type: 'exec', what: 'git status …, head …' });
+  assert.deepEqual(describeRule(['exec=python run.py']), { type: 'exact' });
+  assert.deepEqual(describeRule(['kind:edit']), { type: 'all' });
+  assert.deepEqual(describeRule(['tool:fetch:WebFetch']), { type: 'all' });
+  assert.equal(describeRule(null), null);
+  assert.equal(describeRule([]), null);
+});
+
+test('правило на сессию: разрешённая подкоманда не пропускает другую и интерпретатор с другим кодом', () => {
+  const rules = new Set(permissionKeys({ kind: 'execute', command: 'git status' }));
+  const allows = (command) => rulesAllow(rules, permissionKeys({ kind: 'execute', command }));
+  assert.equal(allows('git status --short'), true);
+  assert.equal(allows('git push'), false);
+  assert.equal(allows('PATH=/tmp/x git status'), false);
+  const py = new Set(permissionKeys({ kind: 'execute', command: 'python run.py' }));
+  assert.equal(rulesAllow(py, permissionKeys({ kind: 'execute', command: 'python run.py' })), true);
+  assert.equal(rulesAllow(py, permissionKeys({ kind: 'execute', command: 'python -c "import os"' })), false);
 });

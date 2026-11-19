@@ -3,16 +3,17 @@
 // движок и любой формат; изображения дополнительно уходят блоком image, если агент это заявил (promptCapabilities).
 // Файлы агента — по метке [[send:путь]] в ответе: отправляются только из каталога исходящих и из папки проекта.
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, resolve } from 'node:path';
-import { DATA_DIR, ENV_PATH } from './app.mjs';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { DATA_DIR, ENV_PATH, positiveEnv } from './app.mjs';
 import { isWithin } from './projects.mjs';
+import { PHOTO_MAX, mediaBlock } from './telegram.mjs';
 
 /** Максимальный размер файла в обе стороны: 20 МБ (лимит скачивания файлов Bot API). */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /** Картинки крупнее этого размера уходят агенту только путём к файлу, а не блоком image (лимиты моделей). */
 export const IMAGE_BLOCK_MAX = 5 * 1024 * 1024;
 /** Сколько дней хранятся принятые и исходящие файлы. */
-export const KEEP_DAYS = Number(process.env.FILES_KEEP_DAYS) > 0 ? Number(process.env.FILES_KEEP_DAYS) : 7;
+export const KEEP_DAYS = positiveEnv('FILES_KEEP_DAYS', 7);
 
 /** Базовый каталог файлов: FILES_DIR из .env, иначе каталог данных бота. */
 export const FILES_BASE = process.env.FILES_DIR?.trim() || DATA_DIR;
@@ -244,8 +245,6 @@ export function extractSendMarks(text, { placeholders = false } = {}) {
 export const MAX_FILES_PER_TURN = 10;
 /** Файлы внутри ответа загружаются одним запросом вместе с ним; лимит загрузки Bot API — 50 МБ. */
 export const MAX_EMBED_BYTES = 45 * 1024 * 1024;
-/** Фото Telegram принимает до 10 МБ (крупнее — документом). */
-const PHOTO_BYTES = 10 * 1024 * 1024;
 
 /**
  * Ставит файлы агента в текст ответа на место меток (заглушки FILE_PLACEHOLDER из extractSendMarks):
@@ -271,7 +270,7 @@ export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () =>
       onSkip(p, r.reason);
       return failText(basename(p), r.reason);
     }
-    const file = { path: r.path, name: basename(r.path), size: r.size, photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)) && r.size <= PHOTO_BYTES };
+    const file = { path: r.path, name: basename(r.path), size: r.size, photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)) && r.size <= PHOTO_MAX };
     if (r.size > budget) {
       extra.push(file);
       return null;
@@ -279,7 +278,7 @@ export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () =>
     budget -= r.size;
     const id = `f${i}`;
     media[id] = file;
-    return `![](tg://${file.photo ? 'photo' : 'document'}?id=${id})`;
+    return mediaBlock(file.photo ? 'photo' : 'document', id).trim();
   };
   // заглушки, идущие подряд, вместе с пробелами и переводами строк вокруг → блоки через пустую строку;
   // остальной текст (и код в нём) не трогаем
@@ -316,14 +315,16 @@ const SECRET_DIRS = /[\\/](?:\.git|\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker|\
 // Файлы с секретами: .env*, .Renviron (пароли и токены в R-проектах), закрытые ключи и сертификаты, входы npm/pip/git
 const SECRET_FILES = /^(?:\.env(?:\..*)?|\.Renviron|\.npmrc|\.pypirc|\.netrc|_netrc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|.*\.(?:pem|key|p12|pfx|jks|keystore|ppk)|credentials(?:\.json)?|client_secret.*\.json)$/i;
 
+/** Секрет по имени файла или папки на пути (SECRET_FILES, SECRET_DIRS) — без учёта того, где файл лежит. */
+export const isSecretName = (path) => SECRET_FILES.test(basename(path)) || SECRET_DIRS.test(path);
+
 /**
  * Секретные места, которые агент не может отправить из папки проекта: файлы и папки с ключами (SECRET_FILES,
  * SECRET_DIRS), .env и каталог данных бота (база, журналы). Это защита от случайной или навязанной (prompt injection)
  * отправки файла; прочитать файл и пересказать его текстом агент по-прежнему может своими инструментами.
  */
 export function isSecret(path) {
-  if (SECRET_FILES.test(basename(path))) return true;
-  if (SECRET_DIRS.test(path)) return true;
+  if (isSecretName(path)) return true;
   const envReal = real(ENV_PATH);
   if (envReal && isWithin(path, envReal)) return true;
   const data = real(DATA_DIR);
@@ -344,7 +345,10 @@ export function resolveSendable(p, { cwd, outbox, maxBytes = MAX_FILE_BYTES }) {
   const outboxReal = outbox && real(outbox);
   const cwdReal = cwd && real(cwd);
   const inOutbox = Boolean(outboxReal && isWithin(file, outboxReal));
-  if (!inOutbox && !(cwdReal && isWithin(file, cwdReal) && !isSecret(file))) return { ok: false, reason: 'denied' };
+  // в каталоге исходящих проверяется только имя внутри него (сам каталог лежит в данных бота): скопированный туда .env или ключ
+  // не отправится; из проекта — ещё и каталог данных бота и его .env
+  const allowed = inOutbox ? !isSecretName(join(sep, relative(outboxReal, file))) : Boolean(cwdReal && isWithin(file, cwdReal) && !isSecret(file));
+  if (!allowed) return { ok: false, reason: 'denied' };
   if (st.size === 0) return { ok: false, reason: 'empty' };
   if (st.size > maxBytes) return { ok: false, reason: 'big' };
   return { ok: true, path: file, size: st.size };

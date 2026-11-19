@@ -2,9 +2,10 @@
 import { mkdirSync } from 'node:fs';
 import { appendFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DATA_DIR } from './app.mjs';
+import { DATA_DIR, positiveEnv } from './app.mjs';
 import { openDb } from './db.mjs';
 import { normLang, pickLang, t } from './i18n.mjs';
+import { log } from './log.mjs';
 
 export { DATA_DIR };
 import { dest, tg } from './telegram.mjs';
@@ -12,9 +13,9 @@ import { dest, tg } from './telegram.mjs';
 /** Главный администратор: ID задан в .env, отозвать доступ у него из бота нельзя. */
 export const ADMIN_ID = Number(process.env.ALLOWED_USER_ID);
 /** Максимум одновременно работающих агентов сотрудников. Администратор вне лимита. */
-export const MAX_AGENTS = Number(process.env.MAX_AGENTS || 3);
+export const MAX_AGENTS = positiveEnv('MAX_AGENTS', 3);
 /** Через сколько минут простоя сессия закрывается. */
-export const IDLE_MINUTES = Number(process.env.IDLE_MINUTES || 30);
+export const IDLE_MINUTES = positiveEnv('IDLE_MINUTES', 30);
 export const IDLE_MS = IDLE_MINUTES * 60_000;
 
 /** Уровни доступа сотрудников по порядку. Названия и описания — в i18n.mjs. Режим сессии для уровня у каждого движка свой (engines.mjs). */
@@ -49,7 +50,7 @@ export const setLang = (userId, lang) => db.setSetting(`lang:${userId}`, lang);
 
 export const botInfo = { username: null }; // заполняется при старте
 
-export const log = (...a) => console.log(new Date().toISOString(), ...a);
+export { log }; // журнал — log.mjs (им же пользуются acp, telegram и db)
 
 // Подробный журнал того, что бот отправляет в Telegram (для разбора проблем с отображением) — только при
 // ACPGRAM_DEBUG=1: черновик пишется каждую секунду, без выключателя и ротации файл рос бесконечно.

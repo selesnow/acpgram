@@ -10,8 +10,8 @@
 //   события: onUpdate(update ACP session/update), onPermission(params) → outcome, onExit(code)
 // Если появится движок без ACP, ему достаточно реализовать этот же контракт отдельным классом.
 //
-// Ключи API (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY) процессы агентов получают из окружения бота;
-// движок может добавить свои переменные (processEnv) — например, конфиг прав OpenCode по уровню доступа.
+// Окружение процесса агента (agentEnv) — окружение бота без токена бота и без ключей API чужих провайдеров
+// (apiKeys движка); движок может добавить свои переменные (processEnv) — например, конфиг прав OpenCode по уровню доступа.
 import { AcpAgent, checkCommand } from './acp.mjs';
 
 /** Служебная строка Gemini «[MODE_UPDATE] <режим>» приходит как текст ответа — убираем её из начала. */
@@ -34,6 +34,7 @@ const stripGeminiModeUpdate = (s) => s.replace(/^\s*\[MODE_UPDATE\]\s*(?:default
  * @property {(u:object)=>string} [toolDescription]    описание действия от агента (если движок присылает его отдельно)
  * @property {RegExp} [quietStderr]    служебные строки stderr агента, которые не пишутся в лог бота
  * @property {(who:{admin?:boolean, level?:string})=>Record<string,string>} [processEnv]  свои переменные окружения процесса агента
+ * @property {string[]|null} apiKeys    ключи API провайдеров, которые видит процесс агента; null — все (OpenCode)
  * @property {boolean} [modelGroups]    модели «провайдер/модель»: в /model — по группам (бесплатные, провайдеры)
  * @property {{args: string[], parse: (out:string)=>Map<string,{free:boolean,tools:boolean}>}} [modelMeta]  команда со сведениями о моделях
  */
@@ -116,6 +117,33 @@ export function parseOpencodeModels(text) {
   return meta;
 }
 
+const GOOGLE_KEYS = ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'];
+
+/** Ключи API провайдеров моделей. Процесс агента получает из них только ключи своего движка (Engine.apiKeys). */
+export const PROVIDER_KEYS = new Set([...GOOGLE_KEYS, 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY']);
+
+/** Переменные самого бота: процессу агента не нужны, а токен даёт полный контроль над ботом. */
+const BOT_ONLY_ENV = new Set(['TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'ALLOWED_USERNAME']);
+
+/**
+ * Окружение процесса агента: окружение бота без переменных самого бота (BOT_ONLY_ENV) и без ключей API чужих
+ * провайдеров. Агент выполняет команды пользователя, и раньше любой сотрудник мог попросить его показать
+ * TELEGRAM_BOT_TOKEN или ключ провайдера, к движку которого у него нет доступа. Остальные переменные (PATH, прокси,
+ * переменные скриптов проекта) передаются как есть. Имена сравниваются без учёта регистра (Windows).
+ * @param {{apiKeys?: string[]|null}} engine
+ */
+export function agentEnv(engine, env = process.env) {
+  const own = engine.apiKeys ? new Set(engine.apiKeys) : null;
+  const out = {};
+  for (const [name, value] of Object.entries(env)) {
+    const key = name.toUpperCase();
+    if (BOT_ONLY_ENV.has(key)) continue;
+    if (own && PROVIDER_KEYS.has(key) && !own.has(key)) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
 /** @type {Record<string, Engine>} Без прототипа: id из кнопки (eng:constructor и т.п.) не находит унаследованных свойств. */
 export const ENGINES = Object.assign(Object.create(null), {
   gemini: {
@@ -123,6 +151,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'Gemini CLI',
     short: 'Gemini',
     envVar: 'GEMINI_COMMAND',
+    apiKeys: GOOGLE_KEYS,
     defaultCommand: 'gemini',
     args: ['--acp'],
     versionArgs: ['--version'],
@@ -152,6 +181,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'Claude Code',
     short: 'Claude',
     envVar: 'CLAUDE_COMMAND',
+    apiKeys: ['ANTHROPIC_API_KEY'],
     defaultCommand: 'claude-agent-acp', // мост ACP: npm i -g @agentclientprotocol/claude-agent-acp
     args: [],
     versionArgs: ['--version'],
@@ -178,6 +208,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'Antigravity CLI',
     short: 'Antigravity',
     envVar: 'AGY_COMMAND',
+    apiKeys: GOOGLE_KEYS, // вход Google или ключ Gemini API
     defaultCommand: 'agy',
     args: ['acp'],
     versionArgs: ['--version'],
@@ -201,6 +232,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'OpenAI Codex',
     short: 'Codex',
     envVar: 'CODEX_COMMAND',
+    apiKeys: ['OPENAI_API_KEY'],
     defaultCommand: 'codex-acp', // мост ACP: npm i -g @agentclientprotocol/codex-acp
     args: [],
     versionArgs: ['--version'],
@@ -221,6 +253,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     label: 'OpenCode',
     short: 'OpenCode',
     envVar: 'OPENCODE_COMMAND',
+    apiKeys: null, // модели любых провайдеров, чьи ключи заданы
     defaultCommand: 'opencode',
     args: ['acp'],
     versionArgs: ['--version'],
@@ -453,10 +486,10 @@ export function parseUsage(res, usageUpdate) {
  * @param {Engine} engine
  * @param {{cwd: string, who?: {admin?: boolean, level?: string}, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
  *   who — кто работает в сессии: от этого зависят переменные окружения движка (processEnv; у OpenCode — конфиг прав).
- *   Без who (запуск за списком моделей) — окружение бота как есть.
+ *   Без who (запуск за списком моделей) — только общее окружение агента (agentEnv).
  */
 export function createAgent(engine, { who, ...opts }) {
-  const env = who && engine.processEnv ? engine.processEnv(who) : null;
+  const env = { ...agentEnv(engine), ...(who && engine.processEnv ? engine.processEnv(who) : {}) };
   const agent = new AcpAgent({ ...opts, env, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
   agent.engine = engine;
   return agent;
@@ -486,7 +519,7 @@ export function checkEngines(engines = Object.values(ENGINES), timeoutMs) {
   return Promise.all(
     engines.map(async (engine) => {
       const command = engineCommand(engine);
-      const r = { engine, command, ...(await checkCommand(command, engine.versionArgs, timeoutMs)) };
+      const r = { engine, command, ...(await checkCommand(command, engine.versionArgs, timeoutMs, agentEnv(engine))) };
       if (r.ok && engine.minVersion && !versionAtLeast(r.version, engine.minVersion)) {
         return { ...r, ok: false, tooOld: true, error: `версия ${r.version}, нужна ${engine.minVersion}+${engine.update ? ` — обновите: ${engine.update}` : ''}` };
       }

@@ -6,10 +6,10 @@ import { ENGINES, getEngine, isAvailable } from './engines.mjs';
 import { LOCALES, t } from './i18n.mjs';
 import { ClosedError, LimitError, endAgent, engineOf, ensureAgent, saveEngine } from './state.mjs';
 import { tg } from './telegram.mjs';
+import { trunc } from './ui.mjs';
 
 const LIST_LIMIT = 10;
 
-const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 const when = (iso, lang) => new Date(iso).toLocaleString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const oneLine = (s) => (s || '').replace(/\s+/g, ' ').trim();
 

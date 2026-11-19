@@ -1,7 +1,8 @@
 // Состояние по пользователям: у каждого свой процесс агента, движок, проект, флаг «занят» и разрешения.
 import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVEL_KEYS, MAX_AGENTS, db, langOf, levelName, log, say } from './ctx.mjs';
+import { positiveEnv } from './app.mjs';
 import { t } from './i18n.mjs';
-import { canUseEngine } from './access.mjs';
+import { canUseEngine, parseJson } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, createAgent, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
 import { DEFAULT_DIR, insideRoot, pushRecent, samePath } from './projects.mjs';
 
@@ -11,7 +12,7 @@ const states = new Map(); // userId -> состояние
  * Сколько ждать запуска агента (initialize, создание или загрузка сессии), AGENT_START_TIMEOUT секунд, по умолчанию 120.
  * Без ограничения зависший агент (например, ждёт входа в аккаунт) держал бы пользователя в «агент занят» до /close.
  */
-export const START_TIMEOUT_MS = (Number(process.env.AGENT_START_TIMEOUT) > 0 ? Number(process.env.AGENT_START_TIMEOUT) : 120) * 1000;
+export const START_TIMEOUT_MS = positiveEnv('AGENT_START_TIMEOUT', 120) * 1000;
 
 export const isAdmin = (id) => id === ADMIN_ID;
 
@@ -121,12 +122,8 @@ export const statesOf = (userId) => [...states.values()].filter((s) => s.userId 
 export const RECENT_LIMIT = 6;
 
 const readRecent = (userId) => {
-  try {
-    const list = JSON.parse(db.getSetting(`recent:${userId}`) || '[]');
-    return Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
-  } catch {
-    return [];
-  }
+  const list = parseJson(db.getSetting(`recent:${userId}`), []);
+  return Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
 };
 
 /** Недавние проекты пользователя (свежие первыми): только существующие и допустимые папки, без текущего проекта. */
@@ -213,8 +210,8 @@ export function activeSessions() {
 const activeUserAgents = () => [...states.values()].filter((s) => !isAdmin(s.userId) && s.agent).length;
 
 /** Сколько агентов одного пользователя работает одновременно (в режиме «диалоги» — в разных темах). */
-export const MAX_AGENTS_PER_USER = Number(process.env.MAX_AGENTS_PER_USER) > 0 ? Number(process.env.MAX_AGENTS_PER_USER) : 2;
-export const ADMIN_MAX_AGENTS = Number(process.env.ADMIN_MAX_AGENTS) > 0 ? Number(process.env.ADMIN_MAX_AGENTS) : 4;
+export const MAX_AGENTS_PER_USER = positiveEnv('MAX_AGENTS_PER_USER', 2);
+export const ADMIN_MAX_AGENTS = positiveEnv('ADMIN_MAX_AGENTS', 4);
 const capOf = (userId) => (isAdmin(userId) ? ADMIN_MAX_AGENTS : MAX_AGENTS_PER_USER);
 
 /**

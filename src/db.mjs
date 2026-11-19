@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { logError } from './log.mjs';
 
 const now = () => new Date().toISOString();
 const cut = (s, n) => (s == null ? null : String(s).slice(0, n));
@@ -230,7 +231,7 @@ export function openDb(path = 'data/bot.db') {
     try {
       return fn(...a);
     } catch (e) {
-      console.error('[db]', e.message);
+      logError('[db]', e.message);
       return null;
     }
   };

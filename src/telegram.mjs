@@ -1,6 +1,7 @@
 // Тонкая обёртка над Telegram Bot API через fetch (новые методы 10.x не требуют библиотек).
 import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
+import { logError } from './log.mjs';
 
 const BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const FILE_BASE = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -95,7 +96,7 @@ export async function sendFile(to, path, { photo = false, size = 0 } = {}) {
     try {
       return await uploadFile('sendPhoto', 'photo', to, path);
     } catch (e) {
-      console.error('sendPhoto не прошёл, отправляю документом:', e.message);
+      logError('sendPhoto не прошёл, отправляю документом:', e.message);
     }
   }
   return uploadFile('sendDocument', 'document', to, path);
@@ -220,7 +221,7 @@ async function sendRichMedia(to, md, ids, media) {
   } catch (e) {
     // повтор документами — только если Telegram отверг сам запрос (400: не подошло фото), а не при сбое сети или лимите
     if (e.code !== 400 || !md.includes('tg://photo?id=')) throw e;
-    console.error('rich-сообщение с фото не прошло, повторяю с файлами-документами:', e.message);
+    logError('rich-сообщение с фото не прошло, повторяю с файлами-документами:', e.message);
     return send(md.replace(/tg:\/\/photo\?id=/g, 'tg://document?id='));
   }
 }
@@ -241,7 +242,7 @@ export async function sendRich(to, markdown, { media = {} } = {}) {
         await sendRichMedia(to, part, ids, media);
         continue;
       } catch (e) {
-        console.error('rich-сообщение с файлами не прошло, файлы уйдут отдельно:', e.message);
+        logError('rich-сообщение с файлами не прошло, файлы уйдут отдельно:', e.message);
         leftover.push(...ids.map((id) => media[id]));
         part = stripMedia(part);
         if (!part) continue;
@@ -250,7 +251,7 @@ export async function sendRich(to, markdown, { media = {} } = {}) {
     try {
       await tg('sendRichMessage', { ...dest(to), rich_message: { markdown: part } });
     } catch (e) {
-      console.error('sendRichMessage не прошёл, отправляю обычным текстом:', e.message);
+      logError('sendRichMessage не прошёл, отправляю обычным текстом:', e.message);
       for (const plain of splitText(richToPlain(part), 4000)) await tg('sendMessage', { ...dest(to), text: plain });
     }
   }

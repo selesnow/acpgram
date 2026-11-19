@@ -8,10 +8,11 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
 import { checkCommand } from './acp.mjs';
-import { DEFAULT_ENGINE, ENGINES, autoValue, createAgent, engineCommand, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
+import { DEFAULT_ENGINE, ENGINES, agentEnv, autoValue, createAgent, engineCommand, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
 import { t } from './i18n.mjs';
 
-const parseJson = (s, fallback) => {
+/** JSON из строки; пусто или не разобралось — fallback. */
+export const parseJson = (s, fallback) => {
   try {
     return s ? JSON.parse(s) : fallback;
   } catch {
@@ -93,7 +94,7 @@ export function killProbes() {
  */
 async function modelMeta(engine) {
   if (!engine.modelMeta) return null;
-  const r = await checkCommand(engineCommand(engine), engine.modelMeta.args, 60_000);
+  const r = await checkCommand(engineCommand(engine), engine.modelMeta.args, 60_000, agentEnv(engine));
   if (!r.ok) {
     log(`${engine.label}: сведения о моделях не получены — ${r.error}`);
     return null;

@@ -2,6 +2,32 @@
 // Все пользовательские строки — из i18n.mjs; функции получают язык пользователя (по умолчанию — DEFAULT_LANG).
 import { DEFAULT_LANG, LOCALES, plural, t } from './i18n.mjs';
 import { RICH_LIMIT, balanceMarkdown, escHtml } from './telegram.mjs';
+import { splitCode } from './files.mjs';
+
+// Rich-разметка Telegram превращает теги <tg-button> в настоящие кнопки с callback_data — в любом месте текста,
+// в любом регистре, и без <tg-button-row>. Текст агента (а в него попадает содержимое файлов и веб-страниц) не должен
+// уметь рисовать кнопки бота: иначе нажатие «Продолжить» в ответе могло бы выполнить adm:… от имени администратора.
+const TG_TAG = /<(?=\/?tg-)/gi;
+const WORD_JOINER = '\u2060';
+
+/**
+ * Обезвреживает теги <tg-…> в строке, которая встаёт внутрь кода или готовой разметки: после «<» — невидимый
+ * символ (word joiner), тег перестаёт быть тегом, а на вид текст тот же.
+ */
+export const defuseTgTags = (s) => String(s ?? '').replace(TG_TAG, `<${WORD_JOINER}`);
+
+/**
+ * Обезвреживает теги <tg-…> в Markdown от агента. В тексте «<» заменяется на &lt; (Telegram покажет его как «<»).
+ * В коде сущности не разбираются, поэтому там — невидимый символ: границы кода бот и Telegram определяют по-разному
+ * (блочный тег посреди строчного кода Telegram разбирает как тег), и «код» по мнению бота может оказаться текстом.
+ */
+export function neutralizeTgTags(md) {
+  const src = String(md ?? '');
+  if (!/<\/?tg-/i.test(src)) return src; // обычный ответ не трогаем
+  return splitCode(src)
+    .map(({ code, s }) => (code ? defuseTgTags(s) : s.replace(TG_TAG, '&lt;')))
+    .join('');
+}
 
 /**
  * Анимированные иконки в черновике. Отключаются ANIMATED_ICONS=0 — например, если клиент Telegram
@@ -129,7 +155,8 @@ export const toolMeta = (tool, kind, lang = DEFAULT_LANG) => {
  */
 export const anim = (key, fallback) => (ANIMATED && ANIM[key] ? `<tg-emoji emoji-id="${ANIM[key]}">${fallback}</tg-emoji>` : fallback);
 
-const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+/** Обрезает строку до n символов, в конце «…». */
+export const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 /** 42 с / 42 s, 1 мин 24 с / 1 min 24 s, 3 мин / 3 min. */
 export function fmtDuration(ms, lang = DEFAULT_LANG) {
@@ -662,7 +689,7 @@ export function startView({ level, project, engine, model, isAdmin, note, topics
   return [
     t('start.title', lang),
     t('start.intro', lang, { engine: escHtml(engine) }),
-    t('start.info', lang, { engine: escHtml(engine), model: escHtml(model ?? t('auto', lang)), level: escHtml(level), project }),
+    t('start.info', lang, { engine: escHtml(engine), model: escHtml(model ?? t('auto', lang)), level: escHtml(level), project: defuseTgTags(project) }), // путь — внутри кода
     ...(topics === 'on' ? [t('start.topics', lang)] : []),
     ...rows,
     `<details><summary>${t('start.commands', lang)}</summary>\n\n${commands.map((c) => `- ${c}`).join('\n')}\n\n</details>`,

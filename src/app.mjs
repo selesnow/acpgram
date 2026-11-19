@@ -32,6 +32,15 @@ export function resolveHomeDir(env = process.env, appDir = APP_DIR) {
   return appDir;
 }
 
+/**
+ * Положительное число из переменной окружения; пусто, не число, ноль или отрицательное — значение по умолчанию.
+ * Без этой проверки «MAX_AGENTS=abc» давало NaN: сравнение с ним всегда ложно, и лимит молча отключался.
+ */
+export function positiveEnv(name, fallback, env = process.env) {
+  const n = Number(env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 export const HOME_DIR = resolveHomeDir();
 export const ENV_PATH = join(HOME_DIR, '.env');
 export const DATA_DIR = join(HOME_DIR, 'data');

@@ -5,12 +5,12 @@ import { FILE_PLACEHOLDER, attachFiles, buildPromptBlocks, extractSendMarks, out
 import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
-import { SESSION_OPTION_ID, allowOnceOption, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
+import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
 import { parseTool } from './tools.mjs';
 import { dest, tg, mediaIdsOf, sendFile, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
-import { composeDraft, finalExtras, finalMessages, lastThoughtTitle, toolMeta } from './ui.mjs';
+import { composeDraft, finalExtras, finalMessages, lastThoughtTitle, neutralizeTgTags, toolMeta, trunc } from './ui.mjs';
 import { TITLE_NOTE, extractTitle, renameTopic, stripTitle, titleFromRequest, topicName } from './topics.mjs';
 
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -23,10 +23,32 @@ const HEARTBEAT_MS = 8000; // черновик живёт 30 с — обновл
 const PERM_KINDS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'];
 let permSeq = 0;
 
-const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+/**
+ * Подпись варианта бота «на эту сессию»: что именно будет разрешено дальше без вопроса («git status …», только эта
+ * команда, все действия этого вида) — чтобы пользователь видел широту правила до нажатия.
+ */
+function sessionRuleLabel(keys, what, lang) {
+  const rule = describeRule(keys);
+  if (!rule) return t('perm.opt.allow_always', lang);
+  const text = rule.type === 'exec' ? t('perm.opt.session.exec', lang, { what: rule.what }) : rule.type === 'exact' ? t('perm.opt.session.exact', lang) : t('perm.opt.session.all', lang, { what });
+  return trunc(text, 60);
+}
 
 /** Подпись кнопки: варианты, меняющие режим сессии (выход из плана у Claude Code), — своим текстом агента. */
-const optionLabel = (engine, o, lang) => (engine.optionMode?.(o) ? `▶️ ${o.name}` : PERM_KINDS.includes(o.kind) ? t(`perm.opt.${o.kind}`, lang) : o.name);
+const optionLabel = (engine, o, lang, rule = null) =>
+  engine.optionMode?.(o) ? `▶️ ${o.name}` : o.synthetic && rule ? sessionRuleLabel(rule.keys, rule.what, lang) : PERM_KINDS.includes(o.kind) ? t(`perm.opt.${o.kind}`, lang) : o.name;
+
+// Варианты разрешений, которые присылают агенты: каждый новый (движок, id, вид) один раз пишется в лог. Постоянные
+// правила бот скрывает по известным id (engines.mjs); после обновления агента id могут измениться — по логу это видно.
+const seenOptions = new Set();
+function noteOptions(engine, options) {
+  for (const o of options) {
+    const key = `${engine.id}|${o.optionId}|${o.kind}`;
+    if (seenOptions.has(key)) continue;
+    seenOptions.add(key);
+    log('вариант разрешения агента:', engine.id, '| id', o.optionId, '| вид', o.kind, '|', JSON.stringify(o.name ?? ''));
+  }
+}
 /** Подпись после ответа: отклонённые варианты — одной формулировкой. */
 const resultLabel = (engine, o, lang) =>
   engine.optionMode?.(o) ? `▶️ ${o.name}` : o.kind.startsWith('reject') && PERM_KINDS.includes(o.kind) ? t('perm.res.reject', lang) : PERM_KINDS.includes(o.kind) ? t(`perm.res.${o.kind}`, lang) : o.name;
@@ -51,6 +73,7 @@ async function askPermission(st, params) {
   const tc = params.toolCall || {};
   const engine = engineOf(st);
   const info = parseTool(tc, engine);
+  noteOptions(engine, params.options || []);
   // ни постоянных правил, ни выхода в режим выше уровня доступа пользователя из чата не даём
   const allowed = permissionOptions(engine, params.options || [], modeFor(st.userId, engine));
   const what = info.description || info.title || info.tool;
@@ -93,7 +116,7 @@ async function askPermission(st, params) {
     reply_markup: {
       inline_keyboard: options.map((o, i) => {
         const style = optionStyle(engine, o);
-        return [{ text: optionLabel(engine, o, lang), callback_data: `perm:${seq}:${i}`, ...(style ? { style } : {}) }];
+        return [{ text: optionLabel(engine, o, lang, { keys, what: meta.label }), callback_data: `perm:${seq}:${i}`, ...(style ? { style } : {}) }];
       }),
     },
   });
@@ -235,7 +258,7 @@ export async function runTurn(st, text, { files = [] } = {}) {
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, answer: stripTitle(stripSendMarks(clean(answer))), elapsedMs: Date.now() - startedAt, lang });
+    const d = composeDraft({ thought, steps, answer: stripTitle(stripSendMarks(neutralizeTgTags(clean(answer)))), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;
@@ -271,22 +294,22 @@ export async function runTurn(st, text, { files = [] } = {}) {
       thoughtBuf = last.rest;
       dirty = true;
     } else if (kind === 'tool_call') {
-      const t = parseTool(u, engine);
+      const tool = parseTool(u, engine);
       breakBeforeText = true;
-      steps.push(t);
-      db.toolStarted(st.requestId, t);
+      steps.push(tool);
+      db.toolStarted(st.requestId, tool);
       dirty = true;
     } else if (kind === 'usage_update') {
       lastUsage = u; // у Claude Code здесь стоимость и реальная модель
     } else if (kind === 'tool_call_update') {
-      const t = parseTool(u, engine);
-      const step = steps.find((s) => s.toolCallId === t.toolCallId);
+      const tool = parseTool(u, engine);
+      const step = steps.find((s) => s.toolCallId === tool.toolCallId);
       if (step) {
-        if (t.status) step.status = t.status;
-        if (t.title) step.title = t.title;
-        if (t.description) step.description = t.description;
+        if (tool.status) step.status = tool.status;
+        if (tool.title) step.title = tool.title;
+        if (tool.description) step.description = tool.description;
       }
-      db.toolUpdated(st.requestId, t);
+      db.toolUpdated(st.requestId, tool);
       dirty = true;
     }
   };
@@ -347,7 +370,8 @@ export async function runTurn(st, text, { files = [] } = {}) {
   if (inFlight) await Promise.race([inFlight, new Promise((r) => setTimeout(r, DRAFT_WAIT_MS).unref())]);
 
   // метки [[send:путь]] (вне кода) → заглушки: на их место встанут сами файлы
-  const titled = extractTitle(clean(answer)); // строка с названием темы — в название, а не в ответ
+  // теги <tg-button> в тексте агента обезвреживаются: кнопки бота рисует только сам бот (ui.mjs)
+  const titled = extractTitle(neutralizeTgTags(clean(answer))); // строка с названием темы — в название, а не в ответ
   const sent = extractSendMarks(titled.text, { placeholders: true });
   const answerText = sent.text.replace(FILE_PLACEHOLDER, '').trim(); // ответ без файлов: для базы и проверки «пустой ли»
   db.finishRequest(st.requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });

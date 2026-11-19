@@ -61,10 +61,10 @@ export function updateCommand(platform = process.platform, env = process.env) {
   return [existsSync(ps) ? ps : 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${base}/install.ps1 | iex`]];
 }
 
-/** Окружение для обновления: установщик обновляет именно эту установку (ACPGRAM_HOME), а не папку по умолчанию. */
 /** Установлен ли пакет через npm (находится внутри node_modules). */
 export const isNpm = (appDir = fileURLToPath(new URL('..', import.meta.url))) => /[\\/]node_modules[\\/]/.test(appDir);
 
+/** Окружение для обновления: установщик обновляет именно эту установку (ACPGRAM_HOME), а не папку по умолчанию. */
 export const updateEnv = (env = process.env, appDir = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '')) => ({
   ...env,
   ACPGRAM_HOME: env.ACPGRAM_HOME || appDir,

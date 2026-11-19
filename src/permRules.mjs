@@ -5,9 +5,11 @@
 //
 // «Такой же запрос»:
 //   - правка, удаление, перенос файла — все действия этого вида в сессии;
-//   - команда — по имени программы (git status → все git …); составная (a && b | c) — только если разрешены все части;
-//     команды через оболочку (bash -c, powershell, cmd /c, sudo …), с подстановками ($(…), `…`) и перенаправлением
-//     в файл (>) — только точное совпадение всей команды: иначе под «разрешённой» программой прошло бы что угодно;
+//   - команда — по имени программы (ls → все ls …); у программ с подкомандами (git, npm, docker…) — по программе и
+//     подкоманде (git status → все git status …, но не git push); составная (a && b | c) — только если разрешены все части;
+//     команды через оболочку (bash -c, powershell, cmd /c, sudo …), интерпретаторы (python, node, Rscript, npx…),
+//     команды с подстановками ($(…), `…`), перенаправлением в файл (>) и переменными перед программой (PATH=… git) —
+//     только точное совпадение всей команды: иначе под «разрешённой» программой прошло бы что угодно;
 //   - остальное (чтение, поиск, загрузка страницы, MCP-инструмент) — по виду действия и имени инструмента.
 
 /** id варианта бота: агенту не уходит, вместо него — «один раз» самого агента. */
@@ -19,6 +21,24 @@ const WRAPPERS = new Set([
   'nohup', 'time', 'timeout', 'nice', 'start', 'call', 'runas', 'invoke-expression', 'iex', 'start-process',
 ]);
 
+/**
+ * Интерпретаторы и программы, которые выполняют произвольный код или чужую команду из своих аргументов: разрешение
+ * «python script.py» не должно открывать «python -c "…"», а «find .» — «find . -exec …». Правило — только на точную команду.
+ */
+const INTERPRETERS = new Set([
+  'python', 'python2', 'python3', 'py', 'pythonw', 'node', 'nodejs', 'deno', 'bun', 'r', 'rscript', 'rterm', 'perl', 'ruby', 'php', 'lua',
+  'npx', 'bunx', 'pnpx', 'uvx', 'pipx', 'find', 'awk', 'gawk', 'ssh', 'scp', 'osascript', 'wscript', 'cscript', 'mshta', 'rundll32',
+]);
+
+/**
+ * Программы с подкомандами: правило — на программу вместе с подкомандой («git status» не разрешает «git push»).
+ * Параметр перед подкомандой (git -c …, docker --host …) — только точная команда.
+ */
+const SUBCOMMAND_TOOLS = new Set([
+  'git', 'gh', 'glab', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'uv', 'cargo', 'go', 'dotnet', 'docker', 'podman', 'kubectl', 'helm',
+  'terraform', 'winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'systemctl', 'sc', 'nssm', 'schtasks', 'gcloud', 'aws', 'az',
+]);
+
 /** Имя программы: без пути, кавычек и расширения исполняемого файла, в нижнем регистре («C:\R\bin\Rscript.exe» → «rscript»). */
 function programName(token) {
   const bare = String(token ?? '').replace(/^["']+|["']+$/g, '');
@@ -27,8 +47,9 @@ function programName(token) {
 }
 
 /**
- * Имена программ составной команды или null, если правило возможно только на точную команду
- * (подстановки, перенаправление в файл, оболочки-обёртки, нераспознанная часть).
+ * Корни составной команды — имя программы или «программа подкоманда» (SUBCOMMAND_TOOLS) — или null, если правило
+ * возможно только на точную команду (подстановки, перенаправление в файл, оболочки-обёртки, интерпретаторы,
+ * переменные окружения перед программой, нераспознанная часть).
  */
 export function commandRoots(command) {
   const s = String(command ?? '').trim();
@@ -40,11 +61,18 @@ export function commandRoots(command) {
   const roots = [];
   for (const part of noRedirects.split(/&&|\|\||[;|&\r\n]/)) {
     const tokens = part.trim().split(/\s+/).filter(Boolean);
-    while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift(); // FOO=bar cmd
     if (!tokens.length) continue;
+    // FOO=bar cmd: переменная меняет то, что запустится (PATH, GIT_SSH_COMMAND, LD_PRELOAD) — только точная команда
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) return null;
     const name = programName(tokens[0]);
-    if (!name || WRAPPERS.has(name)) return null;
-    if (!roots.includes(name)) roots.push(name);
+    if (!name || WRAPPERS.has(name) || INTERPRETERS.has(name)) return null;
+    let root = name;
+    if (SUBCOMMAND_TOOLS.has(name)) {
+      const sub = tokens[1] ?? '';
+      if (!/^[A-Za-z][\w-]*$/.test(sub)) return null; // «git» без подкоманды или с параметром впереди
+      root = `${name} ${sub.toLowerCase()}`;
+    }
+    if (!roots.includes(root)) roots.push(root);
   }
   return roots.length ? roots : null;
 }
@@ -66,6 +94,19 @@ export function permissionKeys({ kind, tool, command } = {}) {
   if (kind && WHOLE_KINDS.has(kind)) return [`kind:${kind}`];
   if (!kind && !tool) return null;
   return [`tool:${kind ?? ''}:${tool ?? ''}`];
+}
+
+/**
+ * Что именно разрешит правило — для подписи кнопки «на эту сессию»:
+ *   {type: 'exec', what: 'git status …, head …'} — все команды этих программ (подкоманд);
+ *   {type: 'exact'} — только эта команда; {type: 'all'} — все действия этого вида или инструмента.
+ * @param {string[]|null} keys ключи правила (permissionKeys)
+ */
+export function describeRule(keys) {
+  if (!keys?.length) return null;
+  if (keys.every((k) => k.startsWith('exec:'))) return { type: 'exec', what: keys.map((k) => `${k.slice('exec:'.length)} …`).join(', ') };
+  if (keys.some((k) => k.startsWith('exec='))) return { type: 'exact' };
+  return { type: 'all' };
 }
 
 /** Разрешён ли запрос правилами сессии: все его ключи уже разрешены. */

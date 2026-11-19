@@ -50,11 +50,10 @@ const sendStart = (st) => {
 };
 
 /** Кнопки экрана /start (ui:<команда>) работают как соответствующие команды. */
-const UI_COMMANDS = new Set(['project', 'engine', 'model', 'new', 'sessions', 'users', 'invite', 'close', 'active', 'language', 'topics']);
 async function onUiCallback(st, cb) {
   const name = (cb.data || '').slice('ui:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-  if (UI_COMMANDS.has(name)) return handleText(st, `/${name}`);
+  if (COMMANDS.some((c) => c.button && c.name === name)) return handleText(st, `/${name}`);
 }
 
 /** Кнопка выбора языка (lang:<код>): запоминает выбор и заменяет меню итогом. */
@@ -77,39 +76,61 @@ function languageCommand(st, arg) {
   return say(st.to, t('lang.set', code, { name: LANGS[code] }));
 }
 
-/** Текст пользователя: команды или запрос к агенту. */
-async function handleText(st, text) {
-  const cmd = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
-  const name = cmd?.[1]?.toLowerCase();
-  const arg = cmd?.[2];
+function stopCommand(st) {
+  if (!st.busy) return say(st.to, t('stop.none', langOf(st.userId)));
+  st.agent?.cancel();
+  dropPermissions(st);
+}
 
+function closeCommand(st) {
   const lang = langOf(st.userId);
-  if (name === 'start') return sendStart(st);
-  if (name === 'language' || name === 'lang') return languageCommand(st, arg);
-  if (name === 'project') return handleProject(st, arg);
-  if (name === 'engine') return handleEngine(st, arg);
-  if (name === 'model') return handleModel(st, arg);
-  if (name === 'sessions') return handleSessions(st);
-  if (name === 'topics') return handleTopics(st);
-  if (name === 'stop') {
-    if (!st.busy) return say(st.to, t('stop.none', lang));
-    st.agent?.cancel();
-    dropPermissions(st);
-    return;
-  }
-  if (name === 'close' || name === 'exit') {
-    if (!closeSession(st, 'close')) return say(st.to, t('close.none', lang));
-    return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
-  }
-  if (name === 'new') {
-    if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
-    if (st.busy) return say(st.to, t('busy.stop', lang));
-    endAgent(st, 'new');
-    return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
-  }
-  if (name === 'invite' || name === 'users' || name === 'active') {
-    if (!isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
-    return adminCommand(st.to, `/${name}`);
+  if (!closeSession(st, 'close')) return say(st.to, t('close.none', lang));
+  return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
+}
+
+function newCommand(st) {
+  const lang = langOf(st.userId);
+  if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
+  if (st.busy) return say(st.to, t('busy.stop', lang));
+  endAgent(st, 'new');
+  return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
+}
+
+/**
+ * Команды бота — единственный список: по нему работают разбор текста (handleText), меню Telegram (menuFor), кнопки
+ * экрана /start (onUiCallback) и перенос команды из темы, созданной Telegram, в General (BOT_COMMANDS).
+ *   aliases — другие имена команды; admin — только главному администратору; menu — показывать в меню команд
+ *   (функция — по условию); button — есть кнопка ui:<имя> на экране /start; run(st, arg) — выполнение.
+ * Порядок — порядок в меню: сначала команды администратора.
+ */
+const COMMANDS = [
+  { name: 'active', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/active') },
+  { name: 'users', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/users') },
+  { name: 'invite', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/invite') },
+  { name: 'project', menu: true, button: true, run: (st, arg) => handleProject(st, arg) },
+  { name: 'engine', menu: true, button: true, run: (st, arg) => handleEngine(st, arg) },
+  { name: 'model', menu: true, button: true, run: (st, arg) => handleModel(st, arg) },
+  { name: 'new', menu: true, button: true, run: newCommand },
+  { name: 'sessions', menu: true, button: true, run: (st) => handleSessions(st) },
+  { name: 'stop', menu: true, run: stopCommand },
+  { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
+  { name: 'topics', menu: () => topicsSupport.enabled, button: true, run: (st) => handleTopics(st) }, // в меню — если у бота включены темы
+  { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
+  { name: 'start', menu: true, run: (st) => sendStart(st) },
+];
+
+/** Имена всех команд бота с псевдонимами: только они переносятся из темы, созданной Telegram, в General. */
+const BOT_COMMANDS = new Set(COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+
+/** Текст пользователя: команды или запрос к агенту. Неизвестная команда («/что-то») уходит агенту как обычный запрос. */
+async function handleText(st, text) {
+  const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
+  const name = m?.[1]?.toLowerCase();
+  const command = name ? COMMANDS.find((c) => c.name === name || c.aliases?.includes(name)) : null;
+  const lang = langOf(st.userId);
+  if (command) {
+    if (command.admin && !isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
+    return command.run(st, m[2]);
   }
   if (st.busy) return say(st.to, t('busy.running', lang));
   return runTurn(st, text);
@@ -188,13 +209,8 @@ function handleAttachment(st, msg) {
  * Меню команд на языке: по умолчанию — английский; русский и украинский — для клиентов Telegram с таким языком
  * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
  */
-const menuFor = (lang, admin) => {
-  // /topics — только если у бота включены темы в личном чате
-  const names = ['project', 'engine', 'model', 'new', 'sessions', 'stop', 'close', ...(topicsSupport.enabled ? ['topics'] : []), 'language', 'start'];
-  const common = names.map((command) => ({ command, description: t(`menu.${command}`, lang) }));
-  if (!admin) return common;
-  return [{ command: 'active', description: t('menu.active', lang) }, { command: 'users', description: t('menu.users', lang) }, { command: 'invite', description: t('menu.invite', lang) }, ...common];
-};
+const menuFor = (lang, admin) =>
+  COMMANDS.filter((c) => (typeof c.menu === 'function' ? c.menu() : c.menu) && (admin || !c.admin)).map((c) => ({ command: c.name, description: t(`menu.${c.name}`, lang) }));
 
 async function setupCommands() {
   await tg('setMyCommands', { scope: { type: 'default' }, commands: menuFor('en', false) });
@@ -264,9 +280,6 @@ async function handleUpdate(u) {
   if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text);
   if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId, threadId), msg);
 }
-
-/** Команды бота (handleText): только они переносятся из темы, созданной Telegram, в General. */
-const BOT_COMMANDS = new Set(['start', 'language', 'lang', 'project', 'engine', 'model', 'sessions', 'topics', 'stop', 'close', 'exit', 'new', 'invite', 'users', 'active']);
 
 /**
  * Удаляет тему, которую Telegram создал под команду, отправленную из общего вида чата. Не удалось (нет прав, старый

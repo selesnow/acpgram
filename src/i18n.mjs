@@ -250,6 +250,10 @@ const M = {
   // ---------- запросы разрешений и ход запроса (turn.mjs) ----------
   'perm.opt.allow_once': { en: '✅ Allow', ru: '✅ Разрешить', uk: '✅ Дозволити' },
   'perm.opt.allow_always': { en: '✅ Allow for this session', ru: '✅ Разрешить на эту сессию', uk: '✅ Дозволити на цю сесію' },
+  'access.saveFail': { en: '⚠️ Could not save the access. Please try again later.', ru: '⚠️ Не удалось сохранить доступ. Попробуйте позже.', uk: '⚠️ Не вдалося зберегти доступ. Спробуйте пізніше.' },
+  'perm.opt.session.exec': { en: '✅ For this session: {what}', ru: '✅ На эту сессию: {what}', uk: '✅ На цю сесію: {what}' },
+  'perm.opt.session.exact': { en: '✅ For this session: this exact command', ru: '✅ На эту сессию: только эта команда', uk: '✅ На цю сесію: лише ця команда' },
+  'perm.opt.session.all': { en: '✅ For this session: all “{what}”', ru: '✅ На эту сессию: все «{what}»', uk: '✅ На цю сесію: усі «{what}»' },
   'perm.opt.reject_once': { en: '⛔ Reject', ru: '⛔ Отклонить', uk: '⛔ Відхилити' },
   'perm.opt.reject_always': { en: '⛔ Always reject', ru: '⛔ Отклонять всегда', uk: '⛔ Відхиляти завжди' },
   'perm.res.allow_once': { en: '✅ Allowed', ru: '✅ Разрешено', uk: '✅ Дозволено' },

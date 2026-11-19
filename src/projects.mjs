@@ -139,27 +139,38 @@ export function resolveAsPath(query, root = ROOT, home = HOME) {
   return insideRoot(isAbsolute(q) ? q : resolve(root ?? home, q), root);
 }
 
+const YIELD_EVERY = 200; // через столько просмотренных папок поиск уступает циклу событий
+
 /**
- * Поиск папок по частям названия (все слова должны встретиться в относительном пути).
- * @returns {{results: string[], truncated: boolean}}
+ * Поиск папок по частям названия (все слова должны встретиться в относительном пути). Обход большого дерева (до
+ * maxVisited папок) занимает секунды, поэтому поиск регулярно уступает циклу событий: черновики и запросы других
+ * пользователей на это время не замирают.
+ * @returns {Promise<{results: string[], truncated: boolean}>}
  */
-export function findDirs(query, { maxDepth = 6, limit = 20, maxVisited = 30000, base = ROOT ?? HOME } = {}) {
+export async function findDirs(query, { maxDepth = 6, limit = 20, maxVisited = 30000, base = ROOT ?? HOME } = {}) {
   const tokens = lc(query).split(/\s+/).filter(Boolean);
   if (!tokens.length) return { results: [], truncated: false };
   const found = [];
   let visited = 0;
+  let sinceYield = 0;
   let queue = [{ dir: base, depth: 0 }];
   while (queue.length && visited < maxVisited) {
     const next = [];
     for (const { dir, depth } of queue) {
       if (depth >= maxDepth) continue;
+      if (visited >= maxVisited) break;
+      if (sinceYield >= YIELD_EVERY) {
+        sinceYield = 0;
+        await new Promise((r) => setImmediate(r));
+      }
       for (const name of listDirs(dir)) {
+        sinceYield++;
         visited++;
         const full = join(dir, name);
         const rel = lc(relative(base, full));
         if (tokens.every((t) => rel.includes(t))) {
-          const base = lc(basename(full));
-          const score = base === lc(query.trim()) ? 0 : tokens.every((t) => base.includes(t)) ? 1 : 2;
+          const leaf = lc(basename(full));
+          const score = leaf === lc(query.trim()) ? 0 : tokens.every((t) => leaf.includes(t)) ? 1 : 2;
           found.push({ full, score, depth: depth + 1 });
         }
         next.push({ dir: full, depth: depth + 1 });

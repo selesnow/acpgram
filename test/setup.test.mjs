@@ -262,3 +262,11 @@ test('opencodeKeysToAsk: ключи провайдеров для OpenCode бе�
   const text = serializeEnv({ TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1', OPENROUTER_API_KEY: 'or', MISTRAL_API_KEY: 'm', ZZZ: 'z' }, { lang: 'en' });
   assert.ok(text.indexOf('OPENROUTER_API_KEY=or') < text.indexOf('MISTRAL_API_KEY=m') && text.indexOf('MISTRAL_API_KEY=m') < text.indexOf('ZZZ=z'));
 });
+
+test('positiveEnv: мусор, ноль и отрицательное в переменной окружения — значение по умолчанию, а не снятый лимит', async () => {
+  const { positiveEnv } = await import('../src/app.mjs');
+  assert.equal(positiveEnv('X', 3, { X: '5' }), 5);
+  assert.equal(positiveEnv('X', 30, { X: '0.5' }), 0.5);
+  for (const bad of ['abc', '', '0', '-2', 'NaN', 'Infinity', undefined]) assert.equal(positiveEnv('X', 3, { X: bad }), 3, String(bad));
+  assert.equal(positiveEnv('X', 3, {}), 3);
+});

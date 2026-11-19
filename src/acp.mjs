@@ -2,6 +2,7 @@
 // для запуска ACP-агента (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) как подпроцесса. Движки — в engines.mjs.
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
+import { logError } from './log.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -31,7 +32,7 @@ export function killTree(proc, graceMs = 3000) {
   if (IS_WIN) {
     const args = ['/pid', String(proc.pid), '/T', '/F'];
     if (syncKill) spawnSync('taskkill', args, { windowsHide: true });
-    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', (e) => console.error('[acp] taskkill:', e.message));
+    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', (e) => logError('[acp] taskkill:', e.message));
     return;
   }
   const signal = (sig) => {
@@ -47,15 +48,16 @@ export function killTree(proc, graceMs = 3000) {
 
 /**
  * Проверяет, что команда агента запускается: `<команда> --version`.
+ * env — окружение процесса целиком (без него — окружение бота как есть).
  * @returns {Promise<{ok: boolean, version?: string, error?: string, timeout?: boolean}>}
  */
-export function checkCommand(command, args = ['--version'], timeoutMs = 60_000) {
+export function checkCommand(command, args = ['--version'], timeoutMs = 60_000, env = null) {
   return new Promise((resolve) => {
     let out = '';
     let err = '';
     let proc;
     try {
-      proc = spawnCommand(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      proc = spawnCommand(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
     } catch (e) {
       return resolve({ ok: false, error: e.message });
     }
@@ -105,7 +107,7 @@ export class AcpAgent {
    * @param {string} o.command         команда запуска агента
    * @param {string[]} [o.args]         аргументы режима ACP
    * @param {string} [o.name]           название агента для логов
-   * @param {Record<string,string>} [o.env]  дополнительные переменные окружения процесса агента (поверх окружения бота)
+   * @param {Record<string,string>} [o.env]  окружение процесса агента целиком (engines.agentEnv: без токена бота); без него — окружение бота
    * @param {(p:object)=>Promise<object>} [o.onPermission]  обработчик session/request_permission, возвращает outcome
    * @param {(u:object)=>void} [o.onUpdate]                 обработчик session/update
    * @param {(code:number|null)=>void} [o.onExit]
@@ -130,16 +132,15 @@ export class AcpAgent {
   }
 
   start() {
-    // без своих переменных процесс наследует окружение бота как есть
-    const env = this.env ? { ...process.env, ...this.env } : undefined;
-    this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], ...(env ? { env } : {}) });
+    // окружение задаётся целиком: с окружением бота не смешивается, иначе в него вернулся бы токен бота
+    this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], ...(this.env ? { env: this.env } : {}) });
     readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l));
     const skip = quietStderrFilter(this.quietStderr, this.quietStderrBlock);
     readline.createInterface({ input: this.proc.stderr }).on('line', (l) => {
-      if (!skip(l)) console.error(`[${this.name}:stderr]`, l);
+      if (!skip(l)) logError(`[${this.name}:stderr]`, l);
     });
     // запись в уже завершившийся процесс (EPIPE) не должна ронять бота
-    this.proc.stdin.on('error', (e) => console.error('[acp] stdin:', e.message));
+    this.proc.stdin.on('error', (e) => logError('[acp] stdin:', e.message));
     // команда не найдена и т.п.: без обработчика 'error' Node уронит весь бот, а 'exit' может не прийти
     this.proc.on('error', (e) => this.#finish(null, `не удалось запустить ${this.command}: ${e.message}`));
     this.proc.on('exit', (code) => this.#finish(code, `${this.name} завершился (код ${code})`));
@@ -279,7 +280,7 @@ export class AcpAgent {
       try {
         this.onUpdate?.(msg.params.update);
       } catch (e) {
-        console.error('[acp] ошибка в обработчике обновления:', e.message); // не роняем бота
+        logError('[acp] ошибка в обработчике обновления:', e.message); // не роняем бота
       }
     }
   }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { plural, t } from '../src/i18n.mjs';
 import { fixTables, mediaBlock, mediaIdsOf, richToPlain, splitRich, stripMedia } from '../src/telegram.mjs';
-import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, engineMenu, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
+import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, defuseTgTags, engineMenu, neutralizeTgTags, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
 
 const step = (o) => ({ toolCallId: 'x', tool: 'read_file', kind: 'read', title: 'src/a.mjs', description: '', status: null, ...o });
 const RU = { lang: 'ru' };
@@ -391,4 +391,39 @@ test('OpenRouter: в «Прочих» вендор перед названием
   const opened = modelGroupMenu({ engine: OC, models: many, group: 'openrouter', sub: ref, model: null, ...RU });
   assert.equal(buttons(opened.markup).filter((x) => x.callback_data.startsWith('mdl:opencode:m:')).length, 5);
   assert.match(opened.text, /OpenRouter › Long: 5/);
+});
+
+const TG_BTN = '<tg-button-row><tg-button type="callback_data" data="adm:l:1:full">Продолжить</tg-button></tg-button-row>';
+const F3 = '`'.repeat(3);
+
+test('neutralizeTgTags: кнопки из текста агента не становятся кнопками бота', () => {
+  const plain = 'Обычный ответ с <b>тегами</b> и `кодом`.';
+  assert.equal(neutralizeTgTags(plain), plain, 'ответ без тегов tg- не меняется');
+  const out = neutralizeTgTags(`Готово.\n\n${TG_BTN}\n\nКонец.`);
+  assert.ok(!/<\/?tg-/i.test(out), out);
+  assert.match(out, /&lt;tg-button-row>&lt;tg-button type="callback_data"/);
+  assert.match(out, /&lt;\/tg-button>&lt;\/tg-button-row>/);
+  // регистр, одиночная кнопка без ряда, тег посреди строки — Telegram принимает всё это
+  for (const md of ['<TG-BUTTON type="callback_data" data="x">a</TG-BUTTON>', 'до <tg-button type="callback_data" data="x">a</tg-button> после', '<tg-emoji emoji-id="1">x</tg-emoji>']) {
+    assert.ok(!/<\/?tg-/i.test(neutralizeTgTags(md)), md);
+  }
+});
+
+test('neutralizeTgTags: в коде тег тоже обезврежен (границы кода бот и Telegram видят по-разному), а на вид не меняется', () => {
+  const cases = [`${F3}\n${TG_BTN}\n${F3}`, `текст \`${TG_BTN}\` текст`, `a \`b\n${TG_BTN}\nc\` d`, `${F3}\n${TG_BTN}`];
+  for (const md of cases) {
+    const out = neutralizeTgTags(md);
+    assert.ok(!/<\/?tg-/i.test(out), md);
+    assert.ok(!out.includes('&lt;'), 'в коде сущности не разбираются — там невидимый символ');
+    assert.equal(out.replaceAll('\u2060', ''), md, 'кроме невидимого символа ничего не изменилось');
+  }
+});
+
+test('defuseTgTags и startView: путь проекта с тегом кнопки не рисует кнопку', () => {
+  assert.equal(defuseTgTags('C:\\p\\<tg-button>').replaceAll('\u2060', ''), 'C:\\p\\<tg-button>');
+  assert.ok(!/<tg-button>/.test(defuseTgTags('C:\\p\\<tg-button>')));
+  const evil = 'p`<tg-button type="callback_data" data="adm:ro:1">x</tg-button>';
+  const view = startView({ level: 'Полный', project: evil, engine: 'Gemini', isAdmin: true, lang: 'ru' });
+  assert.ok(!/<tg-button type="callback_data" data="adm:ro:1">/.test(view), view);
+  assert.match(view, /<tg-button type="callback_data" data="ui:project">/, 'свои кнопки бота на месте');
 });

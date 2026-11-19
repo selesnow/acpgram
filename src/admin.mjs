@@ -37,7 +37,10 @@ export async function handleUnknownUser(from, chatId, text) {
   if (m) {
     const level = db.consumeInvite(m[1], from.id);
     if (!level) return say(chatId, t('access.inviteBad', lang));
-    db.upsertUser({ user_id: from.id, username: from.username, first_name: from.first_name, level, added_by: ADMIN_ID });
+    if (!db.upsertUser({ user_id: from.id, username: from.username, first_name: from.first_name, level, added_by: ADMIN_ID })) {
+      log('доступ по приглашению не сохранён (ошибка базы)', from.id);
+      return say(chatId, t('access.saveFail', lang));
+    }
     db.setRequestStatus(from.id, 'approved');
     log('подключён по приглашению', from.id, from.username, level);
     await say(chatId, grantedText(level, lang, false));
@@ -77,8 +80,10 @@ export async function adminCommand(chatId, command) {
       reply_markup: { inline_keyboard: LEVEL_KEYS.map((key) => [{ text: `${levelName(key, al)} — ${levelHint(key, al)}`, callback_data: `adm:i:${key}` }]) },
     });
   }
-  if (command === '/active') return say(chatId, activeView().text, { reply_markup: activeView().markup });
-  if (command === '/users') return say(chatId, usersView().text, { reply_markup: usersView().markup });
+  if (command === '/active' || command === '/users') {
+    const v = command === '/active' ? activeView() : usersView();
+    return say(chatId, v.text, { reply_markup: v.markup });
+  }
 }
 
 function usersView() {
@@ -130,10 +135,10 @@ function userCard(u) {
   };
 }
 
-/** Все кнопки adm:* — только от главного администратора (проверяется в bot.mjs). */
 /** Открытая администратором группа и страница моделей сотрудника в движке (`${userId}:${движок}` → {group, page}). */
 const grantsPage = new Map();
 
+/** Все кнопки adm:* — только от главного администратора (проверяется в bot.mjs). */
 export async function onAdminCallback(cb) {
   const [, action, a, b] = cb.data.split(':');
   const al = adminLang();
@@ -165,7 +170,10 @@ export async function onAdminCallback(cb) {
       return edit(t('adm.reqRejected', al, { name }));
     }
     if (!isLevel(b)) return ack(t('adm.ackNoLevel', al));
-    db.upsertUser({ user_id: id, username: req.username, first_name: req.first_name, level: b, added_by: ADMIN_ID });
+    if (!db.upsertUser({ user_id: id, username: req.username, first_name: req.first_name, level: b, added_by: ADMIN_ID })) {
+      log('доступ по запросу не сохранён (ошибка базы)', id);
+      return ack(t('access.saveFail', al));
+    }
     db.setRequestStatus(id, 'approved');
     log('доступ выдан по запросу', id, b);
     await ack();
