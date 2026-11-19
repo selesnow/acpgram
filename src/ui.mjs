@@ -347,18 +347,47 @@ export function usageView({ rows, days, nameOf, lang = DEFAULT_LANG }) {
   };
 }
 
+// ---------- HTML-экраны (сообщения с parse_mode: 'HTML') ----------
+
+/** Значение параметра, которое вставляется в текст как готовый HTML (остальные параметры th экранирует). */
+export const hRaw = (html) => ({ html });
+/** Путь, имя, id — моноширинным. */
+export const hCode = (s) => hRaw(`<code>${escHtml(s)}</code>`);
+/** Главное в строке — жирным. */
+export const hBold = (s) => hRaw(`<b>${escHtml(s)}</b>`);
+
+const H_MARK = String.fromCharCode(1); // обрамляет номер вставки, пока текст экранируется
+const H_MARK_RE = new RegExp(`${H_MARK}([0-9]+)${H_MARK}`, 'g');
+
 /**
- * Экран /engine: текущий движок и кнопки выбора (eng:<id>).
+ * Текст i18n для сообщения в HTML: и шаблон, и параметры экранируются; параметры hCode / hBold / hRaw вставляются
+ * разметкой. Так путь папки или запрос пользователя с «<» не ломает сообщение и не становится тегом.
+ */
+export function th(key, lang, params = {}) {
+  const marks = [];
+  const safe = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (v && typeof v === 'object' && 'html' in v) {
+      safe[k] = `${H_MARK}${marks.length}${H_MARK}`;
+      marks.push(v.html);
+    } else safe[k] = typeof v === 'string' ? v.replaceAll(H_MARK, '') : v;
+  }
+  return escHtml(t(key, lang, safe)).replace(H_MARK_RE, (_, i) => marks[Number(i)]);
+}
+
+/**
+ * Экран /engine: текущий движок и кнопки выбора (eng:<id>). Текст — HTML.
  * @param {{engines: {id:string,label:string}[], current: string, defaultId: string, unavailable?: string[], needLogin?: string[], lang?: string}} o
  *   engines — доступные движки; unavailable — названия движков, которые не запустились на сервере
  */
 export function engineMenu({ engines, current, defaultId, unavailable = [], needLogin = [], lang = DEFAULT_LANG }) {
   const cur = engines.find((e) => e.id === current);
   const text = [
-    t('engine.current', lang, { engine: cur?.label ?? current }),
-    t('engine.pick', lang),
-    ...(unavailable.length ? [t('engine.unavailable', lang, { list: unavailable.join(', ') })] : []),
-    ...(needLogin.length ? [t('engine.needLogin', lang, { list: engines.filter((e) => needLogin.includes(e.id)).map((e) => e.label).join(', ') })] : []),
+    th('engine.current', lang, { engine: hBold(cur?.label ?? current) }),
+    '',
+    `<i>${th('engine.pick', lang)}</i>`,
+    ...(unavailable.length ? ['', th('engine.unavailable', lang, { list: unavailable.join(', ') })] : []),
+    ...(needLogin.length ? ['', th('engine.needLogin', lang, { list: engines.filter((e) => needLogin.includes(e.id)).map((e) => e.label).join(', ') })] : []),
   ].join('\n');
   return {
     text,
@@ -367,6 +396,7 @@ export function engineMenu({ engines, current, defaultId, unavailable = [], need
         {
           text: `${e.id === current ? '✓ ' : ''}${e.label}${e.id === defaultId ? t('engine.default', lang) : ''}${needLogin.includes(e.id) ? t('engine.needLoginTag', lang) : ''}`,
           callback_data: `eng:${e.id}`,
+          ...(e.id === current ? { style: 'primary' } : {}), // текущий движок выделен цветом
         },
       ]),
     },

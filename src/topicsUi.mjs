@@ -1,7 +1,7 @@
 // Команда /topics — переключение режима «диалоги» (каждая тема чата — отдельный диалог с агентом) и /new в этом режиме:
 // новая тема вместо сброса текущего диалога.
 import { botInfo, db, langOf, log, say } from './ctx.mjs';
-import { t } from './i18n.mjs';
+import { errText, t } from './i18n.mjs';
 import { showPath } from './projects.mjs';
 import { engineOf, setTopicsMode, statesOf, stopUser, topicsOn, topicsSupport } from './state.mjs';
 import { tg } from './telegram.mjs';
@@ -76,7 +76,7 @@ export async function newTopic(st, { project = st.project } = {}) {
     threadId = await createTopic(st.chatId, name);
   } catch (e) {
     log('создание темы:', e.message, '| пользователь', st.userId);
-    return say(st.to, t('topics.createFail', lang, { msg: e.message }));
+    return say(st.to, t('topics.createFail', lang, { msg: errText(e, lang) }));
   }
   const engine = engineOf(st);
   db.saveTopic(st.userId, threadId, { name, named: false, project, engine: engine.id });

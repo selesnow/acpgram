@@ -7,7 +7,7 @@ import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './a
 import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
-import { LANGS, LANG_CODES, LANG_PICK, normLang, t } from './i18n.mjs';
+import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, showPath } from './projects.mjs';
 import { handleProject, onNavCallback, onTopicListCallback } from './projectsUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
@@ -185,7 +185,7 @@ async function receiveFile(st, meta, lang) {
     data = await downloadFile(meta.id);
   } catch (e) {
     log('скачивание файла:', e.message, '| пользователь', st.userId);
-    await say(st.to, t('file.downloadFail', lang, { msg: e.message }));
+    await say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang) }));
     return null;
   }
   if (data.length > MAX_FILE_BYTES) {

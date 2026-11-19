@@ -2,6 +2,7 @@
 // для запуска ACP-агента (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) как подпроцесса. Движки — в engines.mjs.
 import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
+import { i18nError } from './i18n.mjs';
 import { logError } from './log.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -142,16 +143,17 @@ export class AcpAgent {
     // запись в уже завершившийся процесс (EPIPE) не должна ронять бота
     this.proc.stdin.on('error', (e) => logError('[acp] stdin:', e.message));
     // команда не найдена и т.п.: без обработчика 'error' Node уронит весь бот, а 'exit' может не прийти
-    this.proc.on('error', (e) => this.#finish(null, `не удалось запустить ${this.command}: ${e.message}`));
-    this.proc.on('exit', (code) => this.#finish(code, `${this.name} завершился (код ${code})`));
+    this.proc.on('error', (e) => this.#finish(null, () => i18nError(`не удалось запустить ${this.command}: ${e.message}`, 'err.agentSpawn', { command: this.command, msg: e.message })));
+    this.proc.on('exit', (code) => this.#finish(code, () => i18nError(`${this.name} завершился (код ${code})`, 'err.agentExit', { engine: this.name, code })));
   }
 
   #finished = false;
-  #finish(code, reason) {
+  /** @param {() => Error} makeError ошибка для каждого запроса, который ждал ответа */
+  #finish(code, makeError) {
     if (this.#finished) return;
     this.#finished = true;
     this.closed = true;
-    for (const { reject } of this.pending.values()) reject(new Error(reason));
+    for (const { reject } of this.pending.values()) reject(makeError());
     this.pending.clear();
     this.onExit?.(code);
   }
@@ -166,7 +168,7 @@ export class AcpAgent {
     if (!timeoutMs) return this.#init(mode, { resume });
     let timer;
     const limit = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error(`${this.name}: нет ответа за ${Math.round(timeoutMs / 1000)} с`), { code: 'START_TIMEOUT' })), timeoutMs);
+      timer = setTimeout(() => reject(i18nError(`${this.name}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, 'err.agentNoReply', { engine: this.name, sec: Math.round(timeoutMs / 1000) }, { code: 'START_TIMEOUT' })), timeoutMs);
     });
     try {
       return await Promise.race([this.#init(mode, { resume }), limit]);
@@ -215,7 +217,7 @@ export class AcpAgent {
 
   request(method, params) {
     // процесс уже закрыт или завершился: ответа не будет, иначе промис повиснет навсегда
-    if (this.closed) return Promise.reject(new Error(`${this.name}: процесс агента уже завершён`));
+    if (this.closed) return Promise.reject(i18nError(`${this.name}: процесс агента уже завершён`, 'err.agentClosed', { engine: this.name }));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });

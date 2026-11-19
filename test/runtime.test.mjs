@@ -149,7 +149,7 @@ test('лимит агентов: свой самый давний простаи
 });
 
 // ---- темы проекта (режим «диалоги», v1.19) ----
-const { projectTopicsView } = await import('../src/projectsUi.mjs');
+const { folderRows, projectTopicsView } = await import('../src/projectsUi.mjs');
 
 test('listTopics: темы проекта свежие первыми, без убранных, без учёта регистра пути', async () => {
   const proj = join(home, 'ProjA');
@@ -190,6 +190,14 @@ test('projectTopicsView: кнопки-ссылки на темы, новый д�
   assert.equal(empty.markup.inline_keyboard.length, 1, 'только «новый диалог»');
   const inTopic = projectTopicsView(S.getState(107, 107, 101), proj);
   assert.notEqual(inTopic.text.split('\n')[1], v.text.split('\n')[1], 'в теме — свой заголовок');
+  assert.match(v.text.split('\n')[0], /<code>.*ProjC<\/code>$/, 'путь проекта — моноширинным (HTML)');
+});
+
+test('folderRows: короткие имена папок — по две в ряд, длинное — на всю ширину, порядок сохраняется', () => {
+  assert.deepEqual(folderRows(['a', 'b', 'c']), [['a', 'b'], ['c']]);
+  const long = 'recruitment_research_ai_assistant';
+  assert.deepEqual(folderRows(['a', long, 'b', 'c', 'd']), [['a'], [long], ['b', 'c'], ['d']]);
+  assert.deepEqual(folderRows([]), []);
 });
 
 test('одна сессия — в одном диалоге: при возобновлении в другом месте лишняя закрывается', () => {

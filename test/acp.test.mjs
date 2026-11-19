@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { AcpAgent, checkCommand, quietStderrFilter } from '../src/acp.mjs';
+import { errText } from '../src/i18n.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-agent.mjs', import.meta.url));
 
@@ -124,4 +125,15 @@ test('quietStderrFilter: служебный блок (трассировка Att
   assert.equal(skip('Error: настоящая ошибка агента'), false, 'после блока фильтр снова пропускает в лог');
   assert.equal(skip('    at somewhere (x.js:1:1)'), false);
   assert.equal(skip('[session/load] служебное'), true);
+});
+
+test('AcpAgent: ошибки процесса несут перевод для пользователя (errText)', async () => {
+  const agent = new AcpAgent({ cwd: process.cwd(), command: process.execPath, args: [FAKE], name: 'Fake' });
+  const exited = new Promise((r) => (agent.onExit = r));
+  await agent.init();
+  agent.close();
+  const e = await agent.prompt('после закрытия').catch((x) => x);
+  assert.equal(errText(e, 'en'), 'Fake: the agent process has already exited');
+  assert.equal(errText(e, 'ru'), e.message);
+  await exited;
 });

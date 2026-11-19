@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { plural, t } from '../src/i18n.mjs';
 import { fixTables, mediaBlock, mediaIdsOf, richToPlain, splitRich, stripMedia } from '../src/telegram.mjs';
-import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, defuseTgTags, engineMenu, neutralizeTgTags, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
+import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, defuseTgTags, engineMenu, hBold, hCode, hRaw, neutralizeTgTags, th, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
 
 const step = (o) => ({ toolCallId: 'x', tool: 'read_file', kind: 'read', title: 'src/a.mjs', description: '', status: null, ...o });
 const RU = { lang: 'ru' };
@@ -143,7 +143,10 @@ test('sessionStatus и activeSessionsView: статус в карточке и �
 test('engineMenu и движок на экранах /start и /active', () => {
   const engines = [{ id: 'gemini', label: 'Gemini CLI' }, { id: 'claude', label: 'Claude Code' }];
   const m = engineMenu({ engines, current: 'claude', defaultId: 'gemini', unavailable: ['Antigravity CLI'], ...RU });
-  assert.ok(m.text.startsWith('🤖 Движок: Claude Code') && m.text.includes('Недоступны на сервере: Antigravity CLI'), m.text);
+  assert.ok(m.text.startsWith('🤖 Движок: <b>Claude Code</b>') && m.text.includes('Недоступны на сервере: Antigravity CLI'), m.text);
+  assert.deepEqual(m.markup.inline_keyboard.flat().map((b) => b.style), [undefined, 'primary'], 'текущий движок выделен цветом');
+  // название движка с «<» не становится тегом
+  assert.ok(engineMenu({ engines: [{ id: 'x', label: '<b>X & Y' }], current: 'x', defaultId: 'x', ...RU }).text.startsWith('🤖 Движок: <b>&lt;b&gt;X &amp; Y</b>'));
   assert.deepEqual(m.markup.inline_keyboard.flat().map((b) => [b.text, b.callback_data]), [['Gemini CLI · по умолчанию', 'eng:gemini'], ['✓ Claude Code', 'eng:claude']]);
   assert.ok(!engineMenu({ engines, current: 'gemini', defaultId: 'gemini', ...RU }).text.includes('Недоступны'));
   const lm = engineMenu({ engines, current: 'gemini', defaultId: 'gemini', needLogin: ['claude'], ...RU });
@@ -426,4 +429,13 @@ test('defuseTgTags и startView: путь проекта с тегом кноп�
   const view = startView({ level: 'Полный', project: evil, engine: 'Gemini', isAdmin: true, lang: 'ru' });
   assert.ok(!/<tg-button type="callback_data" data="adm:ro:1">/.test(view), view);
   assert.match(view, /<tg-button type="callback_data" data="ui:project">/, 'свои кнопки бота на месте');
+});
+
+test('th: шаблон и параметры экранируются, hCode / hBold / hRaw вставляются разметкой', () => {
+  assert.equal(th('proj.set', 'ru', { p: hCode('C:/a<b>&c') }).split('\n')[0], '📁 Проект: <code>C:/a&lt;b&gt;&amp;c</code>');
+  assert.equal(th('eng.badArg', 'ru', { q: '<i>x</i>', list: 'gemini' }), '⚠️ Неизвестный движок «&lt;i&gt;x&lt;/i&gt;». Доступны: gemini');
+  assert.ok(th('eng.already', 'en', { engine: hBold('Codex'), warn: hRaw('\n<i>w</i>') }).endsWith('<b>Codex</b>\n<i>w</i>'));
+  // служебный знак вставки в обычном параметре не превращается в разметку
+  const mark = String.fromCharCode(1);
+  assert.equal(th('proj.same', 'ru', { p: `${mark}0${mark}` }), '📁 Проект уже выбран: 0');
 });

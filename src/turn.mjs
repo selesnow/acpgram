@@ -6,7 +6,7 @@ import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
-import { t } from './i18n.mjs';
+import { errText, t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
 import { diffOf, parseTool } from './tools.mjs';
 import { lineDiff } from './diff.mjs';
@@ -222,7 +222,7 @@ async function sendLooseFiles(st, files, lang) {
       log('файл отправлен пользователю отдельно', st.userId, f.path);
     } catch (e) {
       log('отправка файла:', e.message);
-      await say(st.to, t('file.sendFail', lang, { name: f.name, why: t('file.why.error', lang, { msg: e.message }) }));
+      await say(st.to, t('file.sendFail', lang, { name: f.name, why: t('file.why.error', lang, { msg: errText(e, lang) }) }));
     }
   }
 }
@@ -366,7 +366,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
       answer = e.message; // понятное сообщение без пометки «Ошибка»
     } else {
       log('ошибка запроса:', e.message);
-      answer += `\n\n${t('turn.error', lang, { msg: e.message })}`;
+      answer += `\n\n${t('turn.error', lang, { msg: errText(e, lang) })}`;
     }
     if (!st.requestId) st.requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
   } finally {

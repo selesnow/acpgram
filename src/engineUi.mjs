@@ -2,10 +2,11 @@
 import { langOf, log, say } from './ctx.mjs';
 import { canUseEngine, grantedEngines, userEngines } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, isAvailable, needsLogin } from './engines.mjs';
-import { t } from './i18n.mjs';
 import { endAgent, engineOf, isAdmin, saveEngine } from './state.mjs';
 import { tg } from './telegram.mjs';
-import { engineMenu } from './ui.mjs';
+import { engineMenu, hBold, hRaw, th } from './ui.mjs';
+
+const HTML = { parse_mode: 'HTML' };
 
 /** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity», «codex», «opencode». */
 export const findEngine = (q) => {
@@ -15,23 +16,24 @@ export const findEngine = (q) => {
 
 /**
  * Переключает движок пользователя. Текущая сессия закрывается: процесс агента работает в одном движке.
- * @returns {string} текст ответа пользователю
+ * @returns {string} текст ответа пользователю (HTML)
  */
 export function switchEngine(st, id) {
   const lang = langOf(st.userId);
   const e = ENGINES[id];
-  if (!e) return t('eng.unknown', lang);
-  if (!isAvailable(id)) return t('eng.unavailable', lang, { engine: e.label });
-  if (!canUseEngine(st.userId, id)) return t('eng.notGranted', lang, { engine: e.label });
-  if (st.busy) return t('busy.stop', lang);
+  if (!e) return th('eng.unknown', lang);
+  const engine = hBold(e.label);
+  if (!isAvailable(id)) return th('eng.unavailable', lang, { engine });
+  if (!canUseEngine(st.userId, id)) return th('eng.notGranted', lang, { engine });
+  if (st.busy) return th('busy.stop', lang);
   const before = engineOf(st);
   saveEngine(st, id);
   // не блокируем выбор: только предупреждаем, что движок не авторизован на сервере
-  const warn = needsLogin(id) ? `\n${t('eng.needLogin', lang, { engine: e.label })}` : '';
-  if (before.id === id) return t('eng.already', lang, { engine: e.label, warn });
+  const warn = hRaw(needsLogin(id) ? `\n\n${th('eng.needLogin', lang, { engine: e.label })}` : '');
+  if (before.id === id) return th('eng.already', lang, { engine, warn });
   endAgent(st, 'engine');
   log('движок переключён:', st.userId, id);
-  return t('eng.switched', lang, { engine: e.label, warn });
+  return th('eng.switched', lang, { engine, warn });
 }
 
 export async function handleEngine(st, arg) {
@@ -39,7 +41,7 @@ export async function handleEngine(st, arg) {
   const q = (arg || '').trim();
   if (q) {
     const e = findEngine(q);
-    return say(st.to, e ? switchEngine(st, e.id) : t('eng.badArg', lang, { q, list: userEngines(st.userId).map((x) => x.id).join(', ') }));
+    return say(st.to, e ? switchEngine(st, e.id) : th('eng.badArg', lang, { q, list: userEngines(st.userId).map((x) => x.id).join(', ') }), HTML);
   }
   const engines = userEngines(st.userId);
   const v = engineMenu({
@@ -51,8 +53,8 @@ export async function handleEngine(st, arg) {
     unavailable: grantedEngines(st.userId).filter((id) => !isAvailable(id)).map((id) => ENGINES[id].label),
     lang,
   });
-  const more = !isAdmin(st.userId) && grantedEngines(st.userId).length < Object.keys(ENGINES).length ? `\n${t('engine.more', lang)}` : '';
-  return say(st.to, v.text + more, { reply_markup: v.markup });
+  const more = !isAdmin(st.userId) && grantedEngines(st.userId).length < Object.keys(ENGINES).length ? `\n\n${th('engine.more', lang)}` : '';
+  return say(st.to, v.text + more, { ...HTML, reply_markup: v.markup });
 }
 
 /** Кнопка eng:<id>. */
@@ -60,5 +62,5 @@ export async function onEngineCallback(st, cb) {
   const id = (cb.data || '').slice('eng:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
   const text = switchEngine(st, id);
-  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text));
+  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, ...HTML, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text, HTML));
 }

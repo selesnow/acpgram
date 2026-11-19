@@ -1,6 +1,7 @@
 // Тонкая обёртка над Telegram Bot API через fetch (новые методы 10.x не требуют библиотек).
 import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
+import { i18nError } from './i18n.mjs';
 import { logError } from './log.mjs';
 
 const BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -44,7 +45,7 @@ export async function callApi(method, makeInit, { timeoutMs = TIMEOUT_MS, retrie
       const res = await fetchImpl(`${BASE}/${method}`, { method: 'POST', ...(await makeInit()), signal: signal ? AbortSignal.any([signal, limit]) : limit });
       data = await res.json();
     } catch (e) {
-      if (limit.aborted && !signal?.aborted) throw new Error(`Telegram ${method}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, { cause: e });
+      if (limit.aborted && !signal?.aborted) throw i18nError(`Telegram ${method}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, 'err.tgTimeout', { method, sec: Math.round(timeoutMs / 1000) }, {}, { cause: e });
       throw e;
     }
     if (data.ok) return data.result;
@@ -67,7 +68,7 @@ export const tg = (method, body = {}, opts = {}) =>
 /** Скачивает файл, присланный боту (до 20 МБ — лимит Bot API). Возвращает Buffer. */
 export async function downloadFile(file_id) {
   const info = await tg('getFile', { file_id });
-  if (!info.file_path) throw new Error('Telegram getFile: нет file_path');
+  if (!info.file_path) throw i18nError('Telegram getFile: нет file_path', 'err.tgNoFilePath');
   const res = await fetch(`${FILE_BASE}/${info.file_path}`, { signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`Telegram file: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());

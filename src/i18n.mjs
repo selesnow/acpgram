@@ -50,6 +50,20 @@ export function t(key, lang = DEFAULT_LANG, vars = {}) {
   return text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
 }
 
+/**
+ * Ошибка нижнего слоя (процесс агента, запрос к Telegram), которую может увидеть пользователь. Там, где она возникает,
+ * язык пользователя неизвестен: message — для журнала, а ключ и параметры — для перевода при показе (errText).
+ * @param {string} message текст для журнала
+ * @param {string} key ключ i18n
+ * @param {object} [vars] параметры текста
+ * @param {object} [extra] свои поля ошибки (code и т. п.)
+ * @param {ErrorOptions} [opts] например {cause}
+ */
+export const i18nError = (message, key, vars = {}, extra = {}, opts = undefined) => Object.assign(new Error(message, opts), extra, { i18n: { key, vars } });
+
+/** Текст ошибки для пользователя на его языке; у ошибок без перевода (ответ агента, Telegram, система) — их message. */
+export const errText = (e, lang = DEFAULT_LANG) => (e?.i18n && M[e.i18n.key] ? t(e.i18n.key, lang, e.i18n.vars) : String(e?.message ?? e));
+
 /** Выбор языка до того, как он сохранён: показываем сразу на трёх языках. */
 export const LANG_PICK = 'Choose your language:\nВыберите язык:\nОберіть мову:';
 
@@ -304,6 +318,13 @@ const M = {
   'perm.badOption': { en: 'No such option', ru: 'Нет такого варианта', uk: 'Такого варіанта немає' },
   'turn.stopped': { en: '⏹ Stopped.', ru: '⏹ Остановлено.', uk: '⏹ Зупинено.' },
   'turn.empty': { en: '(empty reply)', ru: '(пустой ответ)', uk: '(порожня відповідь)' },
+  // ---- ошибки нижнего слоя (i18nError): процесс агента и запросы к Telegram ----
+  'err.agentSpawn': { en: 'could not start {command}: {msg}', ru: 'не удалось запустить {command}: {msg}', uk: 'не вдалося запустити {command}: {msg}' },
+  'err.agentExit': { en: '{engine} exited (code {code})', ru: '{engine} завершился (код {code})', uk: '{engine} завершився (код {code})' },
+  'err.agentClosed': { en: '{engine}: the agent process has already exited', ru: '{engine}: процесс агента уже завершён', uk: '{engine}: процес агента вже завершено' },
+  'err.agentNoReply': { en: '{engine}: no reply in {sec} s', ru: '{engine}: нет ответа за {sec} с', uk: '{engine}: немає відповіді за {sec} с' },
+  'err.tgTimeout': { en: 'Telegram {method}: no reply in {sec} s', ru: 'Telegram {method}: нет ответа за {sec} с', uk: 'Telegram {method}: немає відповіді за {sec} с' },
+  'err.tgNoFilePath': { en: 'Telegram did not return the file path', ru: 'Telegram не вернул путь к файлу', uk: 'Telegram не повернув шлях до файлу' },
   'turn.error': { en: '⚠️ Error: {msg}', ru: '⚠️ Ошибка: {msg}', uk: '⚠️ Помилка: {msg}' },
   'turn.files': { en: '📎 Files:', ru: '📎 Файлы:', uk: '📎 Файли:' },
   'file.tooBig': { en: '⚠️ The file is too large: the limit is 20 MB.', ru: '⚠️ Файл слишком большой: лимит 20 МБ.', uk: '⚠️ Файл завеликий: ліміт 20 МБ.' },

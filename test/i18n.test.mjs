@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, normLang, pickLang, plural, t } from '../src/i18n.mjs';
+import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, normLang, pickLang, plural, t, errText, i18nError } from '../src/i18n.mjs';
 
 const placeholders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
 
@@ -59,4 +59,17 @@ test('pickLang: выбор в боте важнее языка Telegram, неп�
   assert.equal(pickLang(null, 'de'), DEFAULT_LANG, 'немецкий не поддерживается');
   assert.equal(pickLang(null, null), DEFAULT_LANG);
   assert.equal(pickLang(), DEFAULT_LANG);
+});
+
+test('errText: ошибка нижнего слоя показывается на языке пользователя, прочие — своим текстом', () => {
+  const e = i18nError('Gemini CLI завершился (код 1)', 'err.agentExit', { engine: 'Gemini CLI', code: 1 }, { code: 'X' });
+  assert.equal(e.message, 'Gemini CLI завершился (код 1)', 'в журнал — как раньше');
+  assert.equal(e.code, 'X');
+  assert.equal(errText(e, 'en'), 'Gemini CLI exited (code 1)');
+  assert.equal(errText(e, 'uk'), 'Gemini CLI завершився (код 1)');
+  assert.equal(errText(e, 'ru'), e.message);
+  assert.equal(errText(new Error('ACP -32000: boom'), 'en'), 'ACP -32000: boom');
+  assert.equal(errText(Object.assign(new Error('x'), { i18n: { key: 'no.such.key' } }), 'en'), 'x', 'неизвестный ключ не роняет показ ошибки');
+  const withCause = i18nError('m', 'err.tgNoFilePath', {}, {}, { cause: new Error('c') });
+  assert.equal(withCause.cause.message, 'c');
 });
