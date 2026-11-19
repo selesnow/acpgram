@@ -19,7 +19,9 @@ import { downloadFile, sendRich, tg } from './telegram.mjs';
 import { MAX_FILE_BYTES, IMAGE_BLOCK_MAX, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
 import { archiveKind, extractArchiveAsync } from './archive.mjs';
 import { createAlbumBuffer } from './albums.mjs';
-import { onPermissionCallback, runTurn } from './turn.mjs';
+import { dropQueue, enqueue, onAskCallback, onPermissionCallback, onQueueCallback, runTurn } from './turn.mjs';
+import { nearCommand, quoteOf, unsupportedKind } from './incoming.mjs';
+import { onWidgetQuery } from './widgetsUi.mjs';
 import { startView } from './ui.mjs';
 
 if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
@@ -49,7 +51,12 @@ const sendStart = (st) => {
   return sendRich(st.to, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
 };
 
-/** Кнопки экрана /start (ui:<команда>) работают как соответствующие команды. */
+/** Кнопка «⏹ Остановить» под сообщениями «запрос ещё выполняется» — вместо набора /stop. */
+const stopMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.stop', lang), callback_data: 'ui:stop' }]] });
+/** Кнопка «Сессии» — вместо набора /sessions. */
+const sessionsMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.sessions', lang), callback_data: 'ui:sessions' }]] });
+
+/** Кнопки экрана /start и служебных сообщений (ui:<команда>) работают как соответствующие команды. */
 async function onUiCallback(st, cb) {
   const name = (cb.data || '').slice('ui:'.length);
   await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
@@ -77,7 +84,8 @@ function languageCommand(st, arg) {
 }
 
 function stopCommand(st) {
-  if (!st.busy) return say(st.to, t('stop.none', langOf(st.userId)));
+  const queued = dropQueue(st); // «стоп» отменяет и сообщение, которое ждало своей очереди
+  if (!st.busy) return queued ? undefined : say(st.to, t('stop.none', langOf(st.userId)));
   st.agent?.cancel();
   dropPermissions(st);
 }
@@ -85,13 +93,13 @@ function stopCommand(st) {
 function closeCommand(st) {
   const lang = langOf(st.userId);
   if (!closeSession(st, 'close')) return say(st.to, t('close.none', lang));
-  return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }));
+  return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }), { reply_markup: sessionsMarkup(lang) });
 }
 
 function newCommand(st) {
   const lang = langOf(st.userId);
   if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
-  if (st.busy) return say(st.to, t('busy.stop', lang));
+  if (st.busy) return say(st.to, t('busy.stop', lang), { reply_markup: stopMarkup(lang) });
   endAgent(st, 'new');
   return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
 }
@@ -107,12 +115,13 @@ const COMMANDS = [
   { name: 'active', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/active') },
   { name: 'users', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/users') },
   { name: 'invite', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/invite') },
+  { name: 'usage', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/usage') },
   { name: 'project', menu: true, button: true, run: (st, arg) => handleProject(st, arg) },
   { name: 'engine', menu: true, button: true, run: (st, arg) => handleEngine(st, arg) },
   { name: 'model', menu: true, button: true, run: (st, arg) => handleModel(st, arg) },
   { name: 'new', menu: true, button: true, run: newCommand },
   { name: 'sessions', menu: true, button: true, run: (st) => handleSessions(st) },
-  { name: 'stop', menu: true, run: stopCommand },
+  { name: 'stop', menu: true, button: true, run: stopCommand },
   { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
   { name: 'topics', menu: () => topicsSupport.enabled, button: true, run: (st) => handleTopics(st) }, // в меню — если у бота включены темы
   { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
@@ -122,8 +131,16 @@ const COMMANDS = [
 /** Имена всех команд бота с псевдонимами: только они переносятся из темы, созданной Telegram, в General. */
 const BOT_COMMANDS = new Set(COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
 
-/** Текст пользователя: команды или запрос к агенту. Неизвестная команда («/что-то») уходит агенту как обычный запрос. */
-async function handleText(st, text) {
+/** Запрос агенту: если диалог занят — в очередь (уйдёт следующим), иначе сразу. */
+const sendToAgent = (st, text, opts = {}) => (st.busy ? enqueue(st, text, opts) : runTurn(st, text, opts));
+
+/**
+ * Текст пользователя: команды или запрос к агенту. Неизвестная команда («/что-то») уходит агенту как обычный запрос —
+ * у агентов есть свои команды («/compact»); но если она на одну правку отличается от команды бота и агент такой
+ * команды не объявлял, это, скорее всего, опечатка: спрашиваем, а не тратим запрос.
+ * @param {{quote?: string|null}} [opts] quote — фрагмент прошлого сообщения, на который отвечает пользователь
+ */
+async function handleText(st, text, { quote = null } = {}) {
   const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
   const name = m?.[1]?.toLowerCase();
   const command = name ? COMMANDS.find((c) => c.name === name || c.aliases?.includes(name)) : null;
@@ -132,8 +149,26 @@ async function handleText(st, text) {
     if (command.admin && !isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
     return command.run(st, m[2]);
   }
-  if (st.busy) return say(st.to, t('busy.running', lang));
-  return runTurn(st, text);
+  if (name && !st.agent?.commands?.has(name)) {
+    const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
+    if (guess) {
+      st.rawCommand = text; // «Отправить агенту как есть» (cmd:raw)
+      return say(st.to, t('cmd.typo', lang, { cmd: name, guess }), {
+        reply_markup: { inline_keyboard: [[{ text: `/${guess}`, callback_data: `ui:${guess}` }], [{ text: t('cmd.sendAsIs', lang), callback_data: 'cmd:raw' }]] },
+      });
+    }
+  }
+  return sendToAgent(st, text, { quote });
+}
+
+/** Кнопка «Отправить агенту как есть» под вопросом об опечатке в команде. */
+async function onRawCommandCallback(st, cb) {
+  const text = st.rawCommand;
+  st.rawCommand = null;
+  if (!text) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('cmd.stale', langOf(st.userId)) }).catch(() => {});
+  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
+  await tg('editMessageReplyMarkup', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+  return sendToAgent(st, text);
 }
 
 /**
@@ -182,12 +217,12 @@ async function receiveFile(st, meta, lang) {
  */
 async function processAttachments(st, msgs) {
   const lang = langOf(st.userId);
-  if (st.busy) return say(st.to, t('busy.running', lang));
+  if (st.busy) return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
   const received = await Promise.all(msgs.map((m) => describeAttachment(m)).filter(Boolean).map((meta) => receiveFile(st, meta, lang)));
   const files = received.filter(Boolean);
   if (!files.length) return;
   // пока качался альбом, пользователь мог отправить текст и занять агента
-  if (st.busy) return say(st.to, t('busy.running', lang));
+  if (st.busy) return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
   const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
   return runTurn(st, caption, { files });
 }
@@ -233,6 +268,13 @@ async function handleUpdate(u) {
     return;
   }
 
+  // запрос от виджета (выбор модели, сессии): доступ проверяется так же, как для сообщений и кнопок
+  if (u.widget_query) {
+    const q = u.widget_query;
+    if (!q.from || q.from.is_bot || (q.chat && q.chat.type !== 'private') || !hasAccess(q.from.id)) return;
+    return onWidgetQuery(q);
+  }
+
   const msg = u.message;
   const cb = u.callback_query;
   const from = msg?.from || cb?.from;
@@ -270,6 +312,14 @@ async function handleUpdate(u) {
     if (data.startsWith('tpl:')) return onTopicListCallback(st, cb);
     if (data.startsWith('nav:')) return onNavCallback(st, cb);
     if (data.startsWith('perm:')) return onPermissionCallback(st, cb);
+    if (data.startsWith('ask:')) return onAskCallback(st, cb);
+    if (data.startsWith('q:')) return onQueueCallback(st, cb);
+    if (data === 'cmd:raw') return onRawCommandCallback(st, cb);
+    if (data === 'wid:model' || data === 'wid:sessions') {
+      // «Обычное меню» под виджетом: тот же экран сообщением с кнопками
+      await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
+      return data === 'wid:model' ? handleModel(st, '', { classic: true }) : handleSessions(st, { classic: true });
+    }
     if (data.startsWith('ses:')) return onSessionCallback(st, cb);
     if (data.startsWith('eng:')) return onEngineCallback(st, cb);
     if (data.startsWith('mdl:')) return onModelCallback(st, cb);
@@ -277,8 +327,10 @@ async function handleUpdate(u) {
     if (data.startsWith('lang:')) return onLangCallback(st, cb);
     return;
   }
-  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text);
+  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text, { quote: quoteOf(msg) });
   if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId, threadId), msg);
+  // голосовое, видео, стикер и т. п.: раньше бот на них молчал
+  if (msg && unsupportedKind(msg)) return say(getState(from.id, chatId, threadId).to, t('msg.unsupported', langOf(from.id)));
 }
 
 /**
@@ -377,7 +429,7 @@ async function main() {
     let updates;
     try {
       // длинный опрос 30 с + запас: если соединение тихо оборвалось, через 45 с переподключаемся (а не через ~5 минут)
-      updates = await tg('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query', 'stopped_message_generation'] }, { timeoutMs: 45_000 });
+      updates = await tg('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query', 'stopped_message_generation', 'widget_query'] }, { timeoutMs: 45_000 });
     } catch (e) {
       log('getUpdates:', e.message);
       await new Promise((r) => setTimeout(r, 3000));

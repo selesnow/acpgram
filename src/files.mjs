@@ -122,8 +122,9 @@ const NO_TEXT_PROMPT = 'The user sent the attached file(s) without a message. Lo
 /**
  * Блоки промпта ACP: текст пользователя, изображения (если агент принимает image) и служебная заметка со списком файлов
  * и правилами отправки. files: [{path, name, mime, size, data?}] — data (Buffer) только у изображений.
+ * quote — фрагмент прошлого сообщения, на который отвечает пользователь; notes — другие подсказки агенту (кнопки ответа).
  */
-export function buildPromptBlocks({ text, files = [], caps, outbox }) {
+export function buildPromptBlocks({ text, files = [], caps, outbox, quote = null, notes = [] }) {
   const blocks = [{ type: 'text', text: text?.trim() || (files.length ? NO_TEXT_PROMPT : '') }];
   const imageOk = Boolean(caps?.promptCapabilities?.image);
   for (const f of files) {
@@ -132,6 +133,10 @@ export function buildPromptBlocks({ text, files = [], caps, outbox }) {
     }
   }
   const note = [];
+  if (quote) {
+    note.push('[AcpGram] The user is replying to this fragment of an earlier message in this chat:');
+    for (const line of String(quote).split(/\r?\n/)) note.push(`> ${line}`);
+  }
   if (files.length) {
     note.push('[AcpGram] The user attached files (saved on the server, open them with your file tools when needed):');
     for (const f of files) {
@@ -146,6 +151,7 @@ export function buildPromptBlocks({ text, files = [], caps, outbox }) {
     }
   }
   if (outbox) note.push(outboxNote(outbox));
+  note.push(...notes);
   if (note.length) blocks.push({ type: 'text', text: note.join('\n') });
   return blocks;
 }

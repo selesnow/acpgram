@@ -11,6 +11,7 @@ const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'acpgram-runtime-'))
 process.env.ACPGRAM_HOME = home;
 delete process.env.PROJECTS_ROOT; // проект — любая папка (иначе временная папка вне корня), независимо от окружения службы
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
+process.env.WIDGETS = '1'; // виджеты выключены по умолчанию — в тестах отправки они нужны
 process.env.ALLOWED_USER_ID ??= '1';
 const ctx = await import('../src/ctx.mjs');
 const { CATALOG_TTL_MS, catalogFresh, catalogStaleReason, envSignature } =await import('../src/access.mjs');
@@ -213,4 +214,65 @@ test('одна сессия — в одном диалоге: при возоб�
   general.busy = false;
   general.agent = null;
   S.releaseSessionElsewhere(topicA, null); // без сессии — ничего
+});
+
+// ---- виджеты: отправка с откатом на обычное меню (widgetHost.mjs), HTML экранов (modelUi, sessionsUi) ----
+test('sendWidgetMessage: успех запоминает тему; отказ Telegram — false и пауза, а не повтор при каждом /model', async () => {
+  const H = await import('../src/widgetHost.mjs');
+  const st = { userId: 7, chatId: 7, threadId: 42, to: { chat_id: 7, message_thread_id: 42 } };
+  const calls = [];
+  const ok = async (method, body) => (calls.push([method, body]), { message_id: 900 });
+  assert.equal(await H.sendWidgetMessage(st, { html: '<p>x</p>', caption: 'c', kind: 'model', engine: 'claude' }, { send: ok, now: 1000 }), true);
+  assert.equal(calls[0][0], 'sendWidget');
+  assert.equal(calls[0][1].message_thread_id, 42);
+  assert.equal(calls[0][1].allow_queries, true);
+  assert.equal(calls[0][1].reply_markup.inline_keyboard[0][0].callback_data, 'wid:model', 'кнопка «Обычное меню»');
+  assert.deepEqual(H.widgetInfo(7, 900), { threadId: 42, kind: 'model', engine: 'claude' });
+  assert.equal(H.widgetInfo(7, 901), null);
+  // слишком большой виджет не отправляется вовсе
+  assert.equal(await H.sendWidgetMessage(st, { html: 'x'.repeat(40_000), caption: 'c', kind: 'model' }, { send: ok, now: 1000 }), false);
+  assert.equal(calls.length, 1);
+  // обычная ошибка — откат без паузы; «виджеты боту не разрешены» — пауза на час
+  let n = 0;
+  const fail = (msg) => async () => (n++, Promise.reject(new Error(msg)));
+  assert.equal(await H.sendWidgetMessage(st, { html: '<p>x</p>', caption: 'c', kind: 'sessions' }, { send: fail('Telegram sendWidget: 400 Bad Request: SOMETHING'), now: 2000 }), false);
+  assert.equal(await H.sendWidgetMessage(st, { html: '<p>x</p>', caption: 'c', kind: 'sessions' }, { send: fail('Telegram sendWidget: 400 Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED'), now: 3000 }), false);
+  assert.equal(n, 2);
+  assert.equal(await H.sendWidgetMessage(st, { html: '<p>x</p>', caption: 'c', kind: 'sessions' }, { send: ok, now: 3000 + H.NOT_ALLOWED_PAUSE_MS - 1 }), false, 'в течение паузы не пробуем');
+  assert.equal(calls.length, 1);
+  assert.equal(await H.sendWidgetMessage(st, { html: '<p>x</p>', caption: 'c', kind: 'sessions' }, { send: ok, now: 3000 + H.NOT_ALLOWED_PAUSE_MS }), true, 'после паузы — снова');
+  assert.equal(H.isNotAllowed(new Error('x INPUT_MEDIA_WIDGET_NOT_ALLOWED')), true);
+  assert.equal(H.isNotAllowed(new Error('INPUT_MEDIA_WIDGET_TOO_LARGE')), false);
+});
+
+test('sessionsWidgetHtml и checkResumable: виджет сессий помещается в лимит, чужую и работающую сессию возобновить нельзя', async () => {
+  const U = await import('../src/sessionsUi.mjs');
+  const { widgetFits } = await import('../src/widgets.mjs');
+  const list = Array.from({ length: 30 }, (_, i) => ({ acp_id: `ses-${i}`, engine: 'gemini', last_at: new Date(Date.UTC(2026, 10, 1 + (i % 28), 9, i)).toISOString(), n: i + 1, first_text: `Запрос ${i}: ${'очень длинный и неповторяющийся текст '.repeat(4)}${Math.sin(i)}` }));
+  const html = U.sessionsWidgetHtml({ list, current: 'ses-2', project: 'reports', lang: 'ru' });
+  assert.ok(html && widgetFits(html));
+  assert.match(html, /Сессии проекта reports: \d+/);
+  const st = { userId: 1, agent: { sessionId: 'ses-2' } };
+  assert.match(U.checkResumable(st, null).error, /не найдена|not found/i);
+  assert.ok(U.checkResumable(st, list[2]).error, 'уже работает в этом диалоге');
+});
+
+test('applyChoice: выбор модели из виджета и кнопок — только из разрешённого, ссылкой, номером или «Авто»', async () => {
+  const A = await import('../src/access.mjs');
+  const M = await import('../src/modelUi.mjs');
+  const { ENGINES } = await import('../src/engines.mjs');
+  const { shortKey } = await import('../src/widgets.mjs');
+  const engine = ENGINES.claude;
+  A.saveCatalog(engine, { configOptions: [{ id: 'model', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'opus', name: 'Opus' }, { value: 'sonnet', name: 'Sonnet' }] }, { id: 'effort', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'high', name: 'High' }] }] });
+  const st = { userId: 1 };
+  assert.deepEqual(M.applyChoice(st, engine, 'model', 'opus'), { ok: true, value: 'opus' });
+  assert.equal(A.effectiveSelection(1, engine).model, 'opus');
+  assert.deepEqual(M.applyChoice(st, engine, 'model', shortKey('sonnet')), { ok: true, value: 'sonnet' });
+  assert.deepEqual(M.applyChoice(st, engine, 'model', '#0'), { ok: true, value: 'opus' });
+  assert.deepEqual(M.applyChoice(st, engine, 'effort', 'high'), { ok: true, value: 'high' });
+  assert.deepEqual(M.applyChoice(st, engine, 'model', '~'), { ok: true, value: null });
+  assert.equal(M.applyChoice(st, engine, 'model', 'gpt-5').ok, false, 'модели нет в каталоге движка');
+  assert.equal(M.applyChoice(st, engine, 'effort', 'ultra').ok, false);
+  const html = M.modelWidgetHtml({ userId: 1 }, engine, A.getCatalog(engine.id));
+  assert.match(html, /"m":\[\["opus","Opus"\],\["sonnet","Sonnet"\]\]/);
 });

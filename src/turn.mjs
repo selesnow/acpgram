@@ -8,7 +8,9 @@ import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { t } from './i18n.mjs';
 import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
-import { parseTool } from './tools.mjs';
+import { diffOf, parseTool } from './tools.mjs';
+import { lineDiff } from './diff.mjs';
+import { ASK_NOTE, ASK_PLACEHOLDER, askChoice, extractAsks, placeAsks, stripAskMarks } from './asks.mjs';
 import { dest, tg, mediaIdsOf, sendFile, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
 import { composeDraft, finalExtras, finalMessages, lastThoughtTitle, neutralizeTgTags, toolMeta, trunc } from './ui.mjs';
 import { TITLE_NOTE, extractTitle, renameTopic, stripTitle, titleFromRequest, topicName } from './topics.mjs';
@@ -105,7 +107,11 @@ async function askPermission(st, params) {
   const body = isCmd
     ? `${escHtml(trunc(info.description || t('step.command', lang), 400))}\n\n<pre>${escHtml(trunc(info.title, 1200))}</pre>`
     : `<code>${escHtml(trunc(what, 600))}</code>`;
-  const text = `${t('perm.ask', lang)}\n\n<b>${escHtml(head)}</b>: ${body}`;
+  // правка файла: показываем, что именно изменится, — иначе разрешение даётся вслепую, по одному пути
+  const change = isCmd ? null : diffOf(tc);
+  const diff = change ? lineDiff(change.oldText, change.newText, { maxLines: 30 }).text : '';
+  const diffBlock = diff ? `\n\n<pre><code class="language-diff">${escHtml(trunc(diff, 1800))}</code></pre>` : '';
+  const text = `${t('perm.ask', lang)}\n\n<b>${escHtml(head)}</b>: ${body}${diffBlock}`;
 
   const permId = dbId();
   // индекс кнопки — в списке показанных вариантов: скрытый вариант подменой callback_data не выбрать
@@ -223,9 +229,10 @@ async function sendLooseFiles(st, files, lang) {
 
 /**
  * Выполняет запрос пользователя к агенту и отправляет результат.
- * @param {{files?: {path: string, name: string, mime: string, size: number, data?: Buffer}[]}} [opts] вложения запроса
+ * @param {{files?: {path: string, name: string, mime: string, size: number, data?: Buffer}[], quote?: string|null}} [opts]
+ *   files — вложения запроса; quote — фрагмент прошлого сообщения, на который отвечает пользователь
  */
-export async function runTurn(st, text, { files = [] } = {}) {
+export async function runTurn(st, text, { files = [], quote = null } = {}) {
   const to = st.to; // куда отвечать (тема, из которой пришёл запрос)
   // в базу — текст запроса и имена приложенных файлов, иначе запрос только с файлом выглядел бы пустым
   const dbText = files.length ? [text, `📎 ${files.map((f) => f.name).join(', ')}`].filter(Boolean).join('\n') : text;
@@ -246,6 +253,7 @@ export async function runTurn(st, text, { files = [] } = {}) {
   let thoughtBuf = '';
   let thought = '';
   const steps = []; // ход работы: инструменты агента
+  let plan = []; // план агента (ACP plan): пункты с отметками выполнения
   let breakBeforeText = false;
   let dirty = true;
   let lastSent = 0;
@@ -258,7 +266,7 @@ export async function runTurn(st, text, { files = [] } = {}) {
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, answer: stripTitle(stripSendMarks(neutralizeTgTags(clean(answer)))), elapsedMs: Date.now() - startedAt, lang });
+    const d = composeDraft({ thought, steps, plan, answer: stripAskMarks(stripTitle(stripSendMarks(neutralizeTgTags(clean(answer))))), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;
@@ -299,6 +307,9 @@ export async function runTurn(st, text, { files = [] } = {}) {
       steps.push(tool);
       db.toolStarted(st.requestId, tool);
       dirty = true;
+    } else if (kind === 'plan' && Array.isArray(u.entries)) {
+      plan = u.entries; // агент присылает план целиком при каждом изменении
+      dirty = true;
     } else if (kind === 'usage_update') {
       lastUsage = u; // у Claude Code здесь стоимость и реальная модель
     } else if (kind === 'tool_call_update') {
@@ -333,7 +344,7 @@ export async function runTurn(st, text, { files = [] } = {}) {
     // (агент мог сжать контекст и забыть её), а не в каждом — она попадает в историю и тратит токены
     const noteNow = (a.promptCount ?? 0) % OUTBOX_NOTE_EVERY === 0;
     a.promptCount = (a.promptCount ?? 0) + 1;
-    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null });
+    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE] : [] });
     // новая тема без названия: агент начинает ответ строкой с названием, бот называет так тему
     if (naming) blocks.push({ type: 'text', text: TITLE_NOTE });
     const res = await a.prompt(blocks);
@@ -372,13 +383,15 @@ export async function runTurn(st, text, { files = [] } = {}) {
   // метки [[send:путь]] (вне кода) → заглушки: на их место встанут сами файлы
   // теги <tg-button> в тексте агента обезвреживаются: кнопки бота рисует только сам бот (ui.mjs)
   const titled = extractTitle(neutralizeTgTags(clean(answer))); // строка с названием темы — в название, а не в ответ
-  const sent = extractSendMarks(titled.text, { placeholders: true });
-  const answerText = sent.text.replace(FILE_PLACEHOLDER, '').trim(); // ответ без файлов: для базы и проверки «пустой ли»
+  const asked = extractAsks(titled.text); // метки [[ask: …]] → заглушки: на их место встанут кнопки быстрого ответа
+  const sent = extractSendMarks(asked.text, { placeholders: true });
+  const answerText = sent.text.replace(FILE_PLACEHOLDER, '').replace(ASK_PLACEHOLDER, '').trim(); // ответ без файлов и кнопок: для базы и проверки «пустой ли»
   db.finishRequest(st.requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });
   st.requestId = null;
   if (st.suppress) {
     // администратор отозвал доступ или сменил уровень — результат пользователю не отправляем
     st.suppress = false;
+    st.queued = null;
     return;
   }
   let final = answerText ? sent.text.trim() : sent.paths.length && !limited ? `${t('turn.files', lang)}\n\n${sent.text.trim()}` : t('turn.empty', lang);
@@ -395,7 +408,9 @@ export async function runTurn(st, text, { files = [] } = {}) {
   // свёрнутый ход работы и подвал (движок, модель, расход, проект, время); для «все слоты заняты» не нужны
   const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: showPath(st.project, lang), engine: engine.short, usage, lang });
   const loose = []; // файлы, которые Telegram не принял внутри ответа
-  for (const msg of finalMessages(placed.text, extras)) {
+  // кнопки быстрого ответа от агента: разметку и callback_data строит бот (asks.mjs)
+  const body = placeAsks(st, placed.text, limited ? [] : asked.asks);
+  for (const msg of finalMessages(body, extras)) {
     dbg(`final u${st.userId} stop=${stopReason}`, msg);
     const left = await sendRich(to, msg, { media: placed.media }).catch((e) => {
       log('sendRich:', e.message);
@@ -407,4 +422,72 @@ export async function runTurn(st, text, { files = [] } = {}) {
   if (inAnswer > 0) log('файлы в ответе:', inAnswer, '| пользователь', st.userId);
   if (loose.length || placed.extra.length) await sendLooseFiles(st, [...loose, ...placed.extra], lang);
   if (naming && !limited && stopReason !== 'error') await nameTopic(st, titled.title || titleFromRequest(text || dbText));
+  return drainQueue(st);
+}
+
+// ---- очередь: сообщение, пришедшее во время запроса, уходит агенту следующим ----
+
+const settleNotice = (chatId, messageId, text) =>
+  tg('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+
+/**
+ * Ставит сообщение в очередь диалога (одно: новое заменяет прежнее) и показывает уведомление с кнопками
+ * «Остановить и отправить» и «Не отправлять». Раньше бот отвечал «запрос ещё выполняется», и текст приходилось слать заново.
+ */
+export async function enqueue(st, text, { quote = null } = {}) {
+  const lang = langOf(st.userId);
+  const prev = st.queued;
+  const item = { text, quote, messageId: null };
+  st.queued = item;
+  if (prev?.messageId) settleNotice(st.chatId, prev.messageId, t('queue.replaced', lang));
+  const msg = await tg('sendMessage', {
+    ...dest(st.to),
+    text: t('queue.added', lang),
+    reply_markup: { inline_keyboard: [[{ text: t('queue.stopSend', lang), callback_data: 'q:s' }], [{ text: t('queue.cancel', lang), callback_data: 'q:x' }]] },
+  }).catch((e) => log('очередь:', e.message));
+  if (msg) item.messageId = msg.message_id;
+  // запрос мог закончиться, пока отправлялось уведомление
+  if (!st.busy && st.queued === item) return drainQueue(st);
+}
+
+/** Убирает сообщение из очереди (/stop, «Не отправлять»). Возвращает true, если в очереди что-то было. */
+export function dropQueue(st) {
+  const q = st.queued;
+  if (!q) return false;
+  st.queued = null;
+  if (q.messageId) settleNotice(st.chatId, q.messageId, t('queue.cancelled', langOf(st.userId)));
+  return true;
+}
+
+/** Отправляет агенту сообщение из очереди, если диалог свободен. */
+export async function drainQueue(st) {
+  const q = st.queued;
+  if (!q || st.busy) return;
+  st.queued = null;
+  if (q.messageId) settleNotice(st.chatId, q.messageId, t('queue.sending', langOf(st.userId)));
+  return runTurn(st, q.text, { quote: q.quote });
+}
+
+/** Кнопки уведомления об очереди: q:x — не отправлять, q:s — остановить текущий запрос и отправить. */
+export async function onQueueCallback(st, cb) {
+  const lang = langOf(st.userId);
+  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
+  if (!st.queued || st.queued.messageId !== cb.message?.message_id) return ack(t('queue.stale', lang));
+  await ack();
+  if (cb.data === 'q:x') return void dropQueue(st);
+  if (!st.busy) return drainQueue(st);
+  // текущий запрос завершится (с пометкой «Остановлено»), и сообщение из очереди уйдёт следом
+  st.agent?.cancel();
+  dropPermissions(st);
+}
+
+/** Кнопка быстрого ответа от агента (ask:<набор>:<вариант>): текст варианта уходит агенту как сообщение пользователя. */
+export async function onAskCallback(st, cb) {
+  const lang = langOf(st.userId);
+  const text = askChoice(st, cb.data);
+  if (!text) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('ask.stale', lang) }).catch(() => {});
+  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
+  await say(st.to, t('ask.chosen', lang, { text })); // выбор виден в переписке, как обычное сообщение
+  log('кнопка ответа агенту', st.userId, JSON.stringify(text));
+  return st.busy ? enqueue(st, text) : runTurn(st, text);
 }

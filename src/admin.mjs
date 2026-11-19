@@ -7,8 +7,8 @@ import { DEFAULT_ENGINE, ENGINES } from './engines.mjs';
 import { t } from './i18n.mjs';
 import { activeSessions, closeSession, saveEngine, statesOf, stopUser } from './state.mjs';
 import { showPath } from './projects.mjs';
-import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, sessionStatus } from './ui.mjs';
-import { tg } from './telegram.mjs';
+import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, sessionStatus, usageView } from './ui.mjs';
+import { isNotModified, tg } from './telegram.mjs';
 
 const INVITE_TTL_MS = 24 * 3600_000;
 const REQUEST_COOLDOWN_MS = 3600_000; // повторный запрос доступа от одного человека — не чаще раза в час
@@ -80,8 +80,8 @@ export async function adminCommand(chatId, command) {
       reply_markup: { inline_keyboard: LEVEL_KEYS.map((key) => [{ text: `${levelName(key, al)} — ${levelHint(key, al)}`, callback_data: `adm:i:${key}` }]) },
     });
   }
-  if (command === '/active' || command === '/users') {
-    const v = command === '/active' ? activeView() : usersView();
+  if (command === '/active' || command === '/users' || command === '/usage') {
+    const v = command === '/active' ? activeView() : command === '/usage' ? usageScreen(1) : usersView();
     return say(chatId, v.text, { reply_markup: v.markup });
   }
 }
@@ -102,6 +102,10 @@ const ownerName = (id) => (id === ADMIN_ID ? t('active.owner', adminLang()) : db
 
 /** Активные сессии: кто занимает слоты, с кнопками точечного завершения (для сотрудников). */
 const activeView = () => activeSessionsView({ sessions: activeSessions(), adminId: ADMIN_ID, maxAgents: MAX_AGENTS, nameOf: ownerName, projectOf: (p) => showPath(p, adminLang()), lang: adminLang() });
+
+/** Расход по пользователям за days суток (экран /usage, кнопки периода adm:us:<дни>). */
+const usageScreen = (days, now = Date.now()) =>
+  usageView({ rows: db.usageSummary(new Date(now - days * 24 * 3600_000).toISOString()), days, nameOf: ownerName, lang: adminLang() });
 
 /** Движки сотрудника для карточки: все движки реестра, отметка выданных. */
 const engineList = (userId) => {
@@ -145,7 +149,7 @@ export async function onAdminCallback(cb) {
   const chatId = cb.message?.chat?.id;
   const messageId = cb.message?.message_id;
   const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
-  const edit = (text, markup) => tg('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: markup ?? { inline_keyboard: [] } }).catch((e) => log('adm edit:', e.message));
+  const edit = (text, markup) => tg('editMessageText', { chat_id: chatId, message_id: messageId, text, reply_markup: markup ?? { inline_keyboard: [] } }).catch((e) => isNotModified(e) || log('adm edit:', e.message));
   const id = Number(a);
 
   // ссылка-приглашение
@@ -190,6 +194,11 @@ export async function onAdminCallback(cb) {
   if (action === 'act') {
     await ack();
     const v = activeView();
+    return edit(v.text, v.markup);
+  }
+  if (action === 'us') {
+    await ack();
+    const v = usageScreen([1, 7, 30].includes(id) ? id : 1);
     return edit(v.text, v.markup);
   }
   const user = db.getUser(id);

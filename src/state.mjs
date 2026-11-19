@@ -96,6 +96,7 @@ export function getState(userId, chatId, threadId = null) {
       onUpdate: null, // обработчик событий текущего запроса
       perms: new Map(), // ожидающие запросы разрешений
       suppress: false, // администратор прервал запрос — итоговый ответ не отправляем
+      queued: null, // сообщение, пришедшее во время запроса: уйдёт агенту следующим (turn.mjs)
       lastActive: Date.now(),
       // сохранённый проект, если он ещё существует (и лежит в корне, если корень задан), иначе корень или домашняя папка
       project: insideRoot(row?.project || saved || DEFAULT_DIR) || DEFAULT_DIR,
@@ -178,6 +179,7 @@ export function stopUser(st, reason) {
     st.suppress = true;
     st.agent?.cancel();
   }
+  st.queued = null; // сообщение, ждавшее своей очереди, в закрытую сессию не отправляем
   dropPermissions(st);
   endAgent(st, reason);
 }
@@ -288,6 +290,11 @@ async function startAgent(st, { resume } = {}) {
     // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
     who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {
+      // собственные команды агента («/compact» у Claude Code) — приходят и во время запуска; по ним бот отличает
+      // команду агента от опечатки в команде бота
+      if (u.sessionUpdate === 'available_commands_update' && Array.isArray(u.availableCommands)) {
+        a.commands = new Set(u.availableCommands.map((c) => String(c?.name ?? '').replace(/^\//, '').toLowerCase()).filter(Boolean));
+      }
       // пока агент запускается, он может «проигрывать» историю возобновлённой сессии — в текущий ответ она не идёт
       if (!a.ready) return;
       // Агент сменил режим сам (например, выход из плана у Claude Code). Основная защита — фильтр вариантов в askPermission;
@@ -362,7 +369,10 @@ export function startIdleReaper() {
         endAgent(st, 'idle');
         log('сессия закрыта по неактивности, пользователь', st.userId, '| тема', st.topic);
         // в теме разговор продолжится с того же места (сессия темы возобновится), в обычном диалоге — начнётся новый
-        say(st.to, t(st.topic ? 'state.idleTopic' : 'state.idle', langOf(st.userId), { min: IDLE_MINUTES }));
+        const lang = langOf(st.userId);
+        // в обычном диалоге — кнопка «Сессии»: вернуться к закрытой сессии одним нажатием, без набора /sessions
+        const extra = st.topic ? {} : { reply_markup: { inline_keyboard: [[{ text: t('btn.sessions', lang), callback_data: 'ui:sessions' }]] } };
+        say(st.to, t(st.topic ? 'state.idleTopic' : 'state.idle', lang, { min: IDLE_MINUTES }), extra);
       }
     }
   }, 60_000).unref();

@@ -23,6 +23,7 @@ export const LOCALES = { en: 'en-US', ru: 'ru-RU', uk: 'uk-UA' };
 /** Единицы с множественным числом: en — ед./мн., ru и uk — три формы (1 / 2–4 / 5+). */
 const UNITS = {
   step: { en: ['step', 'steps'], ru: ['шаг', 'шага', 'шагов'], uk: ['крок', 'кроки', 'кроків'] },
+  request: { en: ['request', 'requests'], ru: ['запрос', 'запроса', 'запросов'], uk: ['запит', 'запити', 'запитів'] },
 };
 
 /** Славянская форма: 1, 2–4, 5+ (с исключением для 11–14). Одинакова для русского и украинского. */
@@ -85,6 +86,7 @@ const M = {
   'menu.start': { en: 'Welcome and the current project', ru: 'Приветствие и текущий проект', uk: 'Привітання та поточний проєкт' },
   'menu.active': { en: 'Active sessions: who holds the slots', ru: 'Активные сессии: кто занимает слоты', uk: 'Активні сесії: хто займає слоти' },
   'menu.users': { en: 'Users with access: levels and revocation', ru: 'Сотрудники с доступом: уровни и отзыв', uk: 'Співробітники з доступом: рівні та відкликання' },
+  'menu.usage': { en: 'Usage: requests and tokens by user', ru: 'Расход: запросы и токены по сотрудникам', uk: 'Витрати: запити й токени по співробітниках' },
   'menu.invite': { en: 'Invite a user with a link', ru: 'Пригласить сотрудника по ссылке', uk: 'Запросити співробітника за посиланням' },
 
   // ---------- экран /start ----------
@@ -111,6 +113,7 @@ const M = {
   'help.language': { en: '/language — interface language', ru: '/language — язык интерфейса', uk: '/language — мова інтерфейсу' },
   'help.users': { en: '/users — users with access', ru: '/users — сотрудники с доступом', uk: '/users — співробітники з доступом' },
   'help.active': { en: '/active — active sessions', ru: '/active — активные сессии', uk: '/active — активні сесії' },
+  'help.usage': { en: '/usage — requests and tokens by user', ru: '/usage — запросы и токены по сотрудникам', uk: '/usage — запити й токени по співробітниках' },
   'help.invite': { en: '/invite — invite a user', ru: '/invite — пригласить сотрудника', uk: '/invite — запросити співробітника' },
 
   // ---------- уровни доступа ----------
@@ -141,6 +144,7 @@ const M = {
   'tool.delete': { en: 'Deleting', ru: 'Удаление', uk: 'Видалення' },
   'tool.move': { en: 'Moving', ru: 'Перемещение', uk: 'Переміщення' },
   'step.command': { en: 'running a command', ru: 'выполнение команды', uk: 'виконання команди' },
+  'draft.plan': { en: 'Plan: {done}/{total}', ru: 'План: {done}/{total}', uk: 'План: {done}/{total}' },
   'draft.more': { en: '_… {n} earlier_', ru: '_… и ещё {n} выше_', uk: '_… ще {n} вище_' },
   'final.work': { en: 'Work log · {n}', ru: 'Ход работы · {n}', uk: 'Хід роботи · {n}' },
   'final.more': { en: '… and {n} more', ru: '… и ещё {n}', uk: '… ще {n}' },
@@ -250,6 +254,38 @@ const M = {
   // ---------- запросы разрешений и ход запроса (turn.mjs) ----------
   'perm.opt.allow_once': { en: '✅ Allow', ru: '✅ Разрешить', uk: '✅ Дозволити' },
   'perm.opt.allow_always': { en: '✅ Allow for this session', ru: '✅ Разрешить на эту сессию', uk: '✅ Дозволити на цю сесію' },
+  'wid.classic': { en: 'Plain menu', ru: 'Обычное меню', uk: 'Звичайне меню' },
+  'wid.modelCaption': { en: '🧠 {engine}: tap a model to select it.', ru: '🧠 {engine}: нажмите на модель, чтобы выбрать её.', uk: '🧠 {engine}: натисніть на модель, щоб обрати її.' },
+  'wid.cur': { en: 'Model', ru: 'Модель', uk: 'Модель' },
+  'wid.free': { en: 'Free', ru: 'Бесплатные', uk: 'Безкоштовні' },
+  'wid.other': { en: 'Other', ru: 'Другие', uk: 'Інші' },
+  'wid.err': { en: 'Not sent, try again', ru: 'Не отправлено, попробуйте ещё раз', uk: 'Не надіслано, спробуйте ще раз' },
+  'wid.stale': { en: 'This widget is out of date. Open it again.', ru: 'Этот виджет устарел. Откройте его заново.', uk: 'Цей віджет застарів. Відкрийте його знову.' },
+  'wid.resuming': { en: '⏳ Resuming the session…', ru: '⏳ Возобновляю сессию…', uk: '⏳ Відновлюю сесію…' },
+  'ses.widTitle': { en: 'Sessions of project {p}: {n}', ru: 'Сессии проекта {p}: {n}', uk: 'Сесії проєкту {p}: {n}' },
+  'ses.widCaption': { en: '🗂 Tap a session to return to it.', ru: '🗂 Нажмите на сессию, чтобы вернуться к ней.', uk: '🗂 Натисніть на сесію, щоб повернутися до неї.' },
+  'queue.added': { en: '📥 I will send this to the agent as soon as it finishes the current request.', ru: '📥 Отправлю это агенту, как только он закончит текущий запрос.', uk: '📥 Надішлю це агенту, щойно він завершить поточний запит.' },
+  'queue.stopSend': { en: '⏹ Stop and send this now', ru: '⏹ Остановить и отправить это', uk: '⏹ Зупинити й надіслати це' },
+  'queue.cancel': { en: '✖ Do not send', ru: '✖ Не отправлять', uk: '✖ Не надсилати' },
+  'queue.cancelled': { en: '✖ The message was not sent to the agent.', ru: '✖ Сообщение не отправлено агенту.', uk: '✖ Повідомлення не надіслано агенту.' },
+  'queue.sending': { en: '▶️ Sent to the agent.', ru: '▶️ Отправлено агенту.', uk: '▶️ Надіслано агенту.' },
+  'queue.replaced': { en: '✖ Replaced by a newer message.', ru: '✖ Заменено более новым сообщением.', uk: '✖ Замінено новішим повідомленням.' },
+  'queue.stale': { en: 'This message is no longer waiting.', ru: 'Это сообщение уже не ждёт отправки.', uk: 'Це повідомлення вже не чекає надсилання.' },
+  'ask.stale': { en: 'These buttons are out of date. Type your answer.', ru: 'Эти кнопки устарели. Напишите ответ текстом.', uk: 'Ці кнопки застаріли. Напишіть відповідь текстом.' },
+  'ask.chosen': { en: '▶️ {text}', ru: '▶️ {text}', uk: '▶️ {text}' },
+  'btn.stop': { en: '⏹ Stop', ru: '⏹ Остановить', uk: '⏹ Зупинити' },
+  'btn.sessions': { en: '🗂 Sessions', ru: '🗂 Сессии', uk: '🗂 Сесії' },
+  'msg.unsupported': { en: 'I can only work with text, photos and files. Send the request as text, or attach a file.', ru: 'Я работаю только с текстом, фото и файлами. Напишите запрос текстом или приложите файл.', uk: 'Я працюю лише з текстом, фото та файлами. Напишіть запит текстом або додайте файл.' },
+  'cmd.typo': { en: 'There is no /{cmd} command. Did you mean /{guess}?', ru: 'Команды /{cmd} нет. Возможно, вы имели в виду /{guess}?', uk: 'Команди /{cmd} немає. Можливо, ви мали на увазі /{guess}?' },
+  'cmd.sendAsIs': { en: 'Send to the agent as is', ru: 'Отправить агенту как есть', uk: 'Надіслати агенту як є' },
+  'cmd.stale': { en: 'This button is out of date.', ru: 'Эта кнопка устарела.', uk: 'Ця кнопка застаріла.' },
+  'usage.head': { en: '📊 Usage for {period}:', ru: '📊 Расход за {period}:', uk: '📊 Витрати за {period}:' },
+  'usage.line': { en: '{name} — {requests} · {tokens} tokens{cost}', ru: '{name} — {requests} · {tokens} токенов{cost}', uk: '{name} — {requests} · {tokens} токенів{cost}' },
+  'usage.total': { en: 'Total', ru: 'Всего', uk: 'Усього' },
+  'usage.none': { en: '📊 No requests for {period}.', ru: '📊 За {period} запросов не было.', uk: '📊 За {period} запитів не було.' },
+  'usage.d1': { en: '24 hours', ru: '24 часа', uk: '24 години' },
+  'usage.d7': { en: '7 days', ru: '7 дней', uk: '7 днів' },
+  'usage.d30': { en: '30 days', ru: '30 дней', uk: '30 днів' },
   'access.saveFail': { en: '⚠️ Could not save the access. Please try again later.', ru: '⚠️ Не удалось сохранить доступ. Попробуйте позже.', uk: '⚠️ Не вдалося зберегти доступ. Спробуйте пізніше.' },
   'perm.opt.session.exec': { en: '✅ For this session: {what}', ru: '✅ На эту сессию: {what}', uk: '✅ На цю сесію: {what}' },
   'perm.opt.session.exact': { en: '✅ For this session: this exact command', ru: '✅ На эту сессию: только эта команда', uk: '✅ На цю сесію: лише ця команда' },

@@ -61,3 +61,10 @@ test('callApi: тело запроса собирается заново для 
   await callApi('sendDocument', () => (built++, { body: 'x' }), { fetchImpl: f.impl });
   assert.equal(built, 2);
 });
+
+test('isNotModified: правка сообщения тем же содержимым — не ошибка', async () => {
+  const { isNotModified } = await import('../src/telegram.mjs');
+  assert.equal(isNotModified(new Error('Telegram editMessageText: 400 Bad Request: message is not modified: specified new message content…')), true);
+  assert.equal(isNotModified(new Error('Telegram editMessageText: 400 Bad Request: message to edit not found')), false);
+  assert.equal(isNotModified(null), false);
+});

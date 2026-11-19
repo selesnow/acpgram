@@ -57,6 +57,9 @@ export async function callApi(method, makeInit, { timeoutMs = TIMEOUT_MS, retrie
   }
 }
 
+/** Telegram отказался править сообщение, потому что новое содержимое совпадает с текущим, — это не ошибка. */
+export const isNotModified = (err) => /message is not modified/i.test(String(err?.message ?? err ?? ''));
+
 /** Метод Bot API с JSON-телом. opts — см. callApi (timeoutMs, retries, signal). */
 export const tg = (method, body = {}, opts = {}) =>
   callApi(method, () => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), opts);

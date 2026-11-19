@@ -38,6 +38,12 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 - **Streaming replies** in a Telegram draft with a stop button: the agent's thoughts, the steps it takes (reading files, running commands, searching, editing) and the elapsed time, then the answer itself.
 - **Rich final answer** — headings, lists, tables, code blocks — with a collapsible "work log" of every step and a footer showing the engine, the actual model, reasoning level, tokens, cost (Claude Code and OpenCode) and time.
 - **Five engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI, Codex and OpenCode; the default engine is set in `.env`.
+- **Quick-reply buttons** — when the agent asks you to choose ("Which fix should I apply?"), buttons appear under its question; a tap sends the option to the agent as your message. The bot builds the buttons from the agent's `[[ask: Yes | No]]` marker; raw button tags in the agent's text do not work.
+- **See the edit before you allow it** — a permission request for a file edit shows the diff, not only the path.
+- **Plan** — if the agent keeps a plan, the draft shows "Plan: 3/7" and its items with check marks.
+- **Messages sent while the agent is busy are not lost** — the bot queues the message and sends it as soon as the agent is done; the notice has "Stop and send this now" and "Do not send" buttons.
+- **Reply with a quote** — reply to the agent's message with a selected fragment and the agent gets both your text and the fragment ("rewrite this part").
+- **Widgets** (Bot API 10.4, enabled with `WIDGETS=1`) — `/model` and `/sessions` open as a widget right in the message: the whole model catalog with groups and vendors is browsed instantly, with no round trips to the bot; project sessions are cards with the start of the request. Widgets are off by default: since November 13, 2026 Telegram does not let ordinary bots send them, and they have not been verified in the app. With `WIDGETS=1` the bot tries the widget and shows the plain button menu if Telegram refuses it or the catalog does not fit the size limit; the same menu is behind the "Plain menu" button under the widget.
 - **Model and reasoning level** — `/model` lists the models the agent itself reports (plus `effort` for Claude Code and `thought_level` for Antigravity); the choice is remembered per user and per engine. OpenCode reports hundreds of models (every connected provider), so `/model` first offers groups — "🆓 Free" and the providers — and pages through 20 models at a time; models that cannot call tools (image or music generation) are hidden. Aggregators like OpenRouter (hundreds of models) are split further by model vendor — OpenAI, Anthropic, Qwen… (vendors with 1–2 models go to "Other"). The quickest way is search: `/model sonnet` lists every matching model as buttons; the top of `/model` also has "🕘" buttons with your recently chosen models.
 - **Permission requests as buttons** — "Allow", "Allow for this session", "Reject". Options that would persist a rule forever or raise the session above the user's access level are never shown. "Allow for this session" is available in every engine: when the agent has no such option of its own (Claude Code), the bot adds it and keeps the rule for as long as the agent process lives (until `/new`, `/close`, the idle timeout or a bot restart). The button says exactly what will be allowed. File edits are allowed as a whole, commands by program name (allowing `ls` lets every `ls …` through), and for programs with subcommands (`git`, `npm`, `docker` and the like) by program and subcommand: allowing `git status` lets every `git status …` through, but not `git push`. Every part of a compound command must be allowed. Only the exact same command is allowed for shell wrappers (`bash -c`, `powershell`, `cmd /c`, `sudo`), interpreters (`python`, `node`, `Rscript`, `npx` and the like), commands with substitutions, writing to a file (`>`) or variables before the program (`PATH=… git`).
 - **Files and images** — send the bot a photo or a file (text, PDF, spreadsheet, etc., up to 20 MB); the caption becomes the request. The file is saved to `<data dir>/uploads/<user id>/` and the agent gets its path and reads it with its own tools. An album of several photos or files is handled as one request. `.zip`, `.tar`, `.tar.gz` and `.tgz` archives are unpacked next to the file (`…_unpacked`, at most 500 files and 100 MB; unsafe paths and links are skipped) and the agent gets the file list; `.7z` and `.rar` stay a plain file; images are also passed as an `image` block when the agent supports it. In the other direction the agent can create a file and send it to the chat: it saves the file to `<data dir>/outbox/<user id>/` (or the project folder) and puts a `[[send:path]]` marker in its reply. The file appears right inside the reply, where the marker was: JPEG and PNG as an image, everything else as a document. If Telegram rejects such a message or the files together exceed 45 MB, they arrive as separate messages after the reply. A marker inside code (backticks or a code block) is ignored. Only files from these two folders are sent, never secrets (`.env`, the bot's database and logs, `.git`). Files are kept for 7 days (`FILES_KEEP_DAYS`).
@@ -183,6 +189,7 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 | `/users` | admin | teammates: level, engines, models, end session, revoke access |
 | `/active` | admin | active sessions with buttons to end them |
 | `/invite` | admin | one-time invite link (24 h) |
+| `/usage` | admin | usage: requests, tokens and cost by user for 24 hours, 7 and 30 days |
 
 ## Access levels
 
@@ -224,6 +231,7 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `ACPGRAM_DEBUG` | no | `1` — detailed log of what the bot sends to Telegram in `data/debug.log` (up to 5 MB plus one previous file; off by default) |
 | `FILES_DIR` | no | folder for received (`uploads`) and outgoing (`outbox`) files (the bot's data folder) |
 | `FILES_KEEP_DAYS` | no | how many days to keep those files (7) |
+| `WIDGETS` | no | `1` — show `/model` and `/sessions` as widgets when Telegram allows them for the bot (off by default) |
 | `ANIMATED_ICONS` | no | `0` — plain emoji instead of animated icons in drafts |
 
 `.env` is never committed. Keep the token and keys out of the code.
@@ -258,6 +266,12 @@ src/
   files.mjs       attachments: names, saving, prompt blocks, [[send:path]] markers, outgoing file checks, cleanup
   archive.mjs     safe unpacking of zip, tar, tar.gz without dependencies
   albums.mjs      collects Telegram albums (shared media_group_id) into one request
+  asks.mjs        quick-reply buttons from the agent: the [[ask: …]] marker, button markup, the tapped choice
+  diff.mjs        line diff for file-edit permission requests
+  incoming.mjs    incoming messages: quotes, unsupported kinds, command typos
+  widgets.mjs     HTML widgets: model picker, project sessions, Telegram limits, query parsing
+  widgetHost.mjs  sending a widget with a fallback to the plain menu, memory of widget messages
+  widgetsUi.mjs   widget queries: model and reasoning level choice, resuming a session
   db.mjs          SQLite: sessions, requests, tool calls, permissions, users, usage
 test/             node:test tests and a fake ACP agent
 .github/workflows CI (tests on Windows / Linux / macOS) and releases (archives, checksums, installer checks)

@@ -9,6 +9,18 @@ export function contentText(u) {
     .join('\n');
 }
 
+/**
+ * Что агент собирается изменить в файле: блок diff из content[] (ACP) или поля правки Claude Code (old_string / new_string).
+ * @returns {{path: string|null, oldText: string, newText: string}|null}
+ */
+export function diffOf(u) {
+  const d = (u?.content || []).find((c) => c?.type === 'diff');
+  if (d) return { path: d.path ?? null, oldText: d.oldText ?? '', newText: d.newText ?? '' };
+  const r = u?.rawInput;
+  if (r && typeof r.new_string === 'string') return { path: r.file_path ?? null, oldText: String(r.old_string ?? ''), newText: r.new_string };
+  return null;
+}
+
 /** Описание действия: для команд — то, что агент сам написал в скобках, иначе весь текст. */
 function describe(kind, text) {
   const t = text.replace(/^\[current working directory [^\]]*\]\s*/i, '').trim();

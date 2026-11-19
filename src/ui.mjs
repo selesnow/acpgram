@@ -210,16 +210,37 @@ export function lastThoughtTitle(text) {
   return { title, rest: text.slice(text.lastIndexOf('\n') + 1) };
 }
 
-export function composeDraft({ thought = '', steps = [], answer = '', elapsedMs = 0, lang = DEFAULT_LANG }) {
+const PLAN_SHOWN = 7;
+
+/**
+ * План агента (ACP: session/update plan, пункты {content, status}) для черновика: «План: 3/7» и пункты вокруг текущего
+ * (не больше PLAN_SHOWN). Пустая строка — плана нет.
+ */
+export function planBlock(plan, lang = DEFAULT_LANG) {
+  const entries = (Array.isArray(plan) ? plan : []).filter((e) => e?.content);
+  if (!entries.length) return '';
+  const done = entries.filter((e) => e.status === 'completed').length;
+  let cur = entries.findIndex((e) => e.status === 'in_progress');
+  if (cur < 0) cur = entries.findIndex((e) => e.status !== 'completed');
+  if (cur < 0) cur = entries.length - 1;
+  const from = Math.max(0, Math.min(cur - 2, entries.length - PLAN_SHOWN));
+  const mark = (s) => (s === 'completed' ? '✅' : s === 'in_progress' ? '▶️' : '▫️');
+  const lines = entries.slice(from, from + PLAN_SHOWN).map((e) => `- ${mark(e.status)} ${escHtml(trunc(String(e.content).replace(/\s+/g, ' ').trim(), 80))}`);
+  return [`**${t('draft.plan', lang, { done, total: entries.length })}**`, ...lines].join('\n');
+}
+
+export function composeDraft({ thought = '', steps = [], plan = [], answer = '', elapsedMs = 0, lang = DEFAULT_LANG }) {
   if (answer.trim()) {
     const body = balanceMarkdown(answer.replace(/^\s+/, '')).slice(-RICH_LIMIT);
     const last = steps[steps.length - 1];
     return { markdown: last ? `${stepLine(last, { live: true, lang })}\n\n${body}` : body };
   }
-  if (!thought && !steps.length) return { plain: true };
+  const planned = planBlock(plan, lang);
+  if (!thought && !steps.length && !planned) return { plain: true };
 
   const parts = [];
   if (thought) parts.push(`<tg-thinking>${anim('thinking', '💭')} ${escHtml(thought)}</tg-thinking>`);
+  if (planned) parts.push(planned);
   const hidden = steps.length - MAX_STEPS_SHOWN;
   if (hidden > 0) parts.push(t('draft.more', lang, { n: plural(hidden, 'step', lang) }));
   parts.push(...steps.slice(-MAX_STEPS_SHOWN).map((s) => stepLine(s, { live: true, lang })));
@@ -303,6 +324,26 @@ export function activeSessionsView({ sessions, adminId, maxAgents, nameOf, proje
         [{ text: t('btn.refresh', lang), callback_data: 'adm:act' }],
       ],
     },
+  };
+}
+
+export const USAGE_PERIODS = [1, 7, 30];
+
+/**
+ * Экран /usage администратора: кто сколько запросов сделал и токенов потратил за период; стоимость — если агент её присылал.
+ * @param {{rows: {user_id:number, requests:number, tokens:number, cost:number|null}[], days: number, nameOf: (id:number)=>string, lang?: string}} o
+ */
+export function usageView({ rows, days, nameOf, lang = DEFAULT_LANG }) {
+  const period = t(`usage.d${days}`, lang);
+  const line = (name, r) =>
+    t('usage.line', lang, { name, requests: plural(r.requests, 'request', lang), tokens: fmtTokens(r.tokens), cost: Number.isFinite(r.cost) && r.cost > 0 ? ` · $${fmtCost(r.cost)}` : '' });
+  const total = rows.reduce((s, r) => ({ requests: s.requests + r.requests, tokens: s.tokens + r.tokens, cost: s.cost + (r.cost ?? 0) }), { requests: 0, tokens: 0, cost: 0 });
+  const text = rows.length
+    ? [t('usage.head', lang, { period }), ...rows.map((r) => `• ${line(nameOf(r.user_id), r)}`), '', line(t('usage.total', lang), total)].join('\n')
+    : t('usage.none', lang, { period });
+  return {
+    text,
+    markup: { inline_keyboard: [USAGE_PERIODS.map((d) => ({ text: `${d === days ? '✓ ' : ''}${t(`usage.d${d}`, lang)}`, callback_data: `adm:us:${d}` }))] },
   };
 }
 
@@ -677,7 +718,7 @@ export function startView({ level, project, engine, model, isAdmin, note, topics
     cmd('close'),
     ...(topics ? [cmd('topics')] : []),
     cmd('language'),
-    ...(isAdmin ? [cmd('users'), cmd('active'), cmd('invite')] : []),
+    ...(isAdmin ? [cmd('users'), cmd('active'), cmd('invite'), cmd('usage')] : []),
   ];
   const rows = [
     `<tg-button-row>${button(t('start.btn.project', lang), 'ui:project')}${button(t('start.btn.new', lang), 'ui:new')}${button(t('start.btn.sessions', lang), 'ui:sessions')}</tg-button-row>`,

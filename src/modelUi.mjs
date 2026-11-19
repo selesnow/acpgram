@@ -8,6 +8,8 @@ import { t } from './i18n.mjs';
 import { engineOf } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { modelChosen, modelGroupMenu, modelMenu, modelSearchMenu } from './ui.mjs';
+import { sendWidgetMessage } from './widgetHost.mjs';
+import { findByRef, modelWidget, widgetFits } from './widgets.mjs';
 
 /**
  * Каталог движка. Нет каталога — запрашиваем у агента в фоне, пользователю «ещё загружается». Каталог устарел (сутки,
@@ -47,17 +49,70 @@ function view(st, engine, catalog) {
   });
 }
 
-/** /model — экран выбора; /model <запрос> — модели, в названии или id которых есть все слова запроса. */
-export async function handleModel(st, query = '') {
+/**
+ * HTML виджета выбора модели: весь разрешённый пользователю каталог с группами и вендорами. Если с названиями моделей
+ * он не помещается в лимит Telegram — без названий (в списке — конец id); null — не помещается и так.
+ */
+export function modelWidgetHtml(st, engine, catalog) {
+  const lang = langOf(st.userId);
+  const models = allowedModels(st.userId, engine.id);
+  const sel = effectiveSelection(st.userId, engine);
+  const base = {
+    models,
+    efforts: engine.effortConfig ? catalog.efforts : [],
+    model: sel.model,
+    effort: sel.effort,
+    auto: !modelRestriction(st.userId, engine.id),
+    recent: recentModels(st.userId, engine.id),
+    groups: Object.fromEntries(models.filter((m) => m.group).map((m) => [m.group, m.groupLabel ?? m.group])),
+    texts: { cur: t('wid.cur', lang), auto: t('auto', lang), free: t('wid.free', lang), other: t('wid.other', lang), back: t('btn.back', lang), err: t('wid.err', lang) },
+  };
+  return [true, false].map((names) => modelWidget({ ...base, names })).find(widgetFits) ?? null;
+}
+
+/**
+ * /model — экран выбора (виджет, а если он недоступен — меню с кнопками); /model <запрос> — модели, в названии или id
+ * которых есть все слова запроса.
+ * @param {{classic?: boolean}} [opts] classic — меню с кнопками (кнопка «Обычное меню» под виджетом)
+ */
+export async function handleModel(st, query = '', { classic = false } = {}) {
   const engine = engineOf(st);
   const lang = langOf(st.userId);
   const catalog = await catalogOf(engine, lang, st.to);
   if (!catalog) return say(st.to, t('model.loading', lang, { engine: engine.label }));
   const q = String(query ?? '').trim();
+  if (!q && !classic) {
+    const html = modelWidgetHtml(st, engine, catalog);
+    if (html && (await sendWidgetMessage(st, { html, caption: t('wid.modelCaption', lang, { engine: engine.label }), kind: 'model', engine: engine.id }))) return;
+  }
   const v = q
     ? modelSearchMenu({ engine, models: allowedModels(st.userId, engine.id), query: q, model: effectiveSelection(st.userId, engine).model, lang })
     : view(st, engine, catalog);
   return say(st.to, v.text, { reply_markup: v.markup });
+}
+
+/**
+ * Применяет выбор модели или уровня рассуждений. ref — id, «#номер» в списке (длинный id в кнопке), короткий ключ
+ * виджета («@…») или «~» («Авто»). Выбирать можно только из того, что показали: разрешённые модели или уровни движка.
+ * @param {'model'|'effort'} kind
+ * @returns {{ok: true, value: string|null} | {ok: false, error: string}}
+ */
+export function applyChoice(st, engine, kind, ref) {
+  const lang = langOf(st.userId);
+  const catalog = getCatalog(engine.id);
+  if (!catalog) return { ok: false, error: t('model.noCatalog', lang) };
+  const list = kind === 'model' ? allowedModels(st.userId, engine.id) : engine.effortConfig ? catalog.efforts : [];
+  let value = null;
+  if (ref !== '~') {
+    value = (ref.startsWith('#') ? list[Number(ref.slice(1))] : findByRef(list, ref))?.id ?? null;
+    if (!value) return { ok: false, error: t('model.badOption', lang) };
+  } else if (kind === 'model' && modelRestriction(st.userId, engine.id)) {
+    return { ok: false, error: t('model.noAuto', lang) };
+  }
+  saveChoice(st.userId, engine.id, kind, value);
+  if (kind === 'model' && value) pushRecentModel(st.userId, engine.id, value); // кнопки «🕘» на экране /model
+  log(`${kind} выбран:`, st.userId, engine.id, value ?? 'auto');
+  return { ok: true, value };
 }
 
 /**
@@ -84,18 +139,8 @@ export async function onModelCallback(st, cb) {
     return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, reply_markup: v.markup }).catch((e) => log('model menu:', e.message));
   }
   const kind = m[2] === 'm' ? 'model' : 'effort';
-  // выбирать можно только из того, что показали: разрешённые модели или уровни рассуждений движка
-  const list = kind === 'model' ? allowedModels(st.userId, engine.id) : engine.effortConfig ? catalog.efforts : [];
-  let value = null;
-  if (m[3] !== '~') {
-    value = m[3].startsWith('#') ? list[Number(m[3].slice(1))]?.id : list.find((x) => x.id === m[3])?.id;
-    if (!value) return ack(t('model.badOption', lang));
-  } else if (kind === 'model' && modelRestriction(st.userId, engine.id)) {
-    return ack(t('model.noAuto', lang));
-  }
-  saveChoice(st.userId, engine.id, kind, value);
-  if (kind === 'model' && value) pushRecentModel(st.userId, engine.id, value); // кнопки «🕘» на экране /model
-  log(`${kind} выбран:`, st.userId, engine.id, value ?? 'auto');
+  const r = applyChoice(st, engine, kind, m[3]);
+  if (!r.ok) return ack(r.error);
   await ack(t(kind === 'model' ? 'model.set' : 'effort.set', lang));
   // как в /engine: меню заменяется итогом выбора, кнопки убираются
   const sel = effectiveSelection(st.userId, engine);

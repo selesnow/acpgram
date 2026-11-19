@@ -212,6 +212,12 @@ export function openDb(path = 'data/bot.db') {
     ),
     addPermission: db.prepare('INSERT INTO permissions (request_id, tool_call_id, title, options, asked_at) VALUES (?,?,?,?,?)'),
     answerPermission: db.prepare('UPDATE permissions SET chosen_option = ?, outcome = ?, answered_at = ? WHERE id = ?'),
+    // расход по пользователям с момента since: запросы, токены, стоимость (что прислали агенты)
+    usageSummary: db.prepare(
+      `SELECT s.user_id AS user_id, COUNT(r.id) AS requests, COALESCE(SUM(r.total_tokens), 0) AS tokens, SUM(r.cost_usd) AS cost
+         FROM requests r JOIN sessions s ON s.id = r.session_id
+        WHERE r.started_at >= ? GROUP BY s.user_id ORDER BY tokens DESC, requests DESC`,
+    ),
     getTopic: db.prepare('SELECT * FROM topics WHERE user_id = ? AND thread_id = ?'),
     insertTopic: db.prepare('INSERT OR IGNORE INTO topics (user_id, thread_id, created_at, updated_at) VALUES (?,?,?,?)'),
     updateTopic: db.prepare(
@@ -255,6 +261,8 @@ export function openDb(path = 'data/bot.db') {
     setRequestStatus: safe((id, status) => q.setRequestStatus.run(status, now(), id)),
     // --- сессии ---
     listSessions: (userId, cwd, limit = 10) => safe(() => q.listSessions.all(userId, cwd, limit))() ?? [],
+    /** Расход по пользователям с момента since (ISO): [{user_id, requests, tokens, cost}], cost — null, если агент её не присылал. */
+    usageSummary: (since) => safe(() => q.usageSummary.all(since))() ?? [],
     // --- прочее ---
     getSetting: safe((key) => q.getSetting.get(key)?.value ?? null),
     setSetting: safe((key, value) => q.setSetting.run(key, value)),
