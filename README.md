@@ -218,9 +218,33 @@ By default all teammates browse the same projects root. `USER_WORKSPACES=1` (tog
 - Projects a teammate selected before the mode was turned on and that lie outside their folder are reset to their workspace. The bot never moves or deletes the folders themselves, including when access is revoked.
 - Before every agent start the bot checks that the project folder exists and lies inside the teammate's workspace; otherwise the agent is not started.
 
-Personal workspaces limit which working folder can be chosen in the bot. They do not isolate the agent process itself — see the note below.
+Personal workspaces limit which working folder can be chosen in the bot. The agent process itself is isolated by the sandbox (Linux, below); without it the note at the end of this section applies.
 
-> An agent mode limits what the agent does, but it is **not a sandbox**: the agent runs with the rights of the account the bot runs under. The project folder is where it starts, not a jail. All users share the API keys and quotas. The agent process does not get the bot token, and of the API keys only those of its own engine (Claude Code — `ANTHROPIC_API_KEY`, Codex — `OPENAI_API_KEY`, Gemini CLI and Antigravity — the Google keys, OpenCode — all of them), but the agent can still read files on disk, including the bot's `.env`. Give the "Full" level (Claude Code `bypassPermissions`) deliberately.
+### Agent sandbox (Linux)
+
+`AGENT_SANDBOX=bwrap` runs each teammate's agent isolated with [bubblewrap](https://github.com/containers/bubblewrap), a Linux system utility (`apt install bubblewrap`). The bot gets no new dependencies. There is no sandbox on Windows and macOS: with this setting the bot does not start there, and without it it works as before.
+
+A teammate's agent sees only:
+
+- read-write — their projects folder (the personal workspace; without personal workspaces the projects root, without a root the project folder), their own home folder `<data dir>/homes/<id>` and the outgoing files folder;
+- read-only — their uploaded files, the system (`/usr`, `/etc` and the like), Node and the engine programs.
+
+The bot's `.env` and database, the home folder of the bot's account, other people's folders and other people's processes do not exist inside the sandbox: an attempt to read someone else's file ends with "No such file or directory".
+
+- **Everyone has their own engine settings.** Each teammate has a home folder of their own, so session history, settings and engine logins are separate. The engine must work without a login stored in the home folder of the bot's account: OpenCode on its free models needs no keys at all, the others use an API key from `.env`. A subscription login (`codex login`, Google sign-in, a Claude subscription) is not visible in the sandbox.
+- **The "Full" level becomes safer.** The agent asks for no permissions, but can change only its teammate's workspace — convenient for people who do not want to deal with permission requests.
+- **The administrator works without the sandbox.**
+- **Startup check.** The bot checks that bubblewrap runs, that the bot's secrets are not visible from inside, and that the engines start in the sandbox. If the sandbox or the default engine does not work, the bot does not start and says why. Other engines that failed in the sandbox are not offered to teammates. If an engine is installed in an unusual place, add its folder to `SANDBOX_RO_PATHS`.
+- **Sessions started before the sandbox was turned on** are not resumed in it — a new one starts.
+- **Ubuntu 24.04 and later:** user namespaces may be blocked by AppArmor. If the bot reports at startup that the sandbox does not work, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (a file in `/etc/sysctl.d/` makes it permanent) or add an AppArmor profile for `bwrap`. The sandbox is not supported in Docker: the container separates the bot from the system, but not teammates from each other.
+
+What the sandbox does not do:
+
+- it does not limit the network: the agent needs to reach the models, so it can also reach services on the server itself and in the local network;
+- it does not hide the engine's API keys: they are passed to the agent in its environment and a teammate can ask to see them — set a spending limit on the key at the provider;
+- it does not limit disk, memory or CPU.
+
+> Without the sandbox an agent mode limits what the agent does, but does **not isolate** it: the agent runs with the rights of the account the bot runs under. The project folder is where it starts, not a jail. All users share the API keys and quotas. The agent process does not get the bot token, and of the API keys only those of its own engine (Claude Code — `ANTHROPIC_API_KEY`, Codex — `OPENAI_API_KEY`, Gemini CLI and Antigravity — the Google keys, OpenCode — all of them), but the agent can still read files on disk, including the bot's `.env`. Give the "Full" level (Claude Code `bypassPermissions`) deliberately.
 
 ## Configuration (`.env`)
 
@@ -229,6 +253,9 @@ Personal workspaces limit which working folder can be chosen in the bot. They do
 | `TELEGRAM_BOT_TOKEN` | yes | bot token |
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
+| `AGENT_SANDBOX` | no | `bwrap` — agent sandbox (Linux only, needs the `bubblewrap` package): a teammate's agent sees only their projects folder, their files and their own home folder. See "Agent sandbox" |
+| `SANDBOX_RO_PATHS` | no | extra folders the sandbox can read (separated by `:`), e.g. where an engine is installed if it does not start in the sandbox |
+| `BWRAP_COMMAND` | no | path to `bwrap` if it is not in `PATH` |
 | `USER_WORKSPACES` | no | `1` — personal workspaces: each teammate chooses projects only inside their own folder `<root>/<Telegram ID>`, the administrator sees the whole root. Requires `PROJECTS_ROOT`; the bot does not start without it |
 | `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex` or `opencode`; the bot does not start if this engine is not installed |
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
@@ -278,6 +305,7 @@ src/
   *Ui.mjs         /project, /sessions, /engine, /model screens
   ui.mjs          rendering: drafts, steps, final message, screens
   telegram.mjs    Bot API calls, rich messages, long text splitting, file download and upload
+  sandbox.mjs     agent sandbox (Linux, bubblewrap): what a teammate's agent can see, the startup check
   files.mjs       attachments: names, saving, prompt blocks, [[send:path]] markers, outgoing file checks, cleanup
   archive.mjs     safe unpacking of zip, tar, tar.gz without dependencies
   albums.mjs      collects Telegram albums (shared media_group_id) into one request

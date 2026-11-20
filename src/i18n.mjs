@@ -367,6 +367,11 @@ const M = {
     ru: '⚠️ Папка проекта недоступна: её удалили или переместили. Выберите проект: /project',
     uk: '⚠️ Папка проєкту недоступна: її видалили або перемістили. Оберіть проєкт: /project',
   },
+  'state.sandboxFail': {
+    en: '⚠️ The agent could not be started in the sandbox for this project. Please tell the administrator.',
+    ru: '⚠️ Не удалось запустить агента в песочнице для этого проекта. Сообщите администратору.',
+    uk: '⚠️ Не вдалося запустити агента в пісочниці для цього проєкту. Повідомте адміністратора.',
+  },
   // ---- режим «диалоги»: темы в личном чате с ботом ----
   'menu.topics': { en: 'Dialogs mode: each chat topic is a separate dialog', ru: 'Режим «диалоги»: каждая тема чата — отдельный диалог', uk: 'Режим «діалоги»: кожна тема чату — окремий діалог' },
   'help.topics': { en: '/topics — dialogs mode: each topic of this chat is a separate dialog with the agent', ru: '/topics — режим «диалоги»: каждая тема этого чата — отдельный диалог с агентом', uk: '/topics — режим «діалоги»: кожна тема цього чату — окремий діалог з агентом' },

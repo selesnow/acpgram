@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { ADMIN_ID, db, langOf, log } from './ctx.mjs';
 import { checkCommand } from './acp.mjs';
-import { DEFAULT_ENGINE, ENGINES, agentEnv, autoValue, createAgent, engineCommand, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
+import { DEFAULT_ENGINE, ENGINES, agentEnv, autoValue, brokenInSandbox, createAgent, engineCommand, engineVersion, isAuthError, isAvailable, parseCatalog, selectionRequest, setNeedsLogin } from './engines.mjs';
 import { t } from './i18n.mjs';
 
 /** JSON из строки; пусто или не разобралось — fallback. */
@@ -165,11 +165,14 @@ export function grantedEngines(userId) {
   return [DEFAULT_ENGINE, ...Object.keys(ENGINES).filter((id) => id !== DEFAULT_ENGINE && Array.isArray(extra) && extra.includes(id))];
 }
 
+/** Запускается ли движок для этого пользователя: есть на сервере, а сотруднику — ещё и работает в песочнице, если она включена. */
+const runsFor = (userId, id) => isAvailable(id) && (userId === ADMIN_ID || !brokenInSandbox(id));
+
 /** Можно ли пользователю работать в движке сейчас: выдан и запускается на сервере. */
-export const canUseEngine = (userId, id) => isEngineId(id) && isAvailable(id) && grantedEngines(userId).includes(id);
+export const canUseEngine = (userId, id) => isEngineId(id) && runsFor(userId, id) && grantedEngines(userId).includes(id);
 
 /** Движки, которые пользователь может выбрать в /engine. */
-export const userEngines = (userId) => grantedEngines(userId).filter((id) => isAvailable(id)).map((id) => ENGINES[id]);
+export const userEngines = (userId) => grantedEngines(userId).filter((id) => runsFor(userId, id)).map((id) => ENGINES[id]);
 
 /** Выдаёт или забирает у сотрудника движок (кроме движка по умолчанию). Возвращает новый список выданных. */
 export function setEngineGrant(userId, engineId, on) {

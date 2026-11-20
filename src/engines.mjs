@@ -308,6 +308,18 @@ export const engineVersion = (id) => versions.get(id) ?? null;
 
 export const isAvailable = (id) => Boolean(ENGINES[id]) && !unavailable.has(id);
 
+// ---- песочница (AGENT_SANDBOX): движки, которые при проверке на старте не запустились внутри неё ----
+const sandboxBroken = new Set();
+
+/** Отмечает движки, не запустившиеся в песочнице: сотрудникам (их агенты работают в ней) они не предлагаются. */
+export function setSandboxBroken(ids) {
+  sandboxBroken.clear();
+  for (const id of ids) sandboxBroken.add(id);
+}
+
+/** Движок не запускается в песочнице (администратору, работающему без неё, он доступен). */
+export const brokenInSandbox = (id) => sandboxBroken.has(id);
+
 // ---- вход и ключи API (определяется по ошибке запуска сессии при получении каталога моделей) ----
 const loginNeeded = new Set();
 
@@ -487,10 +499,15 @@ export function parseUsage(res, usageUpdate) {
  * @param {{cwd: string, who?: {admin?: boolean, level?: string}, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
  *   who — кто работает в сессии: от этого зависят переменные окружения движка (processEnv; у OpenCode — конфиг прав).
  *   Без who (запуск за списком моделей) — только общее окружение агента (agentEnv).
+ *   wrap — запуск через программу-обёртку (песочница, sandbox.agentSandbox): {command, args, env}; её аргументы уже
+ *   заканчиваются командой движка, аргументы движка добавляются следом, а окружение проходит через wrap.env.
  */
-export function createAgent(engine, { who, ...opts }) {
-  const env = { ...agentEnv(engine), ...(who && engine.processEnv ? engine.processEnv(who) : {}) };
-  const agent = new AcpAgent({ ...opts, env, command: engineCommand(engine), args: engine.args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
+export function createAgent(engine, { who, wrap = null, ...opts }) {
+  const base = { ...agentEnv(engine), ...(who && engine.processEnv ? engine.processEnv(who) : {}) };
+  const env = wrap ? wrap.env(base) : base;
+  const command = wrap ? wrap.command : engineCommand(engine);
+  const args = wrap ? [...wrap.args, ...engine.args] : engine.args;
+  const agent = new AcpAgent({ ...opts, env, command, args, name: engine.label, quietStderr: engine.quietStderr ?? null, quietStderrBlock: engine.quietStderrBlock ?? null });
   agent.engine = engine;
   return agent;
 }

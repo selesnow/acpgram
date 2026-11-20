@@ -1,7 +1,8 @@
 // Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) через ACP.
 // Доступ: главный администратор (ALLOWED_USER_ID) и сотрудники, которым он выдал доступ. Остальным бот не отвечает,
 // кроме запроса доступа администратору.
-import { DEFAULT_ENGINE, checkEngines, isRequired, setAvailability } from './engines.mjs';
+import { DEFAULT_ENGINE, agentEnv, checkEngines, isRequired, setAvailability, setSandboxBroken } from './engines.mjs';
+import { SANDBOX, checkInSandbox, probeSandbox } from './sandbox.mjs';
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
@@ -373,6 +374,36 @@ function noteTopic(userId, threadId, msg) {
   return Boolean(msg.forum_topic_created);
 }
 
+/**
+ * Песочница агентов сотрудников (AGENT_SANDBOX): проверка при старте. Не работает сама песочница или в ней не
+ * запускается движок по умолчанию — бот не запускается: без этого сотрудники работали бы без изоляции или не работали
+ * вовсе. Остальные движки, не запустившиеся в песочнице, сотрудникам не предлагаются.
+ */
+async function setupSandbox(checks) {
+  const probe = probeSandbox();
+  if (!probe.ok) {
+    console.error(`AGENT_SANDBOX=${SANDBOX}: песочница не работает — ${probe.error}
+${probe.hint}`);
+    process.exit(1);
+  }
+  log('песочница агентов сотрудников включена (bubblewrap): агент видит только папку проектов сотрудника, его файлы и его домашнюю папку; администратор работает без песочницы');
+  const usable = checks.filter((r) => r.ok || r.timeout);
+  const inside = await Promise.all(usable.map((r) => checkInSandbox(r.command, r.engine.versionArgs, agentEnv(r.engine))));
+  const broken = [];
+  usable.forEach((r, i) => {
+    const s = inside[i];
+    if (s.ok || s.timeout) return;
+    const text = `${r.engine.label} не запускается в песочнице (${r.command}): ${s.error}. Если движок установлен в нестандартном месте, добавьте его папку в SANDBOX_RO_PATHS`;
+    if (isRequired(r.engine)) {
+      console.error(text);
+      process.exit(1);
+    }
+    log(`⚠️ ${text} — сотрудникам он не предлагается`);
+    broken.push(r.engine.id);
+  });
+  setSandboxBroken(broken);
+}
+
 async function main() {
   // все движки проверяем параллельно; без движка по умолчанию (DEFAULT_ENGINE) бот не запускается, остальные — по возможности
   const asked = process.env.DEFAULT_ENGINE?.trim().toLowerCase();
@@ -389,6 +420,7 @@ async function main() {
     } else log(`ℹ️ ${e.label} недоступен (${command}): ${r.error}. Установка: ${e.install}; путь — ${e.envVar}`);
   }
   log(`движок по умолчанию: ${DEFAULT_ENGINE}`);
+  if (SANDBOX) await setupSandbox(checks);
   log(
     ROOT
       ? `корень проектов: ${ROOT} (проект — только папка внутри корня)`

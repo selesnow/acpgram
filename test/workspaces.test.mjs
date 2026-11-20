@@ -178,6 +178,22 @@ test('агент не запускается, если папка проекта
   ann.project = saved;
 });
 
+test('движок, не запустившийся в песочнице, сотруднику не предлагается, администратору доступен', async () => {
+  const A = await import('../src/access.mjs');
+  const E = await import('../src/engines.mjs');
+  const other = Object.keys(E.ENGINES).find((id) => id !== E.DEFAULT_ENGINE);
+  A.setEngineGrant(ANN, other, true);
+  assert.equal(A.canUseEngine(ANN, other), true);
+  E.setSandboxBroken([other]);
+  assert.equal(A.canUseEngine(ANN, other), false);
+  assert.ok(!A.userEngines(ANN).some((e) => e.id === other), 'в /engine сотрудника его нет');
+  assert.equal(A.canUseEngine(ADMIN, other), true, 'администратор работает без песочницы');
+  E.setSandboxBroken([]);
+  assert.equal(A.canUseEngine(ANN, other), true);
+  assert.equal(S.sandboxed(ANN), false, 'в тестах песочница выключена');
+  A.setEngineGrant(ANN, other, false);
+});
+
 test('ссылка на месте личной папки доступ не расширяет', async (t) => {
   try {
     symlinkSync(join(home, 'outside'), dirOf(EVE), 'junction'); // на Windows junction не требует прав администратора

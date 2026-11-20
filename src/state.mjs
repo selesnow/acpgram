@@ -3,8 +3,9 @@ import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVEL_KEYS, MAX_AGENTS, db, langOf, le
 import { positiveEnv } from './app.mjs';
 import { t } from './i18n.mjs';
 import { canUseEngine, parseJson } from './access.mjs';
-import { DEFAULT_ENGINE, ENGINES, createAgent, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
-import { HOME, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
+import { DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
+import { HOME, ROOT, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
+import { SANDBOX, agentSandbox } from './sandbox.mjs';
 
 const states = new Map(); // userId -> состояние
 
@@ -309,6 +310,24 @@ export function releaseSessionElsewhere(st, sessionId) {
   }
 }
 
+/** Работает ли агент пользователя в песочнице: она включена (AGENT_SANDBOX), а пользователь — не администратор. */
+export const sandboxed = (userId) => Boolean(SANDBOX) && !isAdmin(userId);
+
+/**
+ * Песочница для агента диалога (sandbox.agentSandbox) или null. На запись — корень пользователя (без корня — только
+ * папка проекта). У сотрудника с личным пространством общий корень проектов целиком открыть нельзя: там чужие папки.
+ */
+function sandboxFor(st, cwd, engine) {
+  if (!sandboxed(st.userId)) return null;
+  const root = rootOf(st.userId);
+  try {
+    return agentSandbox({ userId: st.userId, cwd, root, command: engineCommand(engine), protect: isPersonalRoot(root) ? [ROOT] : [] });
+  } catch (e) {
+    log('⚠️ песочница не собрана — агент не запущен:', e.message, '| пользователь', st.userId);
+    throw new ProjectError(t('state.sandboxFail', langOf(st.userId)), { cause: e });
+  }
+}
+
 async function startAgent(st, { resume } = {}) {
   // папка проекта проверяется перед каждым запуском: её могли удалить или подменить ссылкой после выбора,
   // а агент не должен стартовать вне корня пользователя
@@ -323,6 +342,7 @@ async function startAgent(st, { resume } = {}) {
   const allowed = modeFor(st.userId, engine);
   const a = createAgent(engine, {
     cwd,
+    wrap: sandboxFor(st, cwd, engine),
     // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
     who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {

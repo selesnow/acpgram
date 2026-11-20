@@ -41,6 +41,7 @@ const LAYOUT = [
   ['ALLOWED_USER_ID', 'env.c.admin'],
   ['PROJECTS_ROOT', 'env.c.root'],
   ['USER_WORKSPACES', 'env.c.workspaces'],
+  ['AGENT_SANDBOX', 'env.c.sandbox'],
   ['DEFAULT_ENGINE', 'env.c.engine'],
   ['GEMINI_COMMAND', null],
   ['CLAUDE_COMMAND', null],
@@ -338,6 +339,18 @@ export async function runSetup({ fromStart = false } = {}) {
         ok(tc('setup.wsOn'));
       } else delete env.USER_WORKSPACES;
     } else delete env.USER_WORKSPACES;
+    // песочница агентов сотрудников — только на Linux
+    if (process.platform === 'linux') {
+      const { findCommand, bwrapCommand } = await import('./sandbox.mjs');
+      console.log(tc('setup.sbNote'));
+      if (!findCommand(bwrapCommand(env))) {
+        warn(tc('setup.sbMissing'));
+        delete env.AGENT_SANDBOX;
+      } else if (await p.yes(tc('setup.sbAsk'), env.AGENT_SANDBOX === 'bwrap')) {
+        env.AGENT_SANDBOX = 'bwrap';
+        ok(tc('setup.sbOn'));
+      } else delete env.AGENT_SANDBOX;
+    }
 
     // 4. движки
     step(4, tc('setup.s4'));

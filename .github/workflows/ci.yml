@@ -32,6 +32,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # Agent sandbox (AGENT_SANDBOX=bwrap): on Linux install bubblewrap and allow it to create user namespaces,
+      # otherwise the tests in test/sandbox.test.mjs that run the real sandbox are skipped
+      - name: Sandbox prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: npm test
       - name: CLI smoke test
         run: node src/cli.mjs version
