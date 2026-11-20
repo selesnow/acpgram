@@ -121,6 +121,19 @@ export function openDb(path = 'data/bot.db') {
       PRIMARY KEY (user_id, thread_id)
     );
 
+    -- аккаунты Git пользователей (GitHub, GitLab): токен доступа и профиль; токен хранится только здесь
+    CREATE TABLE IF NOT EXISTS git_accounts (
+      user_id    INTEGER NOT NULL,
+      host       TEXT NOT NULL,            -- id сервиса (gitHosts.mjs): github, gitlab, corp
+      login      TEXT,
+      name       TEXT,
+      email      TEXT,
+      token      TEXT NOT NULL,
+      expires_at TEXT,                     -- когда истекает токен (если сервис сообщил)
+      added_at   TEXT NOT NULL,
+      PRIMARY KEY (user_id, host)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id);
     CREATE INDEX IF NOT EXISTS idx_tool_calls_request ON tool_calls(request_id);
     -- /sessions: сессии пользователя и поиск всех запусков одной ACP-сессии
@@ -230,6 +243,15 @@ export function openDb(path = 'data/bot.db') {
     ),
     countTopics: db.prepare('SELECT COUNT(*) AS n FROM topics WHERE user_id = ? AND lower(project) = lower(?) AND hidden = 0'),
     deleteTopic: db.prepare('DELETE FROM topics WHERE user_id = ? AND thread_id = ?'),
+    getGitAccount: db.prepare('SELECT * FROM git_accounts WHERE user_id = ? AND host = ?'),
+    listGitAccounts: db.prepare('SELECT * FROM git_accounts WHERE user_id = ? ORDER BY added_at'),
+    saveGitAccount: db.prepare(
+      `INSERT INTO git_accounts (user_id, host, login, name, email, token, expires_at, added_at) VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(user_id, host) DO UPDATE SET login = excluded.login, name = excluded.name, email = excluded.email,
+       token = excluded.token, expires_at = excluded.expires_at, added_at = excluded.added_at`,
+    ),
+    deleteGitAccount: db.prepare('DELETE FROM git_accounts WHERE user_id = ? AND host = ?'),
+    deleteGitAccountsByHost: db.prepare('DELETE FROM git_accounts WHERE host = ?'),
   };
 
   // Любая ошибка БД не должна ронять бота — журнал вторичен по отношению к работе.
@@ -301,6 +323,15 @@ export function openDb(path = 'data/bot.db') {
       safe(() => ({ items: q.listTopics.all(userId, project, limit, offset), total: q.countTopics.get(userId, project).n }))() ?? { items: [], total: 0 },
     /** Забывает тему (удалённую в Telegram). */
     deleteTopic: safe((userId, threadId) => q.deleteTopic.run(userId, threadId)),
+    // --- аккаунты Git ---
+    getGitAccount: safe((userId, host) => q.getGitAccount.get(userId, host) ?? null),
+    listGitAccounts: (userId) => safe(() => q.listGitAccounts.all(userId))() ?? [],
+    /** Сохраняет аккаунт сервиса: {host, login, name, email, token, expiresAt}. Возвращает true, если записано. */
+    saveGitAccount: (userId, a) =>
+      safe(() => q.saveGitAccount.run(userId, a.host, a.login ?? null, a.name ?? null, a.email ?? null, a.token, a.expiresAt ?? null, now()).changes === 1)() ?? false,
+    deleteGitAccount: safe((userId, host) => q.deleteGitAccount.run(userId, host)),
+    /** Удаляет аккаунты всех пользователей на сервисе (сервис убран администратором). Возвращает число удалённых. */
+    deleteGitAccountsByHost: (host) => safe(() => Number(q.deleteGitAccountsByHost.run(host).changes))() ?? 0,
     close: () => db.close(),
   };
 }

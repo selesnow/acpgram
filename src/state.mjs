@@ -6,6 +6,7 @@ import { canUseEngine, parseJson } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
 import { HOME, ROOT, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
+import { agentGitEnv } from './gitAccess.mjs';
 
 const states = new Map(); // userId -> состояние
 
@@ -343,6 +344,7 @@ async function startAgent(st, { resume } = {}) {
   const a = createAgent(engine, {
     cwd,
     wrap: sandboxFor(st, cwd, engine),
+    extraEnv: agentGitEnv(st.userId),
     // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
     who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {

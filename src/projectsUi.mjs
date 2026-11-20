@@ -2,6 +2,7 @@
 import { dirname, join } from 'node:path';
 import { botInfo, db, langOf, log, say, who } from './ctx.mjs';
 import { ROOT, USER_WORKSPACES, canGoUp, createDir, findDirs, folderName, insideRoot, isPersonalRoot, listDirs, navStart, resolveAsPath, samePath, showPath } from './projects.mjs';
+import { gitAvailable } from './git.mjs';
 import { LOCALES, errText, t } from './i18n.mjs';
 import { endAgent, isAdmin, recentProjects, rootOf, saveProject, topicsOn } from './state.mjs';
 import { topicLink } from './topics.mjs';
@@ -100,12 +101,18 @@ function navKeyboard(st, dir, page = 0, recent = [], lang) {
   if (canGoUp(dir, root)) ctl.push({ text: t('proj.up', lang), callback_data: `nav:o:${tok(dirname(dir))}:0` });
   ctl.push({ text: t('proj.choose', lang), callback_data: `nav:s:${tok(dir)}`, style: 'success' });
   rows.push(ctl);
-  if (canCreateProject(st.userId)) rows.push([{ text: t('proj.new', lang), callback_data: `nav:c:${tok(dir)}` }]);
+  if (canCreateProject(st.userId)) {
+    rows.push([
+      { text: t('proj.new', lang), callback_data: `nav:c:${tok(dir)}` },
+      // клонирование — экран /git (gitUi): нужен подключённый аккаунт, без него кнопка подскажет его подключить
+      ...(gitAvailable() ? [{ text: t('git.cloneShort', lang), callback_data: 'gt:cl' }] : []),
+    ]);
+  }
   return { inline_keyboard: rows };
 }
 
 /** Переключает проект: закрывает текущую сессию агента пользователя, новая начнётся с ближайшим запросом. */
-async function selectProject(st, p, messageId) {
+export async function selectProject(st, p, messageId) {
   const chatId = st.chatId;
   const lang = langOf(st.userId);
   const reply = (text) =>

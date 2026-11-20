@@ -51,6 +51,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 - **Language** — the bot talks to each user in their Telegram language (`ru`, `uk` or `en`; any other falls back to `DEFAULT_LANG`, English by default). `/language` changes it and takes priority over the Telegram language. The `acpgram` terminal commands (setup wizard, service, update, help) speak the system language: Russian, Ukrainian, otherwise English; on Windows the system UI language is used, not the regional format.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
 - **Project files, bypassing the agent** — `/files` lists the project files, creates a file from a message, uploads a file from your device and deletes files. The contents never go into a model request, which is how secrets (`.env`, keys) get into a project.
+- **Git: GitHub and GitLab** — `/git` connects an account with an access token, clones a repository picked from a list, and pulls, pushes or "saves and pushes" changes. The token stays with the bot and is not given to the agent; files with secrets never get into commits.
 - **Personal workspaces** — with `USER_WORKSPACES=1` each teammate gets their own folder inside the projects root and chooses projects only there; a new project is created with the "➕ New project" button.
 - **Sessions** — `/sessions` resumes a previous conversation (in the engine it was created in), even after a restart; `/new` starts fresh; `/close` unloads the agent process.
 - **Team access** — invite links and access requests; per-user access levels, engines and model restrictions; `/active` shows who is working and lets the admin end any session.
@@ -186,6 +187,7 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 | `/model [name]` | everyone | choose the model and reasoning level; with a name — search for a model (`/model sonnet`) |
 | `/new` | everyone | new session |
 | `/files` | everyone | project files: list, create, upload and delete — bypassing the agent |
+| `/git` | everyone | Git: GitHub / GitLab accounts, clone, pull and push |
 | `/sessions` | everyone | resume a previous session in this project |
 | `/stop` | everyone | stop the running request |
 | `/close`, `/exit` | everyone | close the session and unload the agent process |
@@ -221,6 +223,24 @@ Everything a user types to the bot or sends as a file goes to the agent, and the
 - **Inside the project only.** The bot never writes or deletes outside the project folder and does not follow links: a link planted in the project cannot make it overwrite someone else's file.
 
 What this gives and what it does not. The secret does not get into a model request *from the user*. The file itself stays available to the agent — otherwise the applications it writes and runs could not use it. So that the agent does not read the values into the conversation by itself, the bot regularly reminds it: do not open or print files with secrets, refer to settings by name, and send the user to `/files` for a missing value. This is an instruction, not a ban: for especially sensitive data use a model from a provider that does not train on requests.
+
+### Git: GitHub and GitLab
+
+The `/git` command connects projects to GitHub, GitLab.com and your own servers — GitLab and GitHub Enterprise. It needs `git` installed: a system program, not a dependency of the bot; without it the section says it is unavailable.
+
+- **Own servers** are added by the administrator right in `/git`: "⚙️ Own servers" → "➕ GitLab" or "➕ GitHub Enterprise" → the server address (`https://git.example.com`). The bot checks that a server of that kind answers at the address, and after that every user can connect an account on it. The same screen renames and removes a server — together with the accounts connected to it. Without this the menu has only GitHub and GitLab.com. Where settings are kept in a file, a server can also be set in `.env` (`GITLAB_URL`, `GITHUB_URL`).
+
+- **Connecting an account.** "➕ Connect …" → the bot gives a link to the tokens page and the list of permissions, and the user sends the access token in one message. The message is deleted from the chat right away and is not passed to the agent. The bot checks the token with the service, shows who is connected and until when the token is valid, and warns if permissions are missing. Disconnecting removes the token from the bot.
+- **Cloning.** "⬇️ Clone a repository" (or "⬇️ From Git" in `/project`) lists the user's repositories as buttons, recently changed first, with search by name. The chosen one is cloned into the personal workspace (without it, next to the current project) and becomes the project.
+- **The project repository.** The screen shows the branch, the number of changed files, of commits not pushed and of new commits on the server; it checks the server when opened and on "Refresh". "⬇️ Pull" takes the changes when that is possible without a merge; if the histories diverged, the agent does the merge. "⬆️ Push" sends the commits. "💾 Save and push" asks for a description, commits all changes and pushes.
+- **The commit author** is the account owner: the name and email are given to both the bot and the agent, so the agent's commits are signed by the user.
+- **Secrets do not go to the repository.** On "Save and push", files with secrets (`.env`, keys, credentials) are left out of the commit and appended to `.gitignore`. If the agent committed such a file, the bot warns before pushing and pushes only after "Push anyway".
+
+**Where the token lives.** By default only in the bot's database: the bot clones, pulls and pushes, while the agent works with the repository locally (status, diff, commits, branches, merges) and sends the user to `/git` when changes must be pushed. In the sandbox the token is not reachable by the agent at all. The administrator can choose another mode, `GIT_AGENT_AUTH=1`: the sign-in is also given to the agent process, which then pulls and pushes by itself. That is more convenient, but the token becomes visible to the agent and may end up in a model request; turn it on only if you trust the models your teammates use.
+
+**How the bot runs git.** The repository lives where the agent writes, and repository settings and hooks can run programs. So the bot runs git with hooks and credential helpers turned off, without the global and system config (on Linux and macOS), and, when the sandbox is on, inside the same teammate's sandbox. The sign-in is passed to the git process through its environment and only for the addresses of its own service; it is never written to the repository settings or the URL. Residual risk: the repository's own settings (filters) run during operations, and a deliberately malicious agent could capture the token while an operation runs.
+
+Only HTTPS repositories from the listed services can be connected; a repository with an SSH address or from another server is shown, but the bot cannot pull from or push to it.
 
 ### Personal workspaces
 
@@ -271,6 +291,9 @@ What the sandbox does not do:
 | `AGENT_SANDBOX` | no | `bwrap` — agent sandbox (Linux only, needs the `bubblewrap` package): a teammate's agent sees only their projects folder, their files and their own home folder. See "Agent sandbox" |
 | `SANDBOX_RO_PATHS` | no | extra folders the sandbox can read (separated by `:`), e.g. where an engine is installed if it does not start in the sandbox |
 | `BWRAP_COMMAND` | no | path to `bwrap` if it is not in `PATH` |
+| `GITLAB_URL`, `GITHUB_URL` | no | address of your own GitLab and your own GitHub Enterprise (`https://git.example.com`): they appear in `/git` next to GitHub and GitLab.com. `GITLAB_NAME`, `GITHUB_NAME` are the names on the buttons (the host name by default). Optional: the administrator can also add own servers in the bot itself (`/git` → "Own servers") |
+| `GIT_AGENT_AUTH` | no | `1` — the Git sign-in is also given to agents: they pull and push by themselves, but teammates' tokens are visible to them. By default the token stays with the bot |
+| `GIT_COMMAND` | no | path to `git` if it is not in `PATH` |
 | `USER_WORKSPACES` | no | `1` — personal workspaces: each teammate chooses projects only inside their own folder `<root>/<Telegram ID>`, the administrator sees the whole root. Requires `PROJECTS_ROOT`; the bot does not start without it |
 | `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex` or `opencode`; the bot does not start if this engine is not installed |
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
@@ -317,7 +340,8 @@ src/
   state.mjs       per-user state: agent process, engine, project, limits, idle reaper
   admin.mjs       invites, access requests, /users, /active
   projects.mjs    project paths (inside the root or anywhere), recent projects, search
-  *Ui.mjs         /project, /files, /sessions, /engine, /model screens
+  *Ui.mjs         /project, /files, /git, /sessions, /engine, /model screens
+  git*.mjs        git commands run by the bot, GitHub / GitLab clients, accounts and what the agent gets from them
   projectFiles.mjs project files bypassing the agent: safe writes and deletes inside the project, no links
   ui.mjs          rendering: drafts, steps, final message, screens
   telegram.mjs    Bot API calls, rich messages, long text splitting, file download and upload

@@ -9,6 +9,7 @@ import { errText, t } from './i18n.mjs';
 import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler, topicProject, userPath } from './state.mjs';
 import { diffOf, parseTool } from './tools.mjs';
 import { lineDiff } from './diff.mjs';
+import { gitNote } from './gitAccess.mjs';
 import { ASK_NOTE, ASK_PLACEHOLDER, askChoice, extractAsks, placeAsks, stripAskMarks } from './asks.mjs';
 import { dest, tg, mediaIdsOf, sendFile, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
 import { composeDraft, finalExtras, finalMessages, lastThoughtTitle, neutralizeTgTags, toolMeta, trunc } from './ui.mjs';
@@ -343,7 +344,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     // (агент мог сжать контекст и забыть её), а не в каждом — она попадает в историю и тратит токены
     const noteNow = (a.promptCount ?? 0) % OUTBOX_NOTE_EVERY === 0;
     a.promptCount = (a.promptCount ?? 0) + 1;
-    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE, SECRETS_NOTE] : [] });
+    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE, SECRETS_NOTE, gitNote(st.userId)].filter(Boolean) : [] });
     // новая тема без названия: агент начинает ответ строкой с названием, бот называет так тему
     if (naming) blocks.push({ type: 'text', text: TITLE_NOTE });
     const res = await a.prompt(blocks);

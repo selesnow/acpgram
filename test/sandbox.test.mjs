@@ -221,6 +221,24 @@ test('песочница: агент ACP на Node работает внутри
   assert.ok(await until(() => running().length === 0), 'после остановки песочницы её процессов не осталось');
 });
 
+test('песочница: команды git бота выполняются внутри неё и чужую папку не видят', real, async (t) => {
+  if (spawnSync('git', ['--version']).status !== 0) return t.skip('git не установлен');
+  const G = await import('../src/git.mjs');
+  const env = G.gitEnv({ identity: { name: 'Ann', email: 'ann@example.com' } });
+  const repo = join(ws1, 'repo');
+  const inWs = { env, wrap: boxFor(1001, { command: 'git' }) };
+  const inRepo = { env, wrap: boxFor(1001, { command: 'git', cwd: repo }) };
+  await G.runGit(['init', '-q', '-b', 'main', repo], { cwd: ws1, ...inWs });
+  writeFileSync(join(repo, 'a.txt'), '1');
+  writeFileSync(join(repo, '.env'), 'S=1');
+  assert.deepEqual(await G.commitAll(repo, 'первый', { cwd: repo, ...inRepo }), { committed: true, skipped: ['.env'], tracked: [] });
+  const st = await G.repoState(repo, inRepo);
+  assert.deepEqual([st.top, st.branch, st.changed], [repo, 'main', 0]);
+  assert.equal((await G.runGit(['log', '-1', '--format=%an <%ae>'], { cwd: repo, ...inRepo })).trim(), 'Ann <ann@example.com>');
+  // репозиторий в чужой папке для git в песочнице не существует
+  await assert.rejects(G.runGit(['-C', ws2, 'status'], { cwd: ws1, ...inWs }), (e) => e instanceof G.GitError);
+});
+
 test('проверка при старте: рабочая песочница проходит, видимый секрет — нет', real, () => {
   assert.deepEqual(S.probeSandbox({ base: data, secrets, files }), { ok: true });
   // «секретный» файл лежит в папке, которую песочница видит, — проверка обязана это заметить

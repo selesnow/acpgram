@@ -502,8 +502,9 @@ export function parseUsage(res, usageUpdate) {
  *   wrap — запуск через программу-обёртку (песочница, sandbox.agentSandbox): {command, args, env}; её аргументы уже
  *   заканчиваются командой движка, аргументы движка добавляются следом, а окружение проходит через wrap.env.
  */
-export function createAgent(engine, { who, wrap = null, ...opts }) {
-  const base = { ...agentEnv(engine), ...(who && engine.processEnv ? engine.processEnv(who) : {}) };
+export function createAgent(engine, { who, wrap = null, extraEnv = null, ...opts }) {
+  // extraEnv — переменные пользователя сверх общих (автор коммитов и вход git, gitAccess.agentGitEnv)
+  const base = { ...agentEnv(engine), ...(who && engine.processEnv ? engine.processEnv(who) : {}), ...(extraEnv ?? {}) };
   const env = wrap ? wrap.env(base) : base;
   const command = wrap ? wrap.command : engineCommand(engine);
   const args = wrap ? [...wrap.args, ...engine.args] : engine.args;

@@ -12,6 +12,9 @@ import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
 import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
 import { handleFiles, onFileInput, onFileUpload, onFilesCallback } from './filesUi.mjs';
+import { checkGit, gitCommand } from './git.mjs';
+import { GIT_AGENT_AUTH } from './gitAccess.mjs';
+import { handleGit, onGitCallback, onGitInput } from './gitUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
@@ -120,6 +123,7 @@ const COMMANDS = [
   { name: 'usage', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/usage') },
   { name: 'project', menu: true, button: true, run: (st, arg) => handleProject(st, arg) },
   { name: 'files', menu: true, button: true, run: (st) => handleFiles(st) },
+  { name: 'git', menu: true, button: true, run: (st) => handleGit(st) },
   { name: 'engine', menu: true, button: true, run: (st, arg) => handleEngine(st, arg) },
   { name: 'model', menu: true, button: true, run: (st, arg) => handleModel(st, arg) },
   { name: 'new', menu: true, button: true, run: newCommand },
@@ -157,6 +161,8 @@ async function handleText(st, text, { quote = null, messageId = null } = {}) {
   if (await onProjectNameInput(st, text)) return;
   // бот ждёт имя или содержимое файла проекта (/files): содержимое агенту не передаётся и удаляется из чата
   if (await onFileInput(st, text, { messageId })) return;
+  // бот ждёт токен доступа к GitHub / GitLab, строку поиска репозитория или описание изменений (/git)
+  if (await onGitInput(st, text, { messageId })) return;
   if (name && !st.agent?.commands?.has(name)) {
     const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
     if (guess) {
@@ -320,6 +326,7 @@ async function handleUpdate(u) {
     if (data.startsWith('tpl:')) return onTopicListCallback(st, cb);
     if (data.startsWith('nav:')) return onNavCallback(st, cb);
     if (data.startsWith('fl:')) return onFilesCallback(st, cb);
+    if (data.startsWith('gt:')) return onGitCallback(st, cb);
     if (data.startsWith('perm:')) return onPermissionCallback(st, cb);
     if (data.startsWith('ask:')) return onAskCallback(st, cb);
     if (data.startsWith('q:')) return onQueueCallback(st, cb);
@@ -431,6 +438,13 @@ async function main() {
   }
   log(`движок по умолчанию: ${DEFAULT_ENGINE}`);
   if (SANDBOX) await setupSandbox(checks);
+  // git — необязательная системная программа: без неё раздел /git отвечает, что недоступен
+  const git = await checkGit();
+  log(
+    git.ok
+      ? `${git.version} | ${gitCommand()} — /git доступен${GIT_AGENT_AUTH ? '; ⚠️ GIT_AGENT_AUTH=1: вход в Git передаётся агентам, токены сотрудников им видны' : '; вход в Git агентам не передаётся'}`
+      : `ℹ️ git не найден (${gitCommand()}): /git недоступен. Установите git или укажите путь в GIT_COMMAND`,
+  );
   log(
     ROOT
       ? `корень проектов: ${ROOT} (проект — только папка внутри корня)`
