@@ -6,7 +6,7 @@ import { ADMIN_ID, LEVEL_KEYS, MAX_AGENTS, botInfo, db, isLevel, langOf, levelHi
 import { DEFAULT_ENGINE, ENGINES } from './engines.mjs';
 import { t } from './i18n.mjs';
 import { activeSessions, closeSession, saveEngine, statesOf, stopUser } from './state.mjs';
-import { showPath } from './projects.mjs';
+import { USER_WORKSPACES, showPath, userRoot } from './projects.mjs';
 import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, sessionStatus, usageView } from './ui.mjs';
 import { isNotModified, tg } from './telegram.mjs';
 
@@ -117,16 +117,19 @@ function userCard(u) {
   const al = adminLang();
   const s = activeSessions().find((x) => x.userId === u.user_id);
   const eg = engineGrants({ userId: u.user_id, engines: engineList(u.user_id), lang: al });
+  // личные пространства: папка сотрудника в корне проектов (имя — его Telegram ID), путь — как видит администратор
+  const folder = USER_WORKSPACES ? `\n${t('adm.userFolder', al, { p: showPath(userRoot(u.user_id), al) })}` : '';
   return {
-    text: t('adm.userLine', al, {
-      name: userName(u),
-      id: u.user_id,
-      level: levelName(u.level, al),
-      hint: isLevel(u.level) ? levelHint(u.level, al) : '',
-      engines: eg.line,
-      date: u.added_at.slice(0, 10),
-      status: sessionStatus(s, (p) => showPath(p, al), Date.now(), al),
-    }),
+    text:
+      t('adm.userLine', al, {
+        name: userName(u),
+        id: u.user_id,
+        level: levelName(u.level, al),
+        hint: isLevel(u.level) ? levelHint(u.level, al) : '',
+        engines: eg.line,
+        date: u.added_at.slice(0, 10),
+        status: sessionStatus(s, (p) => showPath(p, al), Date.now(), al),
+      }) + folder,
     markup: {
       inline_keyboard: [
         ...levelButtons(`adm:l:${u.user_id}`, u.level, al),

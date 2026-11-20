@@ -86,6 +86,7 @@ const M = {
   'new.done': { en: '🆕 New session. {engine} will start the conversation from a clean slate.\n📁 Project: {project}', ru: '🆕 Новая сессия. {engine} начнёт диалог с чистого листа.\n📁 Проект: {project}', uk: '🆕 Нова сесія. {engine} почне діалог з чистого аркуша.\n📁 Проєкт: {project}' },
   'lang.set': { en: '🌐 Language: {name}. You can change it at any time with /language.', ru: '🌐 Язык: {name}. Сменить можно в любой момент: /language', uk: '🌐 Мову обрано: {name}. Змінити можна будь-коли: /language' },
   'proj.root': { en: '{root} (root)', ru: '{root} (корень)', uk: '{root} (корінь)' },
+  'proj.myRoot': { en: 'My workspace', ru: 'Моё пространство', uk: 'Мій простір' },
   'welcome.note': { en: 'ℹ️ Requests to the bot are logged by the administrator.', ru: 'ℹ️ Запросы к боту журналируются администратором.', uk: 'ℹ️ Запити до бота журналює адміністратор.' },
 
   // ---------- меню команд Telegram ----------
@@ -227,6 +228,20 @@ const M = {
 
   // ---------- проекты (/project) ----------
   'proj.unavailableRoot': { en: '⚠️ The folder is unavailable or outside {root}', ru: '⚠️ Папка недоступна или лежит вне {root}', uk: '⚠️ Папка недоступна або розташована поза {root}' },
+  'proj.unavailableMine': { en: '⚠️ The folder is unavailable or outside your workspace', ru: '⚠️ Папка недоступна или лежит вне вашего пространства', uk: '⚠️ Папка недоступна або розташована поза вашим простором' },
+  'proj.new': { en: '➕ New project', ru: '➕ Новый проект', uk: '➕ Новий проєкт' },
+  'proj.newAsk': {
+    en: '➕ Send the name of the new project folder. It will be created in {dir}.',
+    ru: '➕ Отправьте название папки нового проекта. Она будет создана в {dir}.',
+    uk: '➕ Надішліть назву папки нового проєкту. Її буде створено в {dir}.',
+  },
+  'proj.newBad': {
+    en: '⚠️ This name will not work. Use letters, digits, spaces, “-” and “_”, up to 64 characters, not starting with a dot. Send another name.',
+    ru: '⚠️ Такое название не подойдёт. Используйте буквы, цифры, пробел, «-» и «_», до 64 символов, не с точки. Отправьте другое название.',
+    uk: '⚠️ Така назва не підійде. Використовуйте літери, цифри, пробіл, «-» і «_», до 64 символів, не з крапки. Надішліть іншу назву.',
+  },
+  'proj.newFail': { en: '⚠️ Could not create the folder: {msg}', ru: '⚠️ Не удалось создать папку: {msg}', uk: '⚠️ Не вдалося створити папку: {msg}' },
+  'proj.newCancelled': { en: '✖ The project was not created.', ru: '✖ Проект не создан.', uk: '✖ Проєкт не створено.' },
   'proj.notFound': { en: '⚠️ The folder was not found or is unavailable', ru: '⚠️ Папка не найдена или недоступна', uk: '⚠️ Папку не знайдено або вона недоступна' },
   'proj.same': { en: '📁 Project already selected: {p}', ru: '📁 Проект уже выбран: {p}', uk: '📁 Проєкт уже обрано: {p}' },
   'proj.set': { en: '📁 Project: {p}\nA new session starts with the next request.', ru: '📁 Проект: {p}\nНовая сессия начнётся со следующего запроса.', uk: '📁 Проєкт: {p}\nНова сесія почнеться з наступного запиту.' },
@@ -346,6 +361,11 @@ const M = {
     en: '{engine} did not start within {sec} s (perhaps it is waiting for a sign-in or is overloaded); the process was stopped. Try again, and if it repeats, check the agent on the server.',
     ru: '{engine} не запустился за {sec} с (возможно, ждёт входа в аккаунт или перегружен); процесс остановлен. Повторите запрос, а если не поможет — проверьте агента на сервере.',
     uk: '{engine} не запустився за {sec} с (можливо, чекає входу в акаунт або перевантажений); процес зупинено. Повторіть запит, а якщо не допоможе — перевірте агента на сервері.',
+  },
+  'state.projectGone': {
+    en: '⚠️ The project folder is unavailable: it was deleted or moved. Choose a project: /project',
+    ru: '⚠️ Папка проекта недоступна: её удалили или переместили. Выберите проект: /project',
+    uk: '⚠️ Папка проєкту недоступна: її видалили або перемістили. Оберіть проєкт: /project',
   },
   // ---- режим «диалоги»: темы в личном чате с ботом ----
   'menu.topics': { en: 'Dialogs mode: each chat topic is a separate dialog', ru: 'Режим «диалоги»: каждая тема чата — отдельный диалог', uk: 'Режим «діалоги»: кожна тема чату — окремий діалог' },
@@ -469,6 +489,7 @@ const M = {
   'adm.usersHeader': { en: 'Users with access ({n}):', ru: 'Сотрудники с доступом ({n}):', uk: 'Співробітники з доступом ({n}):' },
   'adm.usersRevoked': { en: 'Access revoked for: {n}', ru: 'Доступ отозван у: {n}', uk: 'Доступ відкликано у: {n}' },
   'adm.usersEmpty': { en: 'No users with access yet. /invite — create an invitation.', ru: 'Сотрудников с доступом пока нет. /invite — создать приглашение.', uk: 'Співробітників з доступом поки немає. /invite — створити запрошення.' },
+  'adm.userFolder': { en: 'Personal folder: {p}', ru: 'Личная папка: {p}', uk: 'Особиста папка: {p}' },
   'adm.killUserBtn': { en: '🛑 End the employee’s session', ru: '🛑 Завершить сессию сотрудника', uk: '🛑 Завершити сесію співробітника' },
   'adm.revokeBtn': { en: '🚫 Revoke access', ru: '🚫 Отозвать доступ', uk: '🚫 Відкликати доступ' },
   'adm.toList': { en: '← To the list', ru: '← К списку', uk: '← До списку' },

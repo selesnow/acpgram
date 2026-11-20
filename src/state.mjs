@@ -4,7 +4,7 @@ import { positiveEnv } from './app.mjs';
 import { t } from './i18n.mjs';
 import { canUseEngine, parseJson } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, createAgent, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
-import { DEFAULT_DIR, insideRoot, pushRecent, samePath } from './projects.mjs';
+import { HOME, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 
 const states = new Map(); // userId -> состояние
 
@@ -16,8 +16,31 @@ export const START_TIMEOUT_MS = positiveEnv('AGENT_START_TIMEOUT', 120) * 1000;
 
 export const isAdmin = (id) => id === ADMIN_ID;
 
+/**
+ * Корень пользователя: проекты он выбирает только внутри него. Сотруднику при личных пространствах (USER_WORKSPACES) —
+ * его папка в корне проектов, администратору и без них — общий корень; null — режим без корня.
+ */
+export const rootOf = (userId) => userRoot(userId, { admin: isAdmin(userId) });
+
+/** Папка, с которой начинает пользователь: его корень, а без корня — домашняя папка. */
+export const defaultDirOf = (userId) => rootOf(userId) ?? HOME;
+
+/** Путь для показа пользователю: относительно его корня, на его языке (личное пространство — без пути на сервере). */
+export const userPath = (userId, p, lang = langOf(userId)) => showPath(p, lang, rootOf(userId));
+
+/** Проект для названия темы: личное пространство целиком называется «Моё пространство», а не числом — именем папки. */
+export const topicProject = (userId, project, lang = langOf(userId)) => {
+  const root = rootOf(userId);
+  return isPersonalRoot(root) && samePath(project, root) ? t('proj.myRoot', lang) : project;
+};
+
 export class LimitError extends Error {
   code = 'LIMIT';
+}
+
+/** Папка проекта недоступна или лежит вне корня пользователя: агент не запускается, нужно выбрать проект заново. */
+export class ProjectError extends Error {
+  code = 'PROJECT';
 }
 
 /** Сессию закрыли (/close, администратор, отзыв доступа), пока агент запускался или запрос готовился. */
@@ -84,6 +107,13 @@ export function getState(userId, chatId, threadId = null) {
     const saved = db.getSetting(`project:${userId}`) || (isAdmin(userId) ? db.getSetting('project') : null);
     // у темы свои проект, движок и сессия агента; новая тема начинает с последнего выбора пользователя
     const row = topic ? db.getTopic(userId, topic) : null;
+    const root = rootOf(userId);
+    // сохранённый проект, если он ещё существует и лежит в корне пользователя, иначе его корень или домашняя папка
+    const wanted = row?.project || saved;
+    const project = (wanted && insideRoot(wanted, root)) || defaultDirOf(userId);
+    // проект темы стал недоступен (удалён или оказался вне корня — включили личные пространства): её сессия в другой
+    // папке не продолжается
+    const moved = Boolean(row?.project) && !samePath(project, row.project);
     st = {
       userId,
       chatId,
@@ -98,10 +128,9 @@ export function getState(userId, chatId, threadId = null) {
       suppress: false, // администратор прервал запрос — итоговый ответ не отправляем
       queued: null, // сообщение, пришедшее во время запроса: уйдёт агенту следующим (turn.mjs)
       lastActive: Date.now(),
-      // сохранённый проект, если он ещё существует (и лежит в корне, если корень задан), иначе корень или домашняя папка
-      project: insideRoot(row?.project || saved || DEFAULT_DIR) || DEFAULT_DIR,
+      project,
       // сессия агента темы: возобновится при первом запросе (после простоя или перезапуска бота)
-      resumeId: row?.acp_session_id || null,
+      resumeId: moved ? null : row?.acp_session_id || null,
       /** Куда отвечать: id чата или {chat_id, message_thread_id} для темы. */
       get to() {
         return this.threadId ? { chat_id: this.chatId, message_thread_id: this.threadId } : this.chatId;
@@ -130,7 +159,7 @@ const readRecent = (userId) => {
 /** Недавние проекты пользователя (свежие первыми): только существующие и допустимые папки, без текущего проекта. */
 export const recentProjects = (st) =>
   readRecent(st.userId)
-    .map((p) => insideRoot(p))
+    .map((p) => insideRoot(p, rootOf(st.userId)))
     .filter((p) => p && !samePath(p, st.project));
 
 export function saveProject(st, path) {
@@ -248,7 +277,7 @@ export async function ensureAgent(st, { resume } = {}) {
   try {
     return await startAgent(st, { resume: resume ?? auto ?? undefined });
   } catch (e) {
-    if (!auto || e instanceof ClosedError || e instanceof LimitError) throw e;
+    if (!auto || e instanceof ClosedError || e instanceof LimitError || e instanceof ProjectError) throw e;
     log(`сессию ${auto} не удалось возобновить (${e.message}) — начинаю новую | пользователь`, st.userId);
     st.resumeId = null;
     return startAgent(st, {});
@@ -281,12 +310,19 @@ export function releaseSessionElsewhere(st, sessionId) {
 }
 
 async function startAgent(st, { resume } = {}) {
+  // папка проекта проверяется перед каждым запуском: её могли удалить или подменить ссылкой после выбора,
+  // а агент не должен стартовать вне корня пользователя
+  const cwd = insideRoot(st.project, rootOf(st.userId));
+  if (!cwd) {
+    log('⚠️ папка проекта недоступна или вне корня пользователя — агент не запущен | пользователь', st.userId, '| проект', st.project);
+    throw new ProjectError(t('state.projectGone', langOf(st.userId)));
+  }
   releaseSessionElsewhere(st, resume);
   reserveSlot(st);
   const engine = engineOf(st);
   const allowed = modeFor(st.userId, engine);
   const a = createAgent(engine, {
-    cwd: st.project,
+    cwd,
     // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
     who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {

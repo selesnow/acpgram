@@ -2,12 +2,11 @@
 import { mkdirSync } from 'node:fs';
 import { db, dbg, langOf, log, say } from './ctx.mjs';
 import { FILE_PLACEHOLDER, attachFiles, buildPromptBlocks, extractSendMarks, outboxDir, stripSendMarks } from './files.mjs';
-import { showPath } from './projects.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { errText, t } from './i18n.mjs';
-import { ClosedError, LimitError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler } from './state.mjs';
+import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler, topicProject, userPath } from './state.mjs';
 import { diffOf, parseTool } from './tools.mjs';
 import { lineDiff } from './diff.mjs';
 import { ASK_NOTE, ASK_PLACEHOLDER, askChoice, extractAsks, placeAsks, stripAskMarks } from './asks.mjs';
@@ -204,7 +203,7 @@ function turnUsage(a, res, lastUsage) {
 /** Называет тему диалога (названием от агента или по запросу) — один раз: дальше название не трогаем. */
 async function nameTopic(st, title) {
   if (!title) return;
-  const name = topicName(st.project, title); // «проект · название»: в общем списке тем видно, к чему тема относится
+  const name = topicName(topicProject(st.userId, st.project), title); // «проект · название»: в общем списке тем видно, к чему тема относится
   try {
     await renameTopic(st.chatId, st.topic, name);
     db.saveTopic(st.userId, st.topic, { name, named: true });
@@ -354,7 +353,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     error = e.message;
     // запрос упал или прерван, но агент мог успеть потратить токены — учитываем стоимость этому запросу
     if (agent && st.requestId) usage = turnUsage(agent, null, lastUsage);
-    if (e instanceof ModelAccessError) {
+    if (e instanceof ModelAccessError || e instanceof ProjectError) {
       limited = true; // понятное сообщение без пометки «Ошибка» и без подвала
       answer = e.message;
     } else if (e instanceof ClosedError) {
@@ -406,7 +405,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
         onSkip: (p, reason) => log(`файл агента не отправлен (${reason}):`, p, '| пользователь', st.userId),
       });
   // свёрнутый ход работы и подвал (движок, модель, расход, проект, время); для «все слоты заняты» не нужны
-  const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: showPath(st.project, lang), engine: engine.short, usage, lang });
+  const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: userPath(st.userId, st.project, lang), engine: engine.short, usage, lang });
   const loose = []; // файлы, которые Telegram не принял внутри ответа
   // кнопки быстрого ответа от агента: разметку и callback_data строит бот (asks.mjs)
   const body = placeAsks(st, placed.text, limited ? [] : asked.asks);

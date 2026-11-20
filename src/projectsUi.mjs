@@ -1,9 +1,9 @@
 // Команда /project: выбор проекта (рабочей папки агента) кнопками или поиском по названию.
 import { dirname, join } from 'node:path';
-import { botInfo, db, langOf, log, say } from './ctx.mjs';
-import { ROOT, canGoUp, findDirs, insideRoot, listDirs, navStart, resolveAsPath, samePath, showPath } from './projects.mjs';
-import { LOCALES, t } from './i18n.mjs';
-import { endAgent, recentProjects, saveProject, topicsOn } from './state.mjs';
+import { botInfo, db, langOf, log, say, who } from './ctx.mjs';
+import { ROOT, USER_WORKSPACES, canGoUp, createDir, findDirs, folderName, insideRoot, isPersonalRoot, listDirs, navStart, resolveAsPath, samePath, showPath } from './projects.mjs';
+import { LOCALES, errText, t } from './i18n.mjs';
+import { endAgent, isAdmin, recentProjects, rootOf, saveProject, topicsOn } from './state.mjs';
 import { topicLink } from './topics.mjs';
 import { newTopic } from './topicsUi.mjs';
 import { dest, tg } from './telegram.mjs';
@@ -18,10 +18,11 @@ const SHORT_NAME = 16;
  * Раскладка кнопок папок: две короткие подряд — в один ряд, длинная — на всю ширину (имя должно читаться целиком,
  * по нему выбирают). Порядок папок сохраняется.
  * @param {string[]} names имена папок по порядку
+ * @param {(name: string) => string} [labelOf] подпись кнопки, если она отличается от имени (ширина считается по ней)
  * @returns {string[][]} ряды имён
  */
-export function folderRows(names) {
-  const short = (n) => [...n].length <= SHORT_NAME;
+export function folderRows(names, labelOf = (n) => n) {
+  const short = (n) => [...labelOf(n)].length <= SHORT_NAME;
   const rows = [];
   for (let i = 0; i < names.length; i++) {
     if (short(names[i]) && i + 1 < names.length && short(names[i + 1])) rows.push([names[i], names[++i]]);
@@ -48,19 +49,40 @@ function tok(p) {
   return tk;
 }
 
+/** Путь для показа пользователю диалога: относительно его корня (личное пространство — без пути на сервере). */
+const pathFor = (st, p, lang) => showPath(p, lang, rootOf(st.userId));
+
+/**
+ * Может ли пользователь создавать папки проектов кнопкой «Новый проект»: администратор — везде, сотрудник — только
+ * в личном пространстве (в общем корне папки заводит администратор).
+ */
+export const canCreateProject = (userId) => isAdmin(userId) || isPersonalRoot(rootOf(userId));
+
+/**
+ * Подпись папки в навигации. Администратору в корне проектов личные папки сотрудников (имя — Telegram ID)
+ * показываются с именем сотрудника: «123456 · @nick».
+ */
+function folderLabel(st, dir, name) {
+  if (!USER_WORKSPACES || !isAdmin(st.userId) || !samePath(dir, ROOT) || !/^\d+$/.test(name)) return name;
+  const u = db.getUser(Number(name));
+  return u ? `${name} · ${who(u)}` : name;
+}
+
 /** Текст экрана навигации (HTML): открытая папка и текущий проект — моноширинным, чтобы путь читался и копировался. */
 const navText = (st, dir, lang) =>
-  `${th('proj.nav', lang, { dir: hCode(showPath(dir, lang)), cur: hCode(showPath(st.project, lang)) })}${listDirs(dir).length ? '' : `\n\n<i>${th('proj.noSub', lang)}</i>`}`;
+  `${th('proj.nav', lang, { dir: hCode(pathFor(st, dir, lang)), cur: hCode(pathFor(st, st.project, lang)) })}${listDirs(dir).length ? '' : `\n\n<i>${th('proj.noSub', lang)}</i>`}`;
 
 /** recent — недавние проекты: кнопки «🕘» в начале списка (только на первом экране /project). */
-function navKeyboard(dir, page = 0, recent = [], lang) {
+function navKeyboard(st, dir, page = 0, recent = [], lang) {
+  const root = rootOf(st.userId);
+  const label = (n) => folderLabel(st, dir, n);
   const kids = listDirs(dir);
   const pages = Math.max(1, Math.ceil(kids.length / PAGE));
   page = Math.min(Math.max(page, 0), pages - 1);
   const rows = [
     // обрезка по символам, а не по UTF-16: половинка эмодзи — невалидный UTF-8, Telegram отклонил бы всё сообщение
-    ...recent.map((p) => [{ text: [...`🕘 ${showPath(p, lang)}`].slice(0, 120).join(''), callback_data: `nav:s:${tok(p)}` }]),
-    ...folderRows(kids.slice(page * PAGE, (page + 1) * PAGE)).map((row) => row.map((n) => ({ text: `📁 ${n}`, callback_data: `nav:o:${tok(join(dir, n))}:0` }))),
+    ...recent.map((p) => [{ text: [...`🕘 ${pathFor(st, p, lang)}`].slice(0, 120).join(''), callback_data: `nav:s:${tok(p)}` }]),
+    ...folderRows(kids.slice(page * PAGE, (page + 1) * PAGE), label).map((row) => row.map((n) => ({ text: `📁 ${label(n)}`, callback_data: `nav:o:${tok(join(dir, n))}:0` }))),
   ];
   if (pages > 1) {
     const r = [];
@@ -70,9 +92,10 @@ function navKeyboard(dir, page = 0, recent = [], lang) {
     rows.push(r);
   }
   const ctl = [];
-  if (canGoUp(dir)) ctl.push({ text: t('proj.up', lang), callback_data: `nav:o:${tok(dirname(dir))}:0` });
+  if (canGoUp(dir, root)) ctl.push({ text: t('proj.up', lang), callback_data: `nav:o:${tok(dirname(dir))}:0` });
   ctl.push({ text: t('proj.choose', lang), callback_data: `nav:s:${tok(dir)}`, style: 'success' });
   rows.push(ctl);
+  if (canCreateProject(st.userId)) rows.push([{ text: t('proj.new', lang), callback_data: `nav:c:${tok(dir)}` }]);
   return { inline_keyboard: rows };
 }
 
@@ -84,8 +107,10 @@ async function selectProject(st, p, messageId) {
     messageId
       ? tg('editMessageText', { chat_id: chatId, message_id: messageId, text, ...HTML, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text, HTML))
       : say(st.to, text, HTML);
-  const real = insideRoot(p);
-  if (!real) return reply(ROOT ? th('proj.unavailableRoot', lang, { root: hCode(ROOT) }) : th('proj.notFound', lang));
+  const root = rootOf(st.userId);
+  const real = insideRoot(p, root);
+  // сотруднику с личным пространством путь корня на сервере не показываем
+  if (!real) return reply(!root ? th('proj.notFound', lang) : isPersonalRoot(root) ? th('proj.unavailableMine', lang) : th('proj.unavailableRoot', lang, { root: hCode(root) }));
   if (topicsOn(st.userId)) {
     // режим «диалоги»: тема закреплена за своим проектом — в теме выбор проекта только показывает его темы
     // и предлагает новый диалог в нём; в General проект переключается, как раньше, и показываются темы проекта
@@ -98,25 +123,28 @@ async function selectProject(st, p, messageId) {
     return showProjectTopics(st, real, { messageId });
   }
   if (st.busy) return reply(th('busy.stop', lang));
-  if (samePath(real, st.project)) return reply(th('proj.same', lang, { p: hCode(showPath(real, lang)) }));
+  if (samePath(real, st.project)) return reply(th('proj.same', lang, { p: hCode(pathFor(st, real, lang)) }));
   saveProject(st, real);
   endAgent(st, 'project');
   log('проект переключён:', st.userId, real);
-  return reply(th('proj.set', lang, { p: hCode(showPath(real, lang)) }));
+  return reply(th('proj.set', lang, { p: hCode(pathFor(st, real, lang)) }));
 }
 
 export async function handleProject(st, arg) {
   const lang = langOf(st.userId);
   const q = (arg || '').trim();
+  const root = rootOf(st.userId);
   if (!q) {
-    const start = navStart(st.project);
+    // проект мог оказаться недоступным (папку удалили, на её месте ссылка) — тогда навигация начинается с корня
+    const from = navStart(st.project, root);
+    const start = insideRoot(from, root) ?? root ?? from;
     const recent = recentProjects(st);
     const text = navText(st, start, lang) + (recent.length ? `\n\n<i>${th('proj.recentLegend', lang)}</i>` : '');
-    return tg('sendMessage', { ...dest(st.to), text, ...HTML, reply_markup: navKeyboard(start, 0, recent, lang) }).catch((e) => log('project:', e.message));
+    return tg('sendMessage', { ...dest(st.to), text, ...HTML, reply_markup: navKeyboard(st, start, 0, recent, lang) }).catch((e) => log('project:', e.message));
   }
-  const direct = resolveAsPath(q); // запрос может быть путём: абсолютным, «~/…» или от корня (без корня — от домашней папки)
+  const direct = resolveAsPath(q, root); // запрос может быть путём: абсолютным, «~/…» или от корня (без корня — от домашней папки)
   if (direct) return selectProject(st, direct);
-  const { results, truncated } = await findDirs(q);
+  const { results, truncated } = await findDirs(q, root ? { base: root } : {});
   if (!results.length) return say(st.to, th('proj.none', lang, { q }), HTML);
   if (results.length === 1) return selectProject(st, results[0]);
   const note = hRaw(truncated ? `\n<i>${th('proj.moreResults', lang)}</i>` : '');
@@ -124,7 +152,7 @@ export async function handleProject(st, arg) {
     ...dest(st.to),
     text: th('proj.found', lang, { n: results.length, note }),
     ...HTML,
-    reply_markup: { inline_keyboard: results.map((r) => [{ text: `📁 ${showPath(r, lang)}`, callback_data: `nav:s:${tok(r)}` }]) },
+    reply_markup: { inline_keyboard: results.map((r) => [{ text: `📁 ${pathFor(st, r, lang)}`, callback_data: `nav:s:${tok(r)}` }]) },
   }).catch((e) => log('project:', e.message));
 }
 
@@ -135,19 +163,78 @@ export async function onNavCallback(st, cb) {
   const lang = langOf(st.userId);
   const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
   if (action === 'n') return ack();
+  if (action === 'x') {
+    // «Отмена» под просьбой прислать название нового проекта
+    st.pendingInput = null;
+    await ack();
+    return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: th('proj.newCancelled', lang), ...HTML, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+  }
+  // токены путей общие для всех пользователей, поэтому путь из кнопки каждый раз проверяется по корню нажавшего
+  const root = rootOf(st.userId);
   const p = pathByTok.get(Number(tokStr));
   if (!p) return ack(t('proj.stale', lang));
   if (action === 'o') {
-    const dir = insideRoot(p);
+    const dir = insideRoot(p, root);
     if (!dir) return ack(t('proj.noFolder', lang));
     await ack();
-    return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: navText(st, dir, lang), ...HTML, reply_markup: navKeyboard(dir, Number(pageStr) || 0, [], lang) }).catch((e) => log('nav:', e.message));
+    return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: navText(st, dir, lang), ...HTML, reply_markup: navKeyboard(st, dir, Number(pageStr) || 0, [], lang) }).catch((e) => log('nav:', e.message));
+  }
+  if (action === 'c') {
+    const dir = canCreateProject(st.userId) ? insideRoot(p, root) : null;
+    if (!dir) return ack(t('proj.noFolder', lang));
+    if (st.busy) return ack(t('busy.stop', lang));
+    await ack();
+    st.pendingInput = { kind: 'newProject', dir, at: Date.now() };
+    return say(st.to, th('proj.newAsk', lang, { dir: hCode(pathFor(st, dir, lang)) }), { ...HTML, reply_markup: cancelMarkup(lang) });
   }
   if (action === 's') {
     if (st.busy) return ack(t('busy.stop', lang));
     await ack();
     return selectProject(st, p, messageId);
   }
+}
+
+// ---- новый проект: кнопка «Новый проект» → бот ждёт название папки следующим сообщением ----
+
+/** Сколько бот ждёт название папки нового проекта; позже текст снова считается запросом агенту. */
+export const NEW_PROJECT_WAIT_MS = 10 * 60_000;
+
+const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'nav:x' }]] });
+
+/**
+ * Текст пользователя, когда бот ждёт название папки нового проекта (st.pendingInput): создаёт папку и выбирает её
+ * проектом. Имя не подходит — просит другое, ожидание остаётся.
+ * @returns {Promise<boolean>} true — текст был названием (агенту его не отправляем)
+ */
+export async function onProjectNameInput(st, text, now = Date.now()) {
+  const wait = st.pendingInput;
+  if (wait?.kind !== 'newProject') return false;
+  if (now - wait.at > NEW_PROJECT_WAIT_MS) {
+    st.pendingInput = null;
+    return false;
+  }
+  const lang = langOf(st.userId);
+  if (!folderName(text)) {
+    await say(st.to, th('proj.newBad', lang), { ...HTML, reply_markup: cancelMarkup(lang) });
+    return true;
+  }
+  st.pendingInput = null;
+  let dir;
+  try {
+    // право и место проверяются заново: за время ожидания они могли измениться
+    dir = canCreateProject(st.userId) ? createDir(wait.dir, text, rootOf(st.userId)) : null;
+  } catch (e) {
+    log('создание папки проекта:', e.message, '| пользователь', st.userId);
+    await say(st.to, th('proj.newFail', lang, { msg: errText(e, lang) }), HTML);
+    return true;
+  }
+  if (!dir) {
+    await say(st.to, th('proj.noFolder', lang), HTML);
+    return true;
+  }
+  log('папка проекта создана:', st.userId, dir);
+  await selectProject(st, dir);
+  return true;
 }
 
 // ---- темы проекта (режим «диалоги»): список с кнопками-ссылками на темы, новый диалог в проекте, уборка списка ----
@@ -167,7 +254,7 @@ export function projectTopicsView(st, project, { page = 0, cleanup = false } = {
   const p = tok(project);
   const { items, total } = db.listTopics(st.userId, project, TOPICS_PAGE, page * TOPICS_PAGE);
   const pages = Math.max(1, Math.ceil(total / TOPICS_PAGE));
-  const head = th(st.topic ? 'tpl.headTopic' : 'tpl.headGeneral', lang, { p: hCode(showPath(project, lang)) });
+  const head = th(st.topic ? 'tpl.headTopic' : 'tpl.headGeneral', lang, { p: hCode(pathFor(st, project, lang)) });
   const body = !total ? th('tpl.none', lang) : cleanup ? th('tpl.cleanupHint', lang) : th('tpl.list', lang, { n: total });
   const label = (x) => [...`${x.name || t('tpl.unnamed', lang)} · ${shortDate(x.updated_at, lang)}`].slice(0, 60).join('');
   const rows = items.map((x) => {
@@ -204,7 +291,9 @@ export async function onTopicListCallback(st, cb) {
   const [, action, tokStr, a3, a4] = (cb.data || '').split(':');
   const lang = langOf(st.userId);
   const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
-  const project = pathByTok.get(Number(tokStr));
+  // путь из кнопки проверяется по корню нажавшего: токены путей общие для всех пользователей
+  const known = pathByTok.get(Number(tokStr));
+  const project = known ? insideRoot(known, rootOf(st.userId)) : null;
   if (!project) return ack(t('proj.stale', lang));
   const edit = (v) => tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, ...HTML, reply_markup: v.markup }).catch((e) => log('темы проекта:', e.message));
   if (action === 'n') {

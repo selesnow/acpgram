@@ -118,6 +118,50 @@ test('pushRecent: прежний проект — первым, без теку�
   assert.deepEqual(P.pushRecent([null, 5, '/q'], null, '/x'), ['/q'], 'мусор из базы отбрасывается');
 });
 
+test('userRoot: личная папка сотрудника в корне; администратору и без личных пространств — общий корень', () => {
+  assert.equal(P.USER_WORKSPACES, false, 'по умолчанию выключено');
+  assert.equal(P.userRoot(55), root, 'режим выключен — общий корень');
+  assert.equal(P.userRoot(55, { personal: true, admin: true }), root);
+  assert.equal(P.userRoot(55, { personal: true, root: null }), null, 'без корня личных папок нет');
+  const mine = P.userRoot(55, { personal: true });
+  assert.equal(mine, join(root, '55'));
+  assert.equal(P.insideRoot(mine, mine), mine, 'папка создана');
+  assert.equal(P.insideRoot(join(root, 'a'), mine), null, 'соседняя папка корня — вне личного пространства');
+  assert.equal(P.insideRoot(root, mine), null);
+  for (const bad of [0, -5, 1.5, '55', null, NaN]) assert.throws(() => P.userRoot(bad, { personal: true }), /id пользователя/, String(bad));
+  // на месте личной папки файл: корень остаётся тем же путём, но ни одна папка проверку не проходит
+  writeFileSync(join(root, '56'), 'x');
+  assert.equal(P.insideRoot(P.userRoot(56, { personal: true }), join(root, '56')), null);
+  rmSync(join(root, '55'), { recursive: true });
+  rmSync(join(root, '56'));
+});
+
+test('display: личное пространство показывается названием, а не путём на сервере', () => {
+  const mine = join(root, 'a');
+  assert.equal(P.isPersonalRoot(mine), true);
+  assert.equal(P.isPersonalRoot(root), false);
+  assert.equal(P.isPersonalRoot(null), false);
+  assert.equal(P.showPath(mine, 'ru', mine), 'Моё пространство');
+  assert.equal(P.showPath(join(mine, 'b'), 'uk', mine), 'b');
+  assert.equal(P.showPath(mine, 'ru'), 'a', 'от общего корня — как раньше');
+});
+
+test('folderName и createDir: имя новой папки проекта и её создание только внутри корня', () => {
+  assert.equal(P.folderName('  Мой  сайт-1_v2 '), 'Мой сайт-1_v2');
+  for (const bad of ['', '   ', 'a/b', String.raw`a\b`, '../x', '.hidden', 'x.', 'con', 'NUL.txt', 'node_modules', 'a:b', 'a*b', 'x'.repeat(P.FOLDER_NAME_MAX + 1)]) {
+    assert.equal(P.folderName(bad), null, JSON.stringify(bad));
+  }
+  assert.equal(P.folderName('x'.repeat(P.FOLDER_NAME_MAX)), 'x'.repeat(P.FOLDER_NAME_MAX));
+
+  const mine = join(root, 'a');
+  assert.equal(P.createDir(mine, 'new', mine), join(mine, 'new'));
+  assert.equal(P.createDir(mine, 'new', mine), join(mine, 'new'), 'уже есть — не ошибка');
+  assert.equal(P.createDir(join(base, 'outside'), 'x', mine), null, 'вне корня не создаётся');
+  assert.equal(P.createDir(mine, '../x', mine), null);
+  assert.equal(P.insideRoot(join(base, 'outside', 'x'), null), null, 'папка вне корня не появилась');
+  rmSync(join(mine, 'new'), { recursive: true });
+});
+
 test('findDirs: уступает циклу событий и останавливается на maxVisited', async () => {
   let ticks = 0;
   const timer = setInterval(() => ticks++, 0);

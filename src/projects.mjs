@@ -1,8 +1,10 @@
 // Выбор проекта (рабочей папки агента): пути, список подпапок, поиск.
-// Два режима:
+// Три режима:
 // - PROJECTS_ROOT задан (командный сервер): проект — только папка внутри корня, выход за него запрещён;
+// - PROJECTS_ROOT и USER_WORKSPACES=1 (личные пространства): у каждого сотрудника свой корень — папка
+//   <корень>/<Telegram ID>; чужие папки ему не видны и недоступны, администратор видит весь корень;
 // - PROJECTS_ROOT не задан (личная установка): проект — любая существующая папка, по умолчанию домашняя.
-import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANG, t } from './i18n.mjs';
@@ -52,6 +54,42 @@ export const ROOT = (() => {
 /** Папка по умолчанию для нового пользователя: корень проектов, а без него — домашняя папка. */
 export const DEFAULT_DIR = ROOT ?? HOME;
 
+/**
+ * Личные пространства (USER_WORKSPACES=1): корень каждого сотрудника — его папка внутри корня проектов.
+ * Без PROJECTS_ROOT режим невозможен (папкам негде лежать) — бот не запускается.
+ */
+export const USER_WORKSPACES = (() => {
+  if (process.env.USER_WORKSPACES?.trim() !== '1') return false;
+  if (!ROOT) {
+    console.error('USER_WORKSPACES=1: задайте PROJECTS_ROOT — в этой папке создаются личные папки сотрудников');
+    process.exit(1);
+  }
+  return true;
+})();
+
+/**
+ * Корень пользователя: внутри него он выбирает проекты. Администратору и без личных пространств — общий корень
+ * (null в режиме без корня). С личными пространствами сотруднику — папка <корень>/<id>, создаётся при первом обращении.
+ * Путь не разрешается через ссылки намеренно: если на месте папки окажется ссылка наружу (её мог создать сам агент),
+ * ни одна проверка insideRoot с таким корнем не пройдёт — доступ закрывается, а не расширяется.
+ * @param {number} userId Telegram ID
+ * @param {{admin?: boolean, root?: string|null, personal?: boolean}} [o]
+ */
+export function userRoot(userId, { admin = false, root = ROOT, personal = USER_WORKSPACES } = {}) {
+  if (!root || !personal || admin) return root;
+  if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error(`userRoot: некорректный id пользователя: ${userId}`);
+  const dir = join(root, String(userId));
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    /* папку создать нельзя (на её месте файл, нет прав): проверки путей не пройдут, проект выбрать не удастся */
+  }
+  return dir;
+}
+
+/** Корень — личное пространство сотрудника, а не общий корень проектов. */
+export const isPersonalRoot = (root, base = ROOT) => Boolean(base && root && !samePath(root, base));
+
 // служебные и тяжёлые папки в навигации и поиске не показываем
 const EXCLUDE = new Set(['node_modules', 'renv', '.git', '__pycache__', '$recycle.bin', 'system volume information', '.venv', 'venv', 'packrat', 'site-packages']);
 
@@ -90,15 +128,16 @@ export function insideRoot(p, root = ROOT) {
 
 /**
  * Человекочитаемый путь. С корнем — относительно корня; без корня — полный путь, домашняя папка сокращается до «~».
+ * personal — корень является личным пространством сотрудника: вместо пути на сервере показывается «Моё пространство».
  */
-export function display(p, root = ROOT, home = HOME, lang = DEFAULT_LANG) {
-  if (root) return samePath(p, root) ? t('proj.root', lang, { root }) : relative(root, p);
+export function display(p, root = ROOT, home = HOME, lang = DEFAULT_LANG, personal = false) {
+  if (root) return samePath(p, root) ? (personal ? t('proj.myRoot', lang) : t('proj.root', lang, { root })) : relative(root, p);
   if (samePath(p, home)) return '~';
   return isWithin(p, home) ? `~${sep}${relative(home, p)}` : p;
 }
 
-/** Путь проекта для пользователя на его языке (подпись корня). */
-export const showPath = (p, lang = DEFAULT_LANG) => display(p, ROOT, HOME, lang);
+/** Путь проекта для пользователя на его языке, относительно его корня (state.rootOf); без корня — общий. */
+export const showPath = (p, lang = DEFAULT_LANG, root = ROOT) => display(p, root, HOME, lang, isPersonalRoot(root));
 
 /**
  * Список недавних проектов после смены проекта prev → next: прежний проект — в начало, новый (текущий) из списка
@@ -137,6 +176,40 @@ export function listDirs(dir) {
 export function resolveAsPath(query, root = ROOT, home = HOME) {
   const q = expandHome(query.trim().replace(/^["']|["']$/g, ''));
   return insideRoot(isAbsolute(q) ? q : resolve(root ?? home, q), root);
+}
+
+/** Наибольшая длина имени новой папки проекта. */
+export const FOLDER_NAME_MAX = 64;
+
+/**
+ * Имя новой папки проекта из текста пользователя: без путей, управляющих и запрещённых в Windows символов,
+ * зарезервированных и служебных имён, не скрытое. Подходит — возвращает имя (пробелы по краям убраны), иначе null.
+ */
+export function folderName(input) {
+  const name = String(input ?? '').trim().replace(/\s+/g, ' ');
+  if (!name || [...name].length > FOLDER_NAME_MAX) return null;
+  // eslint-disable-next-line no-control-regex -- управляющие символы в имени папки недопустимы
+  if (/[\u0000-\u001f<>:"/\\|?*]/.test(name)) return null;
+  if (name.startsWith('.') || /[. ]$/.test(name)) return null;
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(name)) return null;
+  return EXCLUDE.has(lc(name)) ? null : name;
+}
+
+/**
+ * Создаёт папку проекта `name` в папке `parent` (обе проверяются: parent — внутри корня, name — folderName).
+ * Уже есть — не ошибка. Возвращает настоящий путь папки или null, если имя или место не подходят.
+ */
+export function createDir(parent, name, root = ROOT) {
+  const base = insideRoot(parent, root);
+  const safe = folderName(name);
+  if (!base || !safe) return null;
+  const dir = join(base, safe);
+  try {
+    mkdirSync(dir);
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  }
+  return insideRoot(dir, root);
 }
 
 const YIELD_EVERY = 200; // через столько просмотренных папок поиск уступает циклу событий

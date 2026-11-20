@@ -1,11 +1,10 @@
 // Команда /sessions: возврат к прошлой сессии в текущем проекте (сессия возобновляется в том движке, где была создана).
 // Экран — виджет с карточками сессий (widgets.mjs); если виджеты выключены или не поместились — сообщение с кнопками.
 import { db, langOf, log, say } from './ctx.mjs';
-import { showPath } from './projects.mjs';
 import { canUseEngine } from './access.mjs';
 import { ENGINES, getEngine, isAvailable } from './engines.mjs';
 import { LOCALES, errText, t } from './i18n.mjs';
-import { ClosedError, LimitError, endAgent, engineOf, ensureAgent, saveEngine } from './state.mjs';
+import { ClosedError, LimitError, ProjectError, endAgent, engineOf, ensureAgent, saveEngine, userPath } from './state.mjs';
 import { dest, escHtml, tg } from './telegram.mjs';
 import { drainQueue } from './turn.mjs';
 import { trunc } from './ui.mjs';
@@ -38,7 +37,7 @@ export function sessionsWidgetHtml({ list, current = null, project, lang }) {
 /** @param {{classic?: boolean}} [opts] classic — обычный список с кнопками (кнопка «Обычное меню» под виджетом) */
 export async function handleSessions(st, { classic = false } = {}) {
   const lang = langOf(st.userId);
-  const project = showPath(st.project, lang);
+  const project = userPath(st.userId, st.project, lang);
   const list = db.listSessions(st.userId, st.project, classic ? LIST_LIMIT : WIDGET_LIMIT);
   if (!list.length) return say(st.to, t('ses.none', lang, { p: project }));
   const current = st.agent?.sessionId ?? null;
@@ -103,7 +102,7 @@ export async function resumeSession(st, item, engine, report) {
     log('ошибка возобновления сессии:', e.message);
     if (switched) saveEngine(st, prevEngine); // не удалось — движок пользователя не меняем
     await report(
-      e instanceof LimitError ? e.message
+      e instanceof LimitError || e instanceof ProjectError ? e.message
       : e instanceof ClosedError ? t('ses.cancelled', lang)
       : t('ses.failed', lang, { msg: errText(e, lang) }),
     );

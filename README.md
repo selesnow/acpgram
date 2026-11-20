@@ -50,6 +50,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 - **Dialogs mode (topics)** — if topics in private chats are turned on for the bot (@BotFather), each topic of the chat is a separate dialog with the agent, with its own project, engine and history. You can work in several topics at once and come back to a topic later to continue where you left off: the agent session resumes by itself. `/new` creates a new topic, and the agent names it after the first answer (with a short project name in front); General works as a regular dialog, and `/project` there shows the dialogs of the chosen project as buttons that open the topic. A command sent from the chat list rather than from inside a topic (Telegram creates a new topic for such a message by itself) runs in General, and the empty topic is deleted. A topic stays in its own project. Everyone picks the mode with `/topics`: "Dialogs" or "One chat". A teammate runs up to `MAX_AGENTS_PER_USER` agents at once (2), the admin up to `ADMIN_MAX_AGENTS` (4); when there is no room, the user's own oldest idle agent is unloaded, and that dialog continues when the user comes back to it.
 - **Language** — the bot talks to each user in their Telegram language (`ru`, `uk` or `en`; any other falls back to `DEFAULT_LANG`, English by default). `/language` changes it and takes priority over the Telegram language. The `acpgram` terminal commands (setup wizard, service, update, help) speak the system language: Russian, Ukrainian, otherwise English; on Windows the system UI language is used, not the regional format.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
+- **Personal workspaces** — with `USER_WORKSPACES=1` each teammate gets their own folder inside the projects root and chooses projects only there; a new project is created with the "➕ New project" button.
 - **Sessions** — `/sessions` resumes a previous conversation (in the engine it was created in), even after a restart; `/new` starts fresh; `/close` unloads the agent process.
 - **Team access** — invite links and access requests; per-user access levels, engines and model restrictions; `/active` shows who is working and lets the admin end any session.
 - **Audit log** — SQLite database with sessions, requests, tool calls, permissions, answers, token usage and cost.
@@ -206,6 +207,19 @@ OpenCode has only two modes (`plan` and `build`); what the agent may do is set b
 
 New teammates get only the default engine; the admin grants other engines and can restrict models per user and per engine. At most `MAX_AGENTS` (3) teammate agents run at once across all engines (the admin is not counted); idle sessions close after `IDLE_MINUTES` (30).
 
+### Personal workspaces
+
+By default all teammates browse the same projects root. `USER_WORKSPACES=1` (together with `PROJECTS_ROOT`) gives each teammate a folder of their own: `<root>/<Telegram ID>`. The folder is created when the teammate first talks to the bot.
+
+- A teammate chooses projects only inside their folder: other folders are not shown in `/project`, are not found by search and cannot be selected by path. Going above their own folder is not possible.
+- Paths are shown relative to that folder ("My workspace", `site`, `site/landing`) — the location on the server is not revealed.
+- The "➕ New project" button in `/project` asks for a name and creates a folder in the currently open place of the workspace. The administrator has the button anywhere in the root.
+- The administrator sees the whole root; personal folders in `/project` are labelled with teammates' names (`123456 · @nick`), and a teammate's folder is shown on their card in `/users`.
+- Projects a teammate selected before the mode was turned on and that lie outside their folder are reset to their workspace. The bot never moves or deletes the folders themselves, including when access is revoked.
+- Before every agent start the bot checks that the project folder exists and lies inside the teammate's workspace; otherwise the agent is not started.
+
+Personal workspaces limit which working folder can be chosen in the bot. They do not isolate the agent process itself — see the note below.
+
 > An agent mode limits what the agent does, but it is **not a sandbox**: the agent runs with the rights of the account the bot runs under. The project folder is where it starts, not a jail. All users share the API keys and quotas. The agent process does not get the bot token, and of the API keys only those of its own engine (Claude Code — `ANTHROPIC_API_KEY`, Codex — `OPENAI_API_KEY`, Gemini CLI and Antigravity — the Google keys, OpenCode — all of them), but the agent can still read files on disk, including the bot's `.env`. Give the "Full" level (Claude Code `bypassPermissions`) deliberately.
 
 ## Configuration (`.env`)
@@ -215,6 +229,7 @@ New teammates get only the default engine; the admin grants other engines and ca
 | `TELEGRAM_BOT_TOKEN` | yes | bot token |
 | `ALLOWED_USER_ID` | yes | Telegram ID of the main admin |
 | `PROJECTS_ROOT` | no | projects root: projects can be chosen only inside it (team server). Without it any folder on the machine can be chosen, the home folder by default (personal install) |
+| `USER_WORKSPACES` | no | `1` — personal workspaces: each teammate chooses projects only inside their own folder `<root>/<Telegram ID>`, the administrator sees the whole root. Requires `PROJECTS_ROOT`; the bot does not start without it |
 | `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex` or `opencode`; the bot does not start if this engine is not installed |
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
 | `ACPGRAM_LANG` | no | language of the `acpgram` terminal commands: `ru`, `uk` or `en`. Usually not needed: the language comes from the system (for Docker and CI, where the system has none) |

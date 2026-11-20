@@ -2,8 +2,7 @@
 // новая тема вместо сброса текущего диалога.
 import { botInfo, db, langOf, log, say } from './ctx.mjs';
 import { errText, t } from './i18n.mjs';
-import { showPath } from './projects.mjs';
-import { engineOf, setTopicsMode, statesOf, stopUser, topicsOn, topicsSupport } from './state.mjs';
+import { engineOf, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { createTopic, topicLink, topicName } from './topics.mjs';
 
@@ -70,7 +69,7 @@ export async function onTopicsCallback(st, cb) {
  */
 export async function newTopic(st, { project = st.project } = {}) {
   const lang = langOf(st.userId);
-  const name = topicName(project, t('topics.newName', lang));
+  const name = topicName(topicProject(st.userId, project, lang), t('topics.newName', lang));
   let threadId;
   try {
     threadId = await createTopic(st.chatId, name);
@@ -81,7 +80,7 @@ export async function newTopic(st, { project = st.project } = {}) {
   const engine = engineOf(st);
   db.saveTopic(st.userId, threadId, { name, named: false, project, engine: engine.id });
   log('тема создана', threadId, '| пользователь', st.userId);
-  await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: showPath(project, lang) }));
+  await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: userPath(st.userId, project, lang) }));
   const link = topicLink(botInfo.username, threadId);
   return say(st.to, t('topics.created', lang), link ? { reply_markup: { inline_keyboard: [[{ text: t('topics.open', lang), url: link }]] } } : {});
 }

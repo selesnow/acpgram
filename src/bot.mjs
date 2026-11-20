@@ -8,10 +8,10 @@ import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
-import { HOME, ROOT, showPath } from './projects.mjs';
-import { handleProject, onNavCallback, onTopicListCallback } from './projectsUi.mjs';
+import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
+import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
-import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport } from './state.mjs';
+import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
 import { deleteTopic, isAutoTopicCommand, topicInfoOf } from './topics.mjs';
 import { setSyncKill } from './acp.mjs';
@@ -48,7 +48,7 @@ const sendStart = (st) => {
   const lang = langOf(st.userId);
   const admin = isAdmin(st.userId);
   const topics = topicsSupport.enabled ? (topicsOn(st.userId) ? 'on' : 'off') : null; // режим «диалоги», если у бота есть темы
-  return sendRich(st.to, startView({ level: levelLabel(st.userId), project: showPath(st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
+  return sendRich(st.to, startView({ level: levelLabel(st.userId), project: userPath(st.userId, st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
 };
 
 /** Кнопка «⏹ Остановить» под сообщениями «запрос ещё выполняется» — вместо набора /stop. */
@@ -101,7 +101,7 @@ function newCommand(st) {
   if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
   if (st.busy) return say(st.to, t('busy.stop', lang), { reply_markup: stopMarkup(lang) });
   endAgent(st, 'new');
-  return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: showPath(st.project, lang) }));
+  return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: userPath(st.userId, st.project, lang) }));
 }
 
 /**
@@ -145,10 +145,13 @@ async function handleText(st, text, { quote = null } = {}) {
   const name = m?.[1]?.toLowerCase();
   const command = name ? COMMANDS.find((c) => c.name === name || c.aliases?.includes(name)) : null;
   const lang = langOf(st.userId);
+  if (name) st.pendingInput = null; // любая команда отменяет ожидание названия нового проекта
   if (command) {
     if (command.admin && !isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
     return command.run(st, m[2]);
   }
+  // бот ждёт название папки нового проекта (кнопка «Новый проект» в /project): этот текст — оно, а не запрос агенту
+  if (await onProjectNameInput(st, text)) return;
   if (name && !st.agent?.commands?.has(name)) {
     const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
     if (guess) {
@@ -391,6 +394,7 @@ async function main() {
       ? `корень проектов: ${ROOT} (проект — только папка внутри корня)`
       : `⚠️ PROJECTS_ROOT не задан: проектом может быть любая папка на машине, по умолчанию домашняя (${HOME})`,
   );
+  if (USER_WORKSPACES) log('личные пространства включены: у каждого сотрудника своя папка в корне проектов (имя — его Telegram ID), администратор видит весь корень');
   // списки моделей движков — в фоне, запуск бота не ждёт; свежие (моложе суток, та же версия движка) не запрашиваются;
   // раз в сутки — обновление, чтобы новые модели появлялись и без перезапуска бота
   const catalogs = () => refreshCatalogs().catch((e) => log('каталоги моделей:', e.message));

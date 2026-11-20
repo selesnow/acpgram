@@ -40,6 +40,7 @@ const LAYOUT = [
   ['TELEGRAM_BOT_TOKEN', 'env.c.token'],
   ['ALLOWED_USER_ID', 'env.c.admin'],
   ['PROJECTS_ROOT', 'env.c.root'],
+  ['USER_WORKSPACES', 'env.c.workspaces'],
   ['DEFAULT_ENGINE', 'env.c.engine'],
   ['GEMINI_COMMAND', null],
   ['CLAUDE_COMMAND', null],
@@ -329,6 +330,14 @@ export async function runSetup({ fromStart = false } = {}) {
         warn(e.message);
       }
     }
+    // личные пространства сотрудников — только внутри корня проектов
+    if (env.PROJECTS_ROOT) {
+      console.log(tc('setup.wsNote'));
+      if (await p.yes(tc('setup.wsAsk'), env.USER_WORKSPACES === '1')) {
+        env.USER_WORKSPACES = '1';
+        ok(tc('setup.wsOn'));
+      } else delete env.USER_WORKSPACES;
+    } else delete env.USER_WORKSPACES;
 
     // 4. движки
     step(4, tc('setup.s4'));
