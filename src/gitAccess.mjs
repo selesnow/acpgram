@@ -91,6 +91,30 @@ export function agentGitEnv(userId, { agentAuth = GIT_AGENT_AUTH, base = process
   return agentAuth ? { ...env, GIT_TERMINAL_PROMPT: '0' } : env;
 }
 
+const DAY_MS = 24 * 3600_000;
+
+/**
+ * Кому пора напомнить об истекающем токене: за 7 дней, за день и когда срок вышел. Каждое напоминание — один раз
+ * (отметка в настройках: срок токена и ступень); новый токен с другим сроком начинает отсчёт заново.
+ * @returns {{userId: number, host: object, account: object, stage: '7'|'1'|'expired', days: number}[]}
+ */
+export function tokenReminders(now = Date.now()) {
+  const out = [];
+  for (const account of db.allGitAccounts()) {
+    const host = account.expires_at ? findHost(account.host) : null;
+    if (!host) continue;
+    const days = Math.ceil((Date.parse(account.expires_at) - now) / DAY_MS);
+    const stage = days <= 0 ? 'expired' : days <= 1 ? '1' : days <= 7 ? '7' : null;
+    if (!stage) continue;
+    const key = `gitexp:${account.user_id}:${account.host}`;
+    const mark = `${account.expires_at}|${stage}`;
+    if (db.getSetting(key) === mark) continue;
+    db.setSetting(key, mark);
+    out.push({ userId: account.user_id, host, account, stage, days });
+  }
+  return out;
+}
+
 /**
  * Подсказка агенту о git (служебный текст — на английском). Без входа: не пытаться получать и отправлять, а направлять
  * пользователя в /git. Со входом (GIT_AGENT_AUTH): работать можно, показывать вход нельзя. Нет git на сервере — null.
@@ -107,6 +131,7 @@ export function gitNote(userId, { agentAuth = GIT_AGENT_AUTH } = {}) {
   return (
     '[AcpGram] Git: use git locally as usual (status, diff, add, commit, branches, merge). You have no credentials for the remote: ' +
     'do not try to fetch, pull, push or clone private repositories and do not ask the user for tokens or passwords. ' +
-    'When changes must be received or sent, tell the user to use the /git command of this bot (buttons to pull and push). Never commit files with secrets (.env, keys).'
+    'When changes must be sent to or received from the server, put [[git:push]] or [[git:pull]] on its own line at the end of your reply: ' +
+    'the bot then shows the user a button that does it (commit first — the button only pushes). The user can also open /git. Never commit files with secrets (.env, keys).'
   );
 }

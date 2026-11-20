@@ -10,6 +10,8 @@ import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensur
 import { diffOf, parseTool } from './tools.mjs';
 import { lineDiff } from './diff.mjs';
 import { gitNote } from './gitAccess.mjs';
+import { extractGitMarks, stripGitMarks } from './gitMarks.mjs';
+import { offerGitActions } from './gitUi.mjs';
 import { ASK_NOTE, ASK_PLACEHOLDER, askChoice, extractAsks, placeAsks, stripAskMarks } from './asks.mjs';
 import { dest, tg, mediaIdsOf, sendFile, sendRich, sendRichDraft, sendThinkingDraft, escHtml } from './telegram.mjs';
 import { composeDraft, finalExtras, finalMessages, lastThoughtTitle, neutralizeTgTags, toolMeta, trunc } from './ui.mjs';
@@ -266,7 +268,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, plan, answer: stripAskMarks(stripTitle(stripSendMarks(neutralizeTgTags(clean(answer))))), elapsedMs: Date.now() - startedAt, lang });
+    const d = composeDraft({ thought, steps, plan, answer: stripAskMarks(stripGitMarks(stripTitle(stripSendMarks(neutralizeTgTags(clean(answer)))))), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;
@@ -383,7 +385,8 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   // метки [[send:путь]] (вне кода) → заглушки: на их место встанут сами файлы
   // теги <tg-button> в тексте агента обезвреживаются: кнопки бота рисует только сам бот (ui.mjs)
   const titled = extractTitle(neutralizeTgTags(clean(answer))); // строка с названием темы — в название, а не в ответ
-  const asked = extractAsks(titled.text); // метки [[ask: …]] → заглушки: на их место встанут кнопки быстрого ответа
+  const gitted = extractGitMarks(titled.text); // метки [[git:push]] / [[git:pull]] → кнопки под ответом: вход на сервер есть только у бота
+  const asked = extractAsks(gitted.text); // метки [[ask: …]] → заглушки: на их место встанут кнопки быстрого ответа
   const sent = extractSendMarks(asked.text, { placeholders: true });
   const answerText = sent.text.replace(FILE_PLACEHOLDER, '').replace(ASK_PLACEHOLDER, '').trim(); // ответ без файлов и кнопок: для базы и проверки «пустой ли»
   db.finishRequest(st.requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });
@@ -421,6 +424,8 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   const inAnswer = Object.keys(placed.media).length - loose.length;
   if (inAnswer > 0) log('файлы в ответе:', inAnswer, '| пользователь', st.userId);
   if (loose.length || placed.extra.length) await sendLooseFiles(st, [...loose, ...placed.extra], lang);
+  // агент попросил отправить или получить изменения: кнопка под ответом, без нажатия ничего не уходит
+  if (!limited && gitted.actions.length) await offerGitActions(st, gitted.actions).catch((e) => log('git: предложение агента:', e.message));
   if (naming && !limited && stopReason !== 'error') await nameTopic(st, titled.title || titleFromRequest(text || dbText));
   return drainQueue(st);
 }

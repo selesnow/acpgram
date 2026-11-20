@@ -2,8 +2,9 @@
 // Только чтение репозитория, кроме переключения и создания ветки. Команды запускает runGit (git.mjs) — с теми же
 // безопасными настройками и, при включённой песочнице, внутри неё.
 import { readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { GitError, runGit } from './git.mjs';
+import { samePath } from './projects.mjs';
 
 /** Сколько изменённых файлов показывать (в большом несобранном проекте их могут быть тысячи). */
 export const CHANGES_MAX = 300;
@@ -161,3 +162,46 @@ export async function switchBranch(cwd, branch, opts = {}) {
 
 /** Создаёт ветку от текущего коммита и переключается на неё (несохранённые изменения остаются в рабочей папке). */
 export const createBranch = (cwd, name, opts = {}) => runGit(['switch', '--quiet', '-c', name], { cwd, ...opts });
+
+/**
+ * Отменяет несохранённые изменения файлов (записи из changedFiles): изменённые и удалённые возвращаются к последнему
+ * коммиту, новые — удаляются. Действие необратимо; что отменять, решает вызывающий (секреты сюда не передаются).
+ * @returns {Promise<number>} сколько файлов обработано
+ */
+export async function discardFiles(cwd, files, opts = {}) {
+  if (!files.length) return 0;
+  const top = (await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts })).trim();
+  const at = { cwd: top, ...opts };
+  const paths = [...new Set(files.flatMap((f) => [f.path, f.from]).filter(Boolean))];
+  // какие пути есть в последнем коммите: их возвращаем, остальные (новые файлы) убираем
+  const tracked = new Set((await runGit(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...paths], at).catch(() => '')).split('\0').filter(Boolean));
+  const restore = paths.filter((p) => tracked.has(p));
+  const remove = paths.filter((p) => !tracked.has(p));
+  await runGit(['reset', '-q', '--', ...paths], at).catch(() => {}); // убрать из подготовленного к коммиту
+  if (restore.length) await runGit(['checkout', '-q', 'HEAD', '--', ...restore], at);
+  if (remove.length) await runGit(['clean', '-f', '-q', '--', ...remove], at);
+  return files.length;
+}
+
+/** Является ли сама папка cwd корнем репозитория (а не просто лежит внутри чужого, выше по дереву). */
+export async function isRepoRoot(cwd, opts = {}) {
+  const top = await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts }).then((s) => s.trim(), () => null);
+  return Boolean(top) && samePath(resolve(top), resolve(cwd));
+}
+
+/** Делает папку репозиторием с веткой main, если она им ещё не была (чужой репозиторий выше по дереву не трогается). */
+export async function ensureRepo(cwd, opts = {}) {
+  if (!(await isRepoRoot(cwd, opts))) await runGit(['init', '-q', '-b', 'main'], { cwd, ...opts });
+}
+
+/** Есть ли в репозитории хотя бы один коммит. */
+export const hasCommits = (cwd, opts = {}) => runGit(['rev-parse', '--verify', '-q', 'HEAD'], { cwd, ...opts }).then(() => true, () => false);
+
+/** Описание последнего коммита (первая строка) или пусто. */
+export const lastSubject = (cwd, opts = {}) => runGit(['log', '-1', '--format=%s'], { cwd, ...opts }).then((s) => s.trim(), () => '');
+
+/** Записывает адрес сервера (origin). Адрес — без входа: он передаётся отдельно, на время отправки. */
+export async function setRemote(cwd, url, opts = {}) {
+  const has = await runGit(['config', '--get', 'remote.origin.url'], { cwd, ...opts }).then((s) => s.trim(), () => '');
+  await runGit(has ? ['remote', 'set-url', 'origin', url] : ['remote', 'add', 'origin', url], { cwd, ...opts });
+}

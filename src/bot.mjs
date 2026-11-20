@@ -8,12 +8,12 @@ import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './a
 import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
-import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
+import { LANGS, LANG_CODES, LANG_PICK, LOCALES, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
 import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
 import { handleFiles, onFileInput, onFileUpload, onFilesCallback } from './filesUi.mjs';
 import { checkGit, gitCommand } from './git.mjs';
-import { GIT_AGENT_AUTH } from './gitAccess.mjs';
+import { GIT_AGENT_AUTH, tokenReminders } from './gitAccess.mjs';
 import { handleGit, onGitCallback, onGitInput } from './gitUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
@@ -482,6 +482,23 @@ async function main() {
   };
   sweep();
   setInterval(sweep, 24 * 3600_000).unref();
+  // токены доступа к Git истекают: владельцу аккаунта — напоминание за неделю, за день и по истечении
+  const remind = () => {
+    try {
+      for (const r of tokenReminders()) {
+        const lang = langOf(r.userId);
+        const date = new Date(r.account.expires_at).toLocaleDateString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', year: 'numeric' });
+        log('git: напоминание о токене:', r.userId, r.host.id, r.stage);
+        say(r.userId, t(r.stage === 'expired' ? 'git.exp.expired' : 'git.exp.soon', lang, { host: r.host.label, login: r.account.login, date, days: r.days }), {
+          reply_markup: { inline_keyboard: [[{ text: t('start.btn.git', lang), callback_data: 'ui:git' }]] },
+        });
+      }
+    } catch (e) {
+      log('напоминания о токенах git:', e.message);
+    }
+  };
+  remind();
+  setInterval(remind, 12 * 3600_000).unref();
   const admin = getState(ADMIN_ID, ADMIN_ID);
   log(`бот @${botInfo.username} запущен | администратор ${ADMIN_ID} | проект админа: ${admin.project} | сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length} | лимит агентов сотрудников: ${MAX_AGENTS} | простой: ${IDLE_MINUTES} мин | уровни: ${LEVEL_KEYS.join('/')}`);
 

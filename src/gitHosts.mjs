@@ -26,7 +26,7 @@ export function normalizeHostUrl(input) {
 const hostId = (kind, web) => `${kind}-${web.replace(/^https:\/\//, '')}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '').slice(0, 40);
 
 const githubHost = (id, label, web, api) => ({ id, kind: 'github', label, web, api, tokenUrl: `${web}/settings/tokens`, user: 'x-access-token', scopes: 'repo' });
-const gitlabHost = (id, label, web) => ({ id, kind: 'gitlab', label, web, api: `${web}/api/v4`, tokenUrl: `${web}/-/user_settings/personal_access_tokens`, user: 'oauth2', scopes: 'read_api, read_repository, write_repository' });
+const gitlabHost = (id, label, web) => ({ id, kind: 'gitlab', label, web, api: `${web}/api/v4`, tokenUrl: `${web}/-/user_settings/personal_access_tokens`, user: 'oauth2', scopes: 'api, read_repository, write_repository' });
 
 /**
  * Свой сервер: GitLab или GitHub Enterprise по адресу. name — название для кнопок (по умолчанию — имя сервера).
@@ -104,19 +104,38 @@ export class HostError extends Error {
   }
 }
 
-async function api(host, token, path, { fetchImpl = fetch } = {}) {
+/** Что сервис написал в ответе с ошибкой: у GitLab — message (строка, список или {поле: [причины]}), у GitHub — message и errors. */
+function errorDetail(data) {
+  const m = data?.message ?? data?.error_description ?? data?.error;
+  const flat = (v) => (v == null ? [] : typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(flat) : Object.entries(v).flatMap(([k, x]) => flat(x).map((s) => `${k} ${s}`)));
+  const extra = Array.isArray(data?.errors) ? data.errors.map((e) => (typeof e === 'string' ? e : e?.message || [e?.field, e?.code].filter(Boolean).join(' '))).filter(Boolean) : [];
+  return [...flat(m), ...extra].join('; ').slice(0, 300);
+}
+
+/**
+ * Запрос к API сервиса от имени владельца токена. body — объект: отправляется JSON методом POST (или method).
+ * Ошибки — HostError: 'auth' (401), 'forbidden' (403: токену не хватает прав), 'http' (с текстом сервиса), 'network'.
+ */
+export async function api(host, token, path, { fetchImpl = fetch, method = null, body = null } = {}) {
   const headers = host.kind === 'github'
     ? { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'acpgram' }
     : { 'private-token': token, accept: 'application/json', 'user-agent': 'acpgram' };
+  const init = { headers, signal: AbortSignal.timeout(TIMEOUT_MS) };
+  if (body) Object.assign(init, { method: method ?? 'POST', body: JSON.stringify(body), headers: { ...headers, 'content-type': 'application/json' } });
+  else if (method) init.method = method;
   let res;
   try {
-    res = await fetchImpl(`${host.api}${path}`, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    res = await fetchImpl(`${host.api}${path}`, init);
   } catch (e) {
     throw new HostError('network', `${host.label}: ${e.message}`);
   }
-  if (res.status === 401 || res.status === 403) throw new HostError('auth', `${host.label}: HTTP ${res.status}`, res.status);
-  if (!res.ok) throw new HostError('http', `${host.label}: HTTP ${res.status}`, res.status);
-  return { data: await res.json(), headers: res.headers };
+  if (res.status === 401) throw new HostError('auth', `${host.label}: HTTP 401`, 401);
+  if (!res.ok) {
+    const detail = errorDetail(await res.json().catch(() => null));
+    // 403 при чтении профиля — тоже «токен не подошёл»; при остальном — не хватает прав
+    throw new HostError(res.status === 403 ? 'forbidden' : 'http', `${host.label}: ${detail || `HTTP ${res.status}`}`, res.status);
+  }
+  return { data: res.status === 204 ? null : await res.json(), headers: res.headers };
 }
 
 const isoDate = (v) => {
@@ -158,8 +177,8 @@ export function missingScopes(host, scopes) {
   if (!Array.isArray(scopes)) return [];
   const has = (s) => scopes.includes(s);
   if (host.kind === 'github') return has('repo') || !scopes.length ? [] : ['repo']; // у fine-grained токенов список пуст
-  if (has('api')) return [];
-  return ['read_api', 'read_repository', 'write_repository'].filter((s) => !has(s));
+  // api — создание репозиториев и запросов на слияние; с ним работают и клонирование, и отправка
+  return has('api') ? [] : ['api'];
 }
 
 export const REPOS_PAGE = 10;

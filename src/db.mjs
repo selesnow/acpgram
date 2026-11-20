@@ -245,6 +245,7 @@ export function openDb(path = 'data/bot.db') {
     deleteTopic: db.prepare('DELETE FROM topics WHERE user_id = ? AND thread_id = ?'),
     getGitAccount: db.prepare('SELECT * FROM git_accounts WHERE user_id = ? AND host = ?'),
     listGitAccounts: db.prepare('SELECT * FROM git_accounts WHERE user_id = ? ORDER BY added_at'),
+    allGitAccounts: db.prepare('SELECT * FROM git_accounts'),
     saveGitAccount: db.prepare(
       `INSERT INTO git_accounts (user_id, host, login, name, email, token, expires_at, added_at) VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(user_id, host) DO UPDATE SET login = excluded.login, name = excluded.name, email = excluded.email,
@@ -326,6 +327,8 @@ export function openDb(path = 'data/bot.db') {
     // --- аккаунты Git ---
     getGitAccount: safe((userId, host) => q.getGitAccount.get(userId, host) ?? null),
     listGitAccounts: (userId) => safe(() => q.listGitAccounts.all(userId))() ?? [],
+    /** Аккаунты всех пользователей (для напоминаний об истекающих токенах). */
+    allGitAccounts: () => safe(() => q.allGitAccounts.all())() ?? [],
     /** Сохраняет аккаунт сервиса: {host, login, name, email, token, expiresAt}. Возвращает true, если записано. */
     saveGitAccount: (userId, a) =>
       safe(() => q.saveGitAccount.run(userId, a.host, a.login ?? null, a.name ?? null, a.email ?? null, a.token, a.expiresAt ?? null, now()).changes === 1)() ?? false,

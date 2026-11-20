@@ -123,7 +123,8 @@ test('API сервисов: профиль, права и срок токена,
   assert.deepEqual(H.missingScopes(github, ['repo']), []);
   assert.deepEqual(H.missingScopes(github, ['gist']), ['repo']);
   assert.deepEqual(H.missingScopes(github, []), [], 'у токенов с точечными правами список пуст — не предупреждаем');
-  assert.deepEqual(H.missingScopes(corp, ['read_api', 'read_repository']), ['write_repository']);
+  assert.deepEqual(H.missingScopes(corp, ['read_api', 'read_repository', 'write_repository']), ['api'], 'без api нельзя создать репозиторий и запрос на слияние');
+  assert.match(corp.scopes, /^api, /, 'бот сразу просит полный набор прав');
   assert.deepEqual(H.missingScopes(corp, ['api']), []);
   assert.deepEqual(H.missingScopes(corp, null), [], 'права неизвестны — не предупреждаем');
 
@@ -233,7 +234,7 @@ test('агент: автор коммитов — из аккаунта; вхо�
 
   G.setGitAvailable(true);
   assert.match(A.gitNote(BOB), /no credentials for the remote/);
-  assert.match(A.gitNote(BOB), /\/git command/);
+  assert.match(A.gitNote(BOB), /put \[\[git:push\]\] or \[\[git:pull\]\] on its own line/, 'отправку агент просит меткой — кнопку показывает бот');
   assert.match(A.gitNote(BOB, { agentAuth: true }), /Never print, echo or store these credentials/);
   assert.match(A.gitNote(ANN, { agentAuth: true }), /no credentials/, 'без аккаунта входа нет и в режиме GIT_AGENT_AUTH');
   G.setGitAvailable(false);
@@ -288,17 +289,18 @@ test('/git: клонирование кнопкой, «Сохранить и о�
   assert.match(texts(list), /Репозитории GitHub\. Выберите, какой клонировать в <code>Моё пространство<\/code>/);
   assert.deepEqual(buttons(list).filter((b) => b.callback_data.startsWith('gt:k:')).map((b) => b.text), ['🔒 acme/app', '📂 evil/x']);
 
-  await U.onGitCallback(ann, press(ANN, 'gt:k:1')); // адрес не своего сервиса: токен туда не понесём
+  const repoBtn = (name) => buttons(list).find((b) => b.text.endsWith(name)).callback_data;
+  await U.onGitCallback(ann, press(ANN, repoBtn('evil/x'))); // адрес не своего сервиса: токен туда не понесём
   assert.equal(existsSync(join(ws, 'x')), false);
   take();
-  await U.onGitCallback(ann, press(ANN, 'gt:k:0'));
+  await U.onGitCallback(ann, press(ANN, repoBtn('acme/app')));
   const cloned = take();
   assert.match(texts(cloned), /Репозиторий <code>acme\/app<\/code> клонирован в <code>app<\/code>/);
   const proj = join(ws, 'app');
   assert.ok(existsSync(join(proj, '.git')) && existsSync(join(proj, 'README.md')));
   assert.equal(ann.project, proj, 'клон выбран проектом');
   assert.ok(!readFileSync(join(proj, '.git', 'config'), 'utf8').includes(TOKEN), 'токена в настройках репозитория нет');
-  await U.onGitCallback(ann, press(ANN, 'gt:k:0'));
+  await U.onGitCallback(ann, press(ANN, repoBtn('acme/app')));
   assert.match(texts(take()), /Папка <code>app<\/code> уже есть/);
 
   // сохранить и отправить: описание следующим сообщением, .env в коммит не идёт
