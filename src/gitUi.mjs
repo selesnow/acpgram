@@ -6,6 +6,7 @@ import { db, langOf, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { GitError, cloneRepo, commitAll, fetchRepo, gitAvailable, gitCommand, gitEnv, pullRepo, pushRepo, repoState, unpushedSecrets } from './git.mjs';
 import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, identityOf, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
+import { REPO_ACTIONS, onBranchInput, onRepoCallback } from './gitRepoUi.mjs';
 import { HostError, authConfig, customHost, fetchProfile, listRepos, missingScopes, probeHost, repoFolder, showRemote } from './gitHosts.mjs';
 import { LOCALES, errText, t } from './i18n.mjs';
 import { ROOT, folderName, insideRoot, isPersonalRoot, navStart } from './projects.mjs';
@@ -82,6 +83,8 @@ export async function gitView(st, lang = langOf(st.userId), { sync = false } = {
       }
     } else if (repo.host) lines.push(th('git.needAccount', lang, { host: repo.host.label }));
     else lines.push(th(s.remote ? 'git.foreign' : 'git.noRemote', lang));
+    // что изменено и какие есть ветки — можно смотреть без агента и без аккаунта
+    rows.push([{ text: t('git.changesBtn', lang), callback_data: 'gt:ch:0' }, { text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }]);
   } else lines.push(th('git.noRepo', lang));
   lines.push(accounts.length ? [t('git.accounts', lang), ...accounts.map(({ host, account }) => th('git.accLine', lang, { host: host.label, login: account.login }))].join('\n') : th('git.noAccounts', lang));
   if (accounts.length && canCreateProject(st.userId)) rows.push([{ text: t('git.clone', lang), callback_data: 'gt:cl' }]);
@@ -261,6 +264,8 @@ export async function onGitCallback(st, cb) {
     await ack();
     return edit(hostsView(lang, th('git.hosts.deleted', lang, { label: own.label, n: n ?? 0 })));
   }
+  // экраны «Изменения» и «Ветки» — gitRepoUi
+  if (REPO_ACTIONS.includes(action)) return onRepoCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st), repoOf, gitOpts });
   const host = findHost(arg);
   const account = host ? db.getGitAccount(st.userId, host.id) : null;
   try {
@@ -354,7 +359,7 @@ const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_i
  */
 export async function onGitInput(st, text, { messageId, now = Date.now() } = {}) {
   const wait = st.pendingInput;
-  if (!['gitToken', 'gitSearch', 'gitMessage', 'gitHostUrl', 'gitHostName'].includes(wait?.kind)) return false;
+  if (!['gitToken', 'gitSearch', 'gitMessage', 'gitHostUrl', 'gitHostName', 'gitBranch'].includes(wait?.kind)) return false;
   const lang = langOf(st.userId);
   const expired = now - wait.at > GIT_WAIT_MS;
   const send = (v) => tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('git:', e.message));
@@ -394,6 +399,7 @@ export async function onGitInput(st, text, { messageId, now = Date.now() } = {})
 
   st.pendingInput = null;
   if (expired) return false; // адрес сервера, строка поиска и описание изменений — не секреты: позже это обычный запрос агенту
+  if (wait.kind === 'gitBranch') return onBranchInput(st, text, { wait, now, lang, project: projectOf(st), repoOf, gitOpts });
   // свои серверы: адрес нового сервера или новое название — только от администратора
   if (wait.kind === 'gitHostUrl' || wait.kind === 'gitHostName') {
     if (!isAdmin(st.userId)) return false;

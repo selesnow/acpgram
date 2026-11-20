@@ -89,7 +89,9 @@ export class GitError extends Error {
  *   wrap — песочница (sandbox.agentSandbox с командой git); hide — строки, которые нужно вычистить из вывода (токены)
  * @returns {Promise<string>} stdout
  */
-export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120_000, hide = [] } = {}) {
+export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120_000, hide = [], okCodes = [0], maxOut = 4 * 1024 * 1024 } = {}) {
+  // okCodes — коды выхода, которые не считаются ошибкой (git diff --no-index возвращает 1, когда различия есть);
+  // maxOut — сколько символов вывода хранить (остальное отбрасывается: большой diff целиком не нужен)
   const command = wrap ? wrap.command : gitCommand();
   const argv = wrap ? [...wrap.args, ...args] : args;
   const clean = (s) => hide.filter(Boolean).reduce((acc, h) => acc.replaceAll(h, '***'), s);
@@ -107,8 +109,15 @@ export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120
       timedOut = true;
       killTree(proc, 1000);
     }, timeoutMs);
-    proc.stdout.on('data', (d) => (out += d));
-    proc.stderr.on('data', (d) => (err += d));
+    // кодировка задаётся потоку: иначе символ не из латиницы, попавший на границу порций, превращается в мусор
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (d) => {
+      if (out.length < maxOut) out += d;
+    });
+    proc.stderr.on('data', (d) => {
+      if (err.length < 64 * 1024) err += d;
+    });
     proc.on('error', (e) => {
       clearTimeout(timer);
       reject(new GitError(e.message));
@@ -116,7 +125,7 @@ export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (timedOut) return reject(new GitError(`git ${args[0]}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, { timeout: true }));
-      if (code !== 0) {
+      if (!okCodes.includes(code)) {
         const stderr = clean(err.trim());
         // подсказки git («hint: …») пользователю не нужны — в сообщение идут последние содержательные строки
         const lines = stderr.split(/\r?\n/).filter((l) => l.trim() && !/^hint:/i.test(l));

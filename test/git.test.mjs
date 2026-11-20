@@ -47,7 +47,8 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.startsWith('https://git.mycorp.io/')) return { ok: false, status: 401, json: async () => ({ message: '401 Unauthorized' }), headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) } };
   if (u.startsWith('https://nothing.mycorp.io/')) return { ok: false, status: 404, json: async () => ({}), headers: { get: () => 'text/html' } };
   const method = u.split('/').pop();
-  sent.push({ method, body: JSON.parse(init.body) });
+  // отправка файла идёт формой, а не JSON: тело не разбираем
+  sent.push({ method, body: typeof init.body === 'string' ? JSON.parse(init.body) : {} });
   return { json: async () => ({ ok: true, result: { message_id: 500 + sent.length } }) };
 };
 const take = () => sent.splice(0);
@@ -429,4 +430,152 @@ test('проверка своего сервера: GitHub Enterprise и GitLab 
   assert.deepEqual(await H.probeHost(H.customHost('gitlab', 'https://site.x.io'), { fetchImpl: answer(200, 'text/html') }), { ok: false, error: 'HTTP 200' }, 'обычный сайт — не GitLab');
   const down = await H.probeHost(H.customHost('gitlab', 'https://down.x.io'), { fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } });
   assert.deepEqual(down, { ok: false, error: 'connect ECONNREFUSED' });
+});
+
+// ---------- «Изменения» и «Ветки» ----------
+
+const I = await import('../src/gitInspect.mjs');
+
+test('разбор вывода git: изменённые файлы (с переименованием) и число строк', () => {
+  assert.deepEqual(I.parseChanges(' M a.txt\0?? src/новый файл.js\0D  old.txt\0R  new name.txt\0old name.txt\0UU both.txt\0A  added.txt\0'), [
+    { path: 'a.txt', kind: 'modified' },
+    { path: 'src/новый файл.js', kind: 'new' },
+    { path: 'old.txt', kind: 'deleted' },
+    { path: 'new name.txt', kind: 'renamed', from: 'old name.txt' },
+    { path: 'both.txt', kind: 'conflict' },
+    { path: 'added.txt', kind: 'new' },
+  ]);
+  assert.deepEqual(I.parseChanges(''), []);
+  const n = I.parseNumstat('2\t1\ta.txt\0-\t-\timg.png\0' + '3\t0\t\0old.txt\0new.txt\0');
+  assert.deepEqual([...n], [['a.txt', { added: 2, deleted: 1 }], ['img.png', { added: null, deleted: null }], ['new.txt', { added: 3, deleted: 0 }]]);
+});
+
+test('git: изменения, diff по файлу, коммиты и ветки — на настоящем репозитории', needGit, async () => {
+  const w = join(home, 'inspect');
+  await G.cloneRepo(REPO_URL, 'inspect', { cwd: home, env });
+  assert.deepEqual(await I.changedFiles(w, { env }), { files: [], total: 0 });
+  writeFileSync(join(w, 'README.md'), '# app\nновая строка\n');
+  writeFileSync(join(w, 'заметки.txt'), 'раз\nдва');
+  rmSync(join(w, 'app.js'));
+  const { files, total } = await I.changedFiles(w, { env });
+  assert.equal(total, 3);
+  const by = Object.fromEntries(files.map((f) => [f.path, f]));
+  assert.deepEqual(by['README.md'], { path: 'README.md', kind: 'modified', added: 1, deleted: 0 });
+  assert.deepEqual(by['app.js'], { path: 'app.js', kind: 'deleted', added: 0, deleted: 1 });
+  assert.deepEqual(by['заметки.txt'], { path: 'заметки.txt', kind: 'new', added: 2, deleted: 0 }, 'у нового файла строки считает бот');
+
+  const d = await I.fileDiff(w, by['README.md'], { env });
+  assert.match(d, /^--- a\/README\.md\n\+\+\+ b\/README\.md\n@@ /, 'служебное начало убрано');
+  assert.match(d, /\n\+новая строка$/);
+  assert.match(await I.fileDiff(w, by['заметки.txt'], { env }), /\n\+раз\n\+два/, 'новый файл — целиком как добавленный');
+  assert.match(await I.fileDiff(w, by['app.js'], { env }), /\n-x(\n|$)/, 'удалённый файл — целиком как убранный');
+
+  // ветки: новая от текущей, ветка только на сервере, переключение
+  assert.equal(await I.branchName('  моя задача 1 ', { cwd: w, env }), 'моя-задача-1');
+  for (const bad of ['', '-x', 'a..b', 'x.lock', 'a b~c']) assert.equal(await I.branchName(bad, { cwd: w, env }), null, bad);
+  const seed = join(home, 'seed');
+  await git(seed, 'pull', '-q', '--ff-only');
+  await git(seed, 'switch', '-q', '-c', 'feature-x');
+  writeFileSync(join(seed, 'feature.txt'), 'f');
+  await G.commitAll(seed, 'в ветке', { env });
+  await G.pushRepo(seed, { env });
+  await git(seed, 'switch', '-q', 'main');
+  await G.fetchRepo(w, { env });
+  let b = await I.listBranches(w, { env });
+  assert.equal(b.current, 'main');
+  assert.deepEqual(b.branches.map((x) => [x.name, x.local, x.remote, x.current]), [['main', true, true, true], ['feature-x', false, true, false]]);
+  await git(w, 'stash', '-q', '--include-untracked');
+  await I.switchBranch(w, b.branches[1], { env });
+  assert.ok(existsSync(join(w, 'feature.txt')), 'ветка сервера стала локальной');
+  assert.equal((await G.repoState(w, { env })).upstream, 'origin/feature-x');
+  await I.createBranch(w, 'моя-задача-1', { env });
+  writeFileSync(join(w, 'mine.txt'), 'm');
+  await G.commitAll(w, 'моя правка', { env });
+  b = await I.listBranches(w, { env });
+  assert.deepEqual([b.current, b.branches[0].name, b.branches[0].remote], ['моя-задача-1', 'моя-задача-1', false]);
+  assert.deepEqual((await I.commitList(w, 'out', { env })).map((c) => c.subject).slice(0, 1), ['моя правка'], 'без ветки на сервере — коммиты самой ветки');
+  assert.deepEqual(await I.commitList(w, 'in', { env }), []);
+  await assert.rejects(I.switchBranch(w, { name: '-evil', local: true }, { env }), (e) => e instanceof G.GitError);
+});
+
+test('/git: «Изменения» — список файлов, diff в сообщении и файлом, секреты не показываются; «Ветки» — переключение и новая ветка', needGit, async () => {
+  ctx.db.saveGitAccount(ANN, { host: 'github', login: 'ann-dev', name: 'Ann Dev', email: 'ann@example.com', token: TOKEN });
+  const proj = join(ws, 'app');
+  assert.equal(ann.project, proj);
+  writeFileSync(join(proj, 'page.html'), '<p>hi</p>\n<p>новый абзац</p>\n');
+  writeFileSync(join(proj, 'notes.txt'), 'заметка\n');
+  writeFileSync(join(proj, '.env.local'), 'KEY=sekret-999\n');
+  writeFileSync(join(proj, 'big.txt'), Array.from({ length: 900 }, (_, i) => `строка ${i}`).join('\n'));
+  await U.handleGit(ann);
+  const main = buttons(take());
+  assert.ok(main.some((x) => x.callback_data === 'gt:ch:0' && x.text === '📋 Изменения') && main.some((x) => x.callback_data === 'gt:br:0'));
+
+  await U.onGitCallback(ann, press(ANN, 'gt:ch:0'));
+  const ch = take().filter((c) => c.method === 'editMessageText');
+  assert.match(texts(ch), /Изменено файлов: 4 · добавлено строк: 90\d · убрано: \d/);
+  const files = buttons(ch).filter((x) => x.callback_data.startsWith('gt:cf:'));
+  assert.ok(files.some((x) => x.text === '✏️ page.html +2 −1') && files.some((x) => x.text === '🆕 notes.txt +1'), JSON.stringify(files.map((x) => x.text)));
+  assert.ok(buttons(ch).some((x) => x.callback_data === 'gt:cm:o' && x.text === '⬆️ Не отправлено: 1'));
+  const cf = (name) => files.find((x) => x.text.includes(name)).callback_data;
+
+  await U.onGitCallback(ann, press(ANN, cf('page.html')));
+  const diff = texts(take().filter((c) => c.method === 'editMessageText'));
+  assert.match(diff, /^✏️ <code>page\.html<\/code>\n<pre><code class="language-diff">/);
+  assert.match(diff, /\+&lt;p&gt;новый абзац&lt;\/p&gt;/, 'содержимое экранировано');
+
+  await U.onGitCallback(ann, press(ANN, cf('.env.local')));
+  const secret = take();
+  assert.match(texts(secret), /файл с секретами, его содержимое здесь не показывается/);
+  assert.ok(!JSON.stringify(secret).includes('sekret-999'));
+
+  await U.onGitCallback(ann, press(ANN, cf('big.txt')));
+  const big = take();
+  assert.ok(big.some((c) => c.method === 'sendDocument'), 'большой diff приходит файлом');
+  assert.match(texts(big), /большие — отправил их файлом/);
+  assert.equal(existsSync(join(home, 'data', 'outbox', String(ANN), 'big.txt.diff')), false, 'временный файл убран');
+
+  await U.onGitCallback(ann, press(ANN, 'gt:cm:o'));
+  assert.match(texts(take()), /Коммиты, которых ещё нет на сервере: 1[\s\S]*агент добавил секреты/);
+  await U.onGitCallback(ann, press(ANN, 'gt:cf:99'));
+  assert.deepEqual(take().map((c) => c.method), ['answerCallbackQuery'], 'устаревший номер файла');
+
+  // ветки: с сервера приходит feature-x (её создал предыдущий тест)
+  await U.onGitCallback(ann, press(ANN, 'gt:br:0'));
+  const br = take().filter((c) => c.method === 'editMessageText');
+  assert.match(texts(br), /Текущая: <code>main<\/code>/);
+  const branchBtn = (name) => buttons(br).find((x) => x.text.endsWith(` ${name}`));
+  assert.equal(branchBtn('main').text, '✓ main');
+  assert.equal(branchBtn('feature-x').text, '☁️ feature-x', 'ветка только на сервере видна после сверки');
+
+  // с несохранёнными изменениями не переключаемся
+  await U.onGitCallback(ann, press(ANN, branchBtn('feature-x').callback_data));
+  const dirty = take();
+  assert.match(texts(dirty), /есть несохранённые изменения \(файлов: 4\)/);
+  assert.ok(buttons(dirty).some((x) => x.callback_data === 'gt:save'));
+  assert.equal((await G.repoState(proj, { env })).branch, 'main');
+
+  for (const f of ['notes.txt', 'big.txt']) rmSync(join(proj, f));
+  await git(proj, 'checkout', '--', 'page.html', '.env.local');
+  // пока агент выполняет запрос — отказ; сессия агента после переключения не продолжается
+  ann.busy = true;
+  await U.onGitCallback(ann, press(ANN, branchBtn('feature-x').callback_data));
+  assert.deepEqual(take().map((c) => c.method), ['answerCallbackQuery']);
+  ann.busy = false;
+  ann.agent = { sessionId: 'old', closed: false, dbSessionId: null, close() { this.closed = true; } };
+  await U.onGitCallback(ann, press(ANN, branchBtn('feature-x').callback_data));
+  assert.match(texts(take()), /Вы на ветке <code>feature-x<\/code>\. Следующий запрос агенту начнёт новую сессию/);
+  assert.equal((await G.repoState(proj, { env })).branch, 'feature-x');
+  assert.equal(ann.agent, null, 'сессия агента закрыта');
+  assert.equal(ann.resumeId, null);
+
+  // новая ветка: название следующим сообщением
+  await U.onGitCallback(ann, press(ANN, 'gt:bn'));
+  assert.equal(ann.pendingInput.kind, 'gitBranch');
+  take();
+  assert.equal(await U.onGitInput(ann, 'плохое..имя'), true);
+  assert.match(texts(take()), /не подойдёт/);
+  assert.equal(ann.pendingInput.kind, 'gitBranch', 'ждём другое название');
+  assert.equal(await U.onGitInput(ann, 'правки главной'), true);
+  assert.match(texts(take()), /Создана и выбрана ветка <code>правки-главной<\/code>/);
+  assert.equal((await G.repoState(proj, { env })).branch, 'правки-главной');
 });
