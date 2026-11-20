@@ -50,6 +50,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 - **Dialogs mode (topics)** — if topics in private chats are turned on for the bot (@BotFather), each topic of the chat is a separate dialog with the agent, with its own project, engine and history. You can work in several topics at once and come back to a topic later to continue where you left off: the agent session resumes by itself. `/new` creates a new topic, and the agent names it after the first answer (with a short project name in front); General works as a regular dialog, and `/project` there shows the dialogs of the chosen project as buttons that open the topic. A command sent from the chat list rather than from inside a topic (Telegram creates a new topic for such a message by itself) runs in General, and the empty topic is deleted. A topic stays in its own project. Everyone picks the mode with `/topics`: "Dialogs" or "One chat". A teammate runs up to `MAX_AGENTS_PER_USER` agents at once (2), the admin up to `ADMIN_MAX_AGENTS` (4); when there is no room, the user's own oldest idle agent is unloaded, and that dialog continues when the user comes back to it.
 - **Language** — the bot talks to each user in their Telegram language (`ru`, `uk` or `en`; any other falls back to `DEFAULT_LANG`, English by default). `/language` changes it and takes priority over the Telegram language. The `acpgram` terminal commands (setup wizard, service, update, help) speak the system language: Russian, Ukrainian, otherwise English; on Windows the system UI language is used, not the regional format.
 - **Projects** — `/project` picks the working folder by buttons, by name search or by path (`/project ~/projects/web`), with one-tap recent projects.
+- **Project files, bypassing the agent** — `/files` lists the project files, creates a file from a message, uploads a file from your device and deletes files. The contents never go into a model request, which is how secrets (`.env`, keys) get into a project.
 - **Personal workspaces** — with `USER_WORKSPACES=1` each teammate gets their own folder inside the projects root and chooses projects only there; a new project is created with the "➕ New project" button.
 - **Sessions** — `/sessions` resumes a previous conversation (in the engine it was created in), even after a restart; `/new` starts fresh; `/close` unloads the agent process.
 - **Team access** — invite links and access requests; per-user access levels, engines and model restrictions; `/active` shows who is working and lets the admin end any session.
@@ -184,6 +185,7 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 | `/engine [gemini, claude, agy, codex, opencode]` | everyone | choose the engine |
 | `/model [name]` | everyone | choose the model and reasoning level; with a name — search for a model (`/model sonnet`) |
 | `/new` | everyone | new session |
+| `/files` | everyone | project files: list, create, upload and delete — bypassing the agent |
 | `/sessions` | everyone | resume a previous session in this project |
 | `/stop` | everyone | stop the running request |
 | `/close`, `/exit` | everyone | close the session and unload the agent process |
@@ -206,6 +208,19 @@ The main admin is set by `ALLOWED_USER_ID`. Everyone else gets access through an
 OpenCode has only two modes (`plan` and `build`); what the agent may do is set by a permission config the bot passes to the agent process in `OPENCODE_CONFIG_CONTENT`: Read — edits and commands are denied (the model does not even see them), page fetches need confirmation; Normal — edits, commands and page fetches need confirmation; Full and admin — everything without confirmation, including folders outside the project.
 
 New teammates get only the default engine; the admin grants other engines and can restrict models per user and per engine. At most `MAX_AGENTS` (3) teammate agents run at once across all engines (the admin is not counted); idle sessions close after `IDLE_MINUTES` (30).
+
+### Project files and secrets
+
+Everything a user types to the bot or sends as a file goes to the agent, and therefore into a model request. That is wrong for passwords, tokens and keys: free models may use requests for training. The `/files` command puts a file straight into the project folder, bypassing the agent.
+
+- **List.** `/files` shows the files and folders of the current project (including hidden ones such as `.env`; without `.git`, `node_modules` and links); folders are browsed with buttons.
+- **"📝 Create file".** The bot asks for a name (a subfolder is allowed: `config/.env`) and then for the contents in one message (up to 3500 characters). The message with the contents is deleted from the chat right away; it is not written to the database or the logs.
+- **"⬆️ Upload file".** The next file you send (or an album) is saved to the open project folder under its own name, and the message with it is deleted from the chat. The wait is one-off and expires in 10 minutes. Without pressing the button, files and images go to the agent as before.
+- **Delete** — from the file card, with a confirmation. An existing file is replaced only after a "Replace?" question.
+- **Who can change files:** the administrator; a teammate inside their personal workspace, and in a shared root with the "Normal" or "Full" level. Anyone can view the list.
+- **Inside the project only.** The bot never writes or deletes outside the project folder and does not follow links: a link planted in the project cannot make it overwrite someone else's file.
+
+What this gives and what it does not. The secret does not get into a model request *from the user*. The file itself stays available to the agent — otherwise the applications it writes and runs could not use it. So that the agent does not read the values into the conversation by itself, the bot regularly reminds it: do not open or print files with secrets, refer to settings by name, and send the user to `/files` for a missing value. This is an instruction, not a ban: for especially sensitive data use a model from a provider that does not train on requests.
 
 ### Personal workspaces
 
@@ -302,7 +317,8 @@ src/
   state.mjs       per-user state: agent process, engine, project, limits, idle reaper
   admin.mjs       invites, access requests, /users, /active
   projects.mjs    project paths (inside the root or anywhere), recent projects, search
-  *Ui.mjs         /project, /sessions, /engine, /model screens
+  *Ui.mjs         /project, /files, /sessions, /engine, /model screens
+  projectFiles.mjs project files bypassing the agent: safe writes and deletes inside the project, no links
   ui.mjs          rendering: drafts, steps, final message, screens
   telegram.mjs    Bot API calls, rich messages, long text splitting, file download and upload
   sandbox.mjs     agent sandbox (Linux, bubblewrap): what a teammate's agent can see, the startup check

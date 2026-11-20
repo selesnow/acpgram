@@ -49,6 +49,11 @@ function tok(p) {
   return tk;
 }
 
+/** Токен пути для кнопок других экранов (/files). Путь из токена обязан проверять тот, кто его использует. */
+export const pathToken = tok;
+/** Путь по токену из кнопки или undefined, если кнопка устарела. */
+export const tokenPath = (tk) => pathByTok.get(Number(tk));
+
 /** Путь для показа пользователю диалога: относительно его корня (личное пространство — без пути на сервере). */
 const pathFor = (st, p, lang) => showPath(p, lang, rootOf(st.userId));
 

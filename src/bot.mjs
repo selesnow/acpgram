@@ -11,6 +11,7 @@ import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from '.
 import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
 import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
+import { handleFiles, onFileInput, onFileUpload, onFilesCallback } from './filesUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
 import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
@@ -118,6 +119,7 @@ const COMMANDS = [
   { name: 'invite', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/invite') },
   { name: 'usage', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/usage') },
   { name: 'project', menu: true, button: true, run: (st, arg) => handleProject(st, arg) },
+  { name: 'files', menu: true, button: true, run: (st) => handleFiles(st) },
   { name: 'engine', menu: true, button: true, run: (st, arg) => handleEngine(st, arg) },
   { name: 'model', menu: true, button: true, run: (st, arg) => handleModel(st, arg) },
   { name: 'new', menu: true, button: true, run: newCommand },
@@ -141,18 +143,20 @@ const sendToAgent = (st, text, opts = {}) => (st.busy ? enqueue(st, text, opts) 
  * команды не объявлял, это, скорее всего, опечатка: спрашиваем, а не тратим запрос.
  * @param {{quote?: string|null}} [opts] quote — фрагмент прошлого сообщения, на который отвечает пользователь
  */
-async function handleText(st, text, { quote = null } = {}) {
+async function handleText(st, text, { quote = null, messageId = null } = {}) {
   const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
   const name = m?.[1]?.toLowerCase();
   const command = name ? COMMANDS.find((c) => c.name === name || c.aliases?.includes(name)) : null;
   const lang = langOf(st.userId);
-  if (name) st.pendingInput = null; // любая команда отменяет ожидание названия нового проекта
   if (command) {
+    st.pendingInput = null; // команда бота отменяет ожидание названия проекта, имени или содержимого файла
     if (command.admin && !isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
     return command.run(st, m[2]);
   }
   // бот ждёт название папки нового проекта (кнопка «Новый проект» в /project): этот текст — оно, а не запрос агенту
   if (await onProjectNameInput(st, text)) return;
+  // бот ждёт имя или содержимое файла проекта (/files): содержимое агенту не передаётся и удаляется из чата
+  if (await onFileInput(st, text, { messageId })) return;
   if (name && !st.agent?.commands?.has(name)) {
     const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
     if (guess) {
@@ -315,6 +319,7 @@ async function handleUpdate(u) {
     if (data.startsWith('tpc:')) return onTopicsCallback(st, cb);
     if (data.startsWith('tpl:')) return onTopicListCallback(st, cb);
     if (data.startsWith('nav:')) return onNavCallback(st, cb);
+    if (data.startsWith('fl:')) return onFilesCallback(st, cb);
     if (data.startsWith('perm:')) return onPermissionCallback(st, cb);
     if (data.startsWith('ask:')) return onAskCallback(st, cb);
     if (data.startsWith('q:')) return onQueueCallback(st, cb);
@@ -331,8 +336,13 @@ async function handleUpdate(u) {
     if (data.startsWith('lang:')) return onLangCallback(st, cb);
     return;
   }
-  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text, { quote: quoteOf(msg) });
-  if (msg?.photo || msg?.document) return handleAttachment(getState(from.id, chatId, threadId), msg);
+  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text, { quote: quoteOf(msg), messageId: msg.message_id });
+  if (msg?.photo || msg?.document) {
+    const st = getState(from.id, chatId, threadId);
+    // нажата «Загрузить файл» в /files: файл кладётся в проект, а не передаётся агенту
+    if (await onFileUpload(st, msg)) return;
+    return handleAttachment(st, msg);
+  }
   // голосовое, видео, стикер и т. п.: раньше бот на них молчал
   if (msg && unsupportedKind(msg)) return say(getState(from.id, chatId, threadId).to, t('msg.unsupported', langOf(from.id)));
 }

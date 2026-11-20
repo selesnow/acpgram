@@ -740,6 +740,7 @@ export function startView({ level, project, engine, model, isAdmin, note, topics
   const cmd = (key) => t(`help.${key}`, lang);
   const commands = [
     cmd('project'),
+    cmd('files'),
     cmd('engine'),
     cmd('model'),
     cmd('new'),
@@ -754,7 +755,7 @@ export function startView({ level, project, engine, model, isAdmin, note, topics
     `<tg-button-row>${button(t('start.btn.project', lang), 'ui:project')}${button(t('start.btn.new', lang), 'ui:new')}${button(t('start.btn.sessions', lang), 'ui:sessions')}</tg-button-row>`,
     `<tg-button-row>${button(t('start.btn.engine', lang), 'ui:engine')}${button(t('start.btn.model', lang), 'ui:model')}${button(t('start.btn.close', lang), 'ui:close')}</tg-button-row>`,
     // topics: 'on' | 'off' — режим «диалоги» (если у бота включены темы), null — кнопки нет
-    `<tg-button-row>${button(t('btn.language', lang), 'ui:language')}${topics ? button(t(topics === 'on' ? 'start.btn.topicsOn' : 'start.btn.topicsOff', lang), 'ui:topics') : ''}</tg-button-row>`,
+    `<tg-button-row>${button(t('start.btn.files', lang), 'ui:files')}${button(t('btn.language', lang), 'ui:language')}${topics ? button(t(topics === 'on' ? 'start.btn.topicsOn' : 'start.btn.topicsOff', lang), 'ui:topics') : ''}</tg-button-row>`,
   ];
   if (isAdmin) rows.push(`<tg-button-row>${button(t('start.btn.users', lang), 'ui:users')}${button(t('start.btn.invite', lang), 'ui:invite')}${button(t('start.btn.active', lang), 'ui:active')}</tg-button-row>`);
   return [

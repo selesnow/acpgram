@@ -1,7 +1,7 @@
 // Один запрос пользователя: черновик со стримингом, ход работы, запросы разрешений, итоговый ответ.
 import { mkdirSync } from 'node:fs';
 import { db, dbg, langOf, log, say } from './ctx.mjs';
-import { FILE_PLACEHOLDER, attachFiles, buildPromptBlocks, extractSendMarks, outboxDir, stripSendMarks } from './files.mjs';
+import { FILE_PLACEHOLDER, SECRETS_NOTE, attachFiles, buildPromptBlocks, extractSendMarks, outboxDir, stripSendMarks } from './files.mjs';
 import { ModelAccessError, choiceName, getCatalog, syncSelection } from './access.mjs';
 import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
@@ -343,7 +343,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     // (агент мог сжать контекст и забыть её), а не в каждом — она попадает в историю и тратит токены
     const noteNow = (a.promptCount ?? 0) % OUTBOX_NOTE_EVERY === 0;
     a.promptCount = (a.promptCount ?? 0) + 1;
-    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE] : [] });
+    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE, SECRETS_NOTE] : [] });
     // новая тема без названия: агент начинает ответ строкой с названием, бот называет так тему
     if (naming) blocks.push({ type: 'text', text: TITLE_NOTE });
     const res = await a.prompt(blocks);

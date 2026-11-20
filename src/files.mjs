@@ -117,6 +117,17 @@ export function outboxNote(outbox) {
   );
 }
 
+/**
+ * Подсказка агенту о секретах проекта. Пользователь кладёт их в проект сам, в обход чата (/files), чтобы значения не
+ * попадали в запросы к модели; агент не должен свести это на нет, прочитав файл в диалог. Доступ к файлам не закрыт:
+ * приложения, которые агент пишет и запускает, читают секреты во время работы. Служебный текст — на английском.
+ */
+export const SECRETS_NOTE =
+  '[AcpGram] Files such as .env, .Renviron, private keys and credentials in the project hold the user\'s secrets. ' +
+  'Do not open or print them and never show, quote or repeat their values in replies, commands or commits; refer to settings by name. ' +
+  'Code you write may load them at run time, that is what they are for. If a secret value is needed or missing, do not ask the user ' +
+  'to send it in the chat: tell them to put it into the project file themselves with the /files command of this bot.';
+
 const NO_TEXT_PROMPT = 'The user sent the attached file(s) without a message. Look at them, briefly say what they contain and ask what to do with them.';
 
 /**
