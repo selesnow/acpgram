@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { db, langOf, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { GitError, cloneRepo, commitAll, fetchRepo, gitAvailable, gitCommand, gitEnv, pullRepo, pushRepo, repoState, unpushedSecrets } from './git.mjs';
+import { DeviceError, deviceLogin, startDeviceLogin, waitDeviceLogin } from './gitDevice.mjs';
 import { recall, remember } from './gitKeys.mjs';
-import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, identityOf, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
+import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, identityOf, refreshAccounts, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
 import { PUBLISH_ACTIONS, PUBLISH_INPUTS, canPublish, onPublishCallback, onPublishInput } from './gitPublishUi.mjs';
 import { REPO_ACTIONS, onBranchInput, onRepoCallback } from './gitRepoUi.mjs';
 import { HostError, authConfig, customHost, fetchProfile, listRepos, missingScopes, probeHost, repoFolder, showRemote } from './gitHosts.mjs';
@@ -117,10 +118,20 @@ function hostsView(lang, note = '') {
   return { text: `${note ? `${note}\n\n` : ''}${th('git.hosts.head', lang)}\n\n${list}`, markup: { inline_keyboard: rows } };
 }
 
+/**
+ * Перед любой операцией /git: обновить входы, которым пора (вход по коду с истекающим токеном). Если сервис больше
+ * не принимает вход, аккаунт отключён — пользователю об этом сообщение.
+ */
+async function freshen(st) {
+  const lost = await refreshAccounts(st.userId).catch((e) => (log('git: обновление входа:', e.message), []));
+  for (const x of lost) await say(st.to, t('git.dv.lost', langOf(st.userId), { host: x.host.label, login: x.login }));
+}
+
 /** /git */
 export async function handleGit(st) {
   const lang = langOf(st.userId);
   if (!gitAvailable()) return say(st.to, t('git.none', lang));
+  await freshen(st);
   const v = await gitView(st, lang, { sync: true });
   return tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup }).catch((e) => log('git:', e.message));
 }
@@ -133,6 +144,7 @@ export async function handleGit(st) {
  */
 export async function offerGitActions(st, actions) {
   if (!gitAvailable() || !actions.length) return;
+  await freshen(st);
   const lang = langOf(st.userId);
   const project = projectOf(st);
   const repo = project ? await repoOf(st, project).catch(() => null) : null;
@@ -243,6 +255,66 @@ async function repoAction(st, action, lang, edit, { message = null } = {}) {
   }
 }
 
+/** Сохраняет подключённый аккаунт и сообщает об этом: кто подключён, срок токена, чего не хватает; затем — экран /git. */
+async function finishConnect(st, host, grant, profile, lang, send, key) {
+  // вход по коду с токеном, который истекает и не обновляется, через пару часов перестал бы работать — не подключаем
+  if (grant.expiresIn && !grant.refreshToken) {
+    log('⚠️ git: вход по коду без токена обновления — аккаунт не подключён:', st.userId, host.id, `| срок ${grant.expiresIn} с`);
+    return send({ text: th('git.dv.noRefresh', lang, { host: host.label }) });
+  }
+  const accessUntil = grant.expiresIn ? new Date(Date.now() + grant.expiresIn * 1000).toISOString() : null;
+  // срок, который сервис сообщает о продлеваемом входе, — это срок текущего токена, а не аккаунта: напоминать о нём незачем
+  const expiresAt = grant.refreshToken ? null : profile.expiresAt;
+  if (!db.saveGitAccount(st.userId, { host: host.id, login: profile.login, name: profile.name, email: profile.email, token: grant.token, expiresAt, refreshToken: grant.refreshToken ?? null, accessUntil })) {
+    return send({ text: th('access.saveFail', lang) });
+  }
+  log('аккаунт git подключён:', st.userId, host.id, profile.login, grant.refreshToken ? `| вход обновляемый, срок токена ${grant.expiresIn} с` : '');
+  const lack = missingScopes(host, profile.scopes);
+  const parts = [
+    th(key, lang, { host: host.label, login: profile.login, name: profile.name }),
+    ...(expiresAt ? [th('git.expires', lang, { date: dateOf(expiresAt, lang) })] : []),
+    ...(lack.length ? [th('git.scopesWarn', lang, { scopes: lack.join(', ') })] : []),
+  ];
+  await send({ text: parts.join('\n') });
+  return send(await gitView(st, lang));
+}
+
+/**
+ * Вход по ссылке и коду: бот показывает страницу сервиса и код, а сам ждёт подтверждения и подключает аккаунт.
+ * Ожидание идёт в фоне (до срока кода); «Отмена» или новый вход прекращают его.
+ */
+async function startCodeLogin(st, host, cfg, lang, edit) {
+  let login;
+  try {
+    login = await startDeviceLogin(cfg);
+  } catch (e) {
+    log('git: вход по коду:', e.message, '| пользователь', st.userId);
+    return edit({ text: th('git.dv.fail', lang, { msg: e.message }) });
+  }
+  const attempt = { host: host.id };
+  st.gitDevice = attempt; // новый вход или «Отмена» заменяют запись — прежнее ожидание это видит и прекращается
+  await edit({
+    text: th('git.dv.how', lang, { host: host.label, url: login.url, code: hCode(login.userCode), min: Math.round(login.expiresIn / 60) }),
+    markup: { inline_keyboard: [[{ text: t('git.dv.open', lang, { host: host.label }), url: login.url }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] },
+  });
+  const send = (v) => tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('git:', e.message));
+  // не ждём здесь: обработка нажатия заканчивается сразу, подтверждение придёт позже
+  waitDeviceLogin(cfg, login, { cancelled: () => st.gitDevice !== attempt })
+    .then(async (grant) => {
+      st.gitDevice = null;
+      const profile = await fetchProfile(host, grant.token);
+      await edit({ text: th('git.dv.ok', lang, { host: host.label }) });
+      await finishConnect(st, host, grant, profile, lang, send, 'git.connectedCode');
+    })
+    .catch((e) => {
+      if (st.gitDevice === attempt) st.gitDevice = null;
+      if (e instanceof DeviceError && e.code === 'cancelled') return null;
+      log('git: вход по коду:', e.code ?? '', e.message, '| пользователь', st.userId);
+      const key = e instanceof DeviceError && e.code === 'expired' ? 'git.dv.expired' : e instanceof DeviceError && e.code === 'denied' ? 'git.dv.denied' : 'git.dv.fail';
+      return edit({ text: th(key, lang, { msg: e.message }) });
+    });
+}
+
 /** Кнопки /git (gt:<действие>[:<аргумент>[:<страница>]]). */
 export async function onGitCallback(st, cb) {
   const [, action, arg, pageStr] = (cb.data || '').split(':');
@@ -252,8 +324,10 @@ export async function onGitCallback(st, cb) {
   const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
   const edit = (v) => tg('editMessageText', { chat_id: chatId, message_id: messageId, text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => /not modified/i.test(e.message) || log('git:', e.message));
   if (!gitAvailable()) return ack(t('git.none', lang));
+  await freshen(st);
   if (action === 'x') {
     st.pendingInput = null;
+    st.gitDevice = null; // и ожидание входа по коду, если оно шло
     await ack();
     return edit({ text: th('files.cancelled', lang) });
   }
@@ -297,7 +371,18 @@ export async function onGitCallback(st, cb) {
     if (action === 'c' && host) {
       await ack();
       st.pendingInput = { kind: 'gitToken', host: host.id, at: Date.now() };
-      return say(st.to, th('git.tokenAsk', lang, { host: host.label, url: host.tokenUrl, scopes: hCode(host.scopes) }), { ...HTML, reply_markup: cancelMarkup(lang) });
+      // у сервиса с входом по коду токен не обязателен: кнопка «Войти без токена» (сам токен тоже можно прислать)
+      const byCode = deviceLogin(host);
+      const text = th('git.tokenAsk', lang, { host: host.label, url: host.tokenUrl, scopes: hCode(host.scopes) }) + (byCode ? `\n\n${th('git.dv.or', lang)}` : '');
+      const rows = [...(byCode ? [[{ text: t('git.dv.btn', lang), callback_data: `gt:dv:${host.id}`, style: 'success' }]] : []), [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]];
+      return say(st.to, text, { ...HTML, reply_markup: { inline_keyboard: rows } });
+    }
+    if (action === 'dv' && host) {
+      const cfg = deviceLogin(host);
+      if (!cfg) return ack(t('proj.stale', lang));
+      await ack();
+      st.pendingInput = null; // токен больше не ждём: вход идёт по коду
+      return startCodeLogin(st, host, cfg, lang, edit);
     }
     if ((action === 'a' || action === 'd') && account) {
       await ack();
@@ -385,6 +470,7 @@ export async function onGitInput(st, text, { messageId, now = Date.now() } = {})
   const wait = st.pendingInput;
   if (!['gitToken', 'gitSearch', 'gitMessage', 'gitHostUrl', 'gitHostName', 'gitBranch', ...PUBLISH_INPUTS].includes(wait?.kind)) return false;
   const lang = langOf(st.userId);
+  await freshen(st);
   const expired = now - wait.at > GIT_WAIT_MS;
   const send = (v) => tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('git:', e.message));
 
@@ -406,18 +492,7 @@ export async function onGitInput(st, text, { messageId, now = Date.now() } = {})
       return (await say(st.to, textFail, { reply_markup: cancelMarkup(lang) }), true); // ожидание остаётся: можно прислать ещё раз
     }
     st.pendingInput = null;
-    if (!db.saveGitAccount(st.userId, { host: host.id, login: profile.login, name: profile.name, email: profile.email, token, expiresAt: profile.expiresAt })) {
-      return (await say(st.to, t('access.saveFail', lang)), true);
-    }
-    log('аккаунт git подключён:', st.userId, host.id, profile.login);
-    const lack = missingScopes(host, profile.scopes);
-    const parts = [
-      th('git.connected', lang, { host: host.label, login: profile.login, name: profile.name }),
-      ...(profile.expiresAt ? [th('git.expires', lang, { date: dateOf(profile.expiresAt, lang) })] : []),
-      ...(lack.length ? [th('git.scopesWarn', lang, { scopes: lack.join(', ') })] : []),
-    ];
-    await send({ text: parts.join('\n') });
-    await send(await gitView(st, lang));
+    await finishConnect(st, host, { token }, profile, lang, send, 'git.connected');
     return true;
   }
 

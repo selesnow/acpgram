@@ -25,7 +25,7 @@ export function normalizeHostUrl(input) {
 /** Id своего сервера: вид и адрес («gitlab-git-example-com») — одинаковый, откуда бы сервер ни был задан. */
 const hostId = (kind, web) => `${kind}-${web.replace(/^https:\/\//, '')}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '').slice(0, 40);
 
-const githubHost = (id, label, web, api) => ({ id, kind: 'github', label, web, api, tokenUrl: `${web}/settings/tokens`, user: 'x-access-token', scopes: 'repo' });
+const githubHost = (id, label, web, api) => ({ id, kind: 'github', label, web, api, tokenUrl: `${web}/settings/tokens`, user: 'x-access-token', scopes: 'repo, read:org' });
 const gitlabHost = (id, label, web) => ({ id, kind: 'gitlab', label, web, api: `${web}/api/v4`, tokenUrl: `${web}/-/user_settings/personal_access_tokens`, user: 'oauth2', scopes: 'api, read_repository, write_repository' });
 
 /**
@@ -119,7 +119,7 @@ function errorDetail(data) {
 export async function api(host, token, path, { fetchImpl = fetch, method = null, body = null } = {}) {
   const headers = host.kind === 'github'
     ? { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'acpgram' }
-    : { 'private-token': token, accept: 'application/json', 'user-agent': 'acpgram' };
+    : { authorization: `Bearer ${token}`, accept: 'application/json', 'user-agent': 'acpgram' }; // так GitLab принимает и токен доступа, и токен входа по коду
   const init = { headers, signal: AbortSignal.timeout(TIMEOUT_MS) };
   if (body) Object.assign(init, { method: method ?? 'POST', body: JSON.stringify(body), headers: { ...headers, 'content-type': 'application/json' } });
   else if (method) init.method = method;

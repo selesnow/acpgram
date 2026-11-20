@@ -4,7 +4,8 @@
 // бот по кнопкам в /git, а агент работает с репозиторием локально. Администратор может выбрать другой режим —
 // GIT_AGENT_AUTH=1: тогда вход передаётся и процессу агента (через его окружение), и агент сам тянет и отправляет
 // изменения. Это удобнее, но токен становится виден агенту, а значит может попасть в запрос к модели.
-import { db } from './ctx.mjs';
+import { db, log } from './ctx.mjs';
+import { DeviceError, deviceLogin, refreshLogin } from './gitDevice.mjs';
 import { configEnv, gitAvailable } from './git.mjs';
 import { authConfig, customHost, gitHosts, hostById, hostOfUrl } from './gitHosts.mjs';
 
@@ -89,6 +90,49 @@ export function agentGitEnv(userId, { agentAuth = GIT_AGENT_AUTH, base = process
   // нумерация продолжает настройки, уже заданные в окружении бота: они тоже достаются агенту
   const env = configEnv(entries, base.GIT_CONFIG_COUNT ? { GIT_CONFIG_COUNT: base.GIT_CONFIG_COUNT } : {});
   return agentAuth ? { ...env, GIT_TERMINAL_PROMPT: '0' } : env;
+}
+
+// ---- обновление входа, полученного по ссылке и коду (GitLab: токен живёт 2 часа) ----
+
+/** За сколько до истечения токен обновляется заранее: операция (клонирование, отправка) должна успеть с ним закончиться. */
+const REFRESH_AHEAD_MS = 15 * 60_000;
+const refreshing = new Map(); // «пользователь:сервис» → идущее обновление (второе не запускаем: токен обновления одноразовый)
+
+/**
+ * Обновляет токены аккаунтов пользователя, которым пора (вход по коду с истекающим токеном). Вызывается перед любой
+ * операцией /git: дальше код читает из базы уже свежий токен. Токен обновления одноразовый, поэтому одновременные
+ * вызовы ждут одно и то же обновление.
+ * @returns {Promise<{host: object, login: string}[]>} аккаунты, вход в которые больше не действует — они отключены,
+ *   пользователю нужно подключить их заново
+ */
+export async function refreshAccounts(userId, { now = Date.now(), refresh = refreshLogin } = {}) {
+  const lost = [];
+  for (const { host, account } of accountsOf(userId)) {
+    if (!account.refresh_token || !account.access_until || Date.parse(account.access_until) - now > REFRESH_AHEAD_MS) continue;
+    const cfg = deviceLogin(host);
+    const key = `${userId}:${host.id}`;
+    if (!refreshing.has(key)) {
+      const run = (async () => {
+        if (!cfg) throw new DeviceError('expired', 'вход по коду для сервиса выключен');
+        const g = await refresh(cfg, account.refresh_token);
+        db.setGitTokens(userId, host.id, { token: g.token, refreshToken: g.refreshToken ?? account.refresh_token, accessUntil: g.expiresIn ? new Date(Date.now() + g.expiresIn * 1000).toISOString() : null });
+        log('git: вход обновлён:', userId, host.id);
+      })().finally(() => refreshing.delete(key));
+      refreshing.set(key, run);
+    }
+    try {
+      await refreshing.get(key);
+    } catch (e) {
+      log('git: вход не обновлён:', userId, host.id, '|', e.code ?? '', e.message);
+      // сервис больше не принимает токен обновления: аккаунт бесполезен — отключаем, пользователь подключит заново.
+      // Сбой сети — не повод отключать: попробуем при следующей операции
+      if (e instanceof DeviceError && e.code === 'expired') {
+        db.deleteGitAccount(userId, host.id);
+        lost.push({ host, login: account.login });
+      }
+    }
+  }
+  return lost;
 }
 
 const DAY_MS = 24 * 3600_000;

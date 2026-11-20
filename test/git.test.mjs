@@ -80,7 +80,11 @@ const git = (cwd, ...args) => G.runGit(args, { cwd, env });
 after(() => {
   globalThis.fetch = realFetch;
   ctx.db.close();
-  rmSync(home, { recursive: true, force: true });
+  try {
+    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    /* Windows не всегда сразу отпускает папку, в которой только что работал git: уборка временной папки — не предмет теста */
+  }
 });
 
 test('сервисы: GitHub, GitLab.com и свой GitLab из GITLAB_URL; адрес репозитория → сервис', () => {
@@ -131,7 +135,7 @@ test('API сервисов: профиль, права и срок токена,
   // GitLab: свой формат ответов и поиск на стороне сервера
   const seen = [];
   const fetchImpl = async (url, init) => {
-    seen.push([url, init.headers['private-token']]);
+    seen.push([url, init.headers.authorization]);
     if (url.endsWith('/user')) return json({ username: 'bob', name: 'Bob', commit_email: 'bob@corp.io' });
     if (url.includes('/personal_access_tokens/self')) return json({ expires_at: '2027-01-31', scopes: ['api'] });
     return json([{ path_with_namespace: 'team/site', http_url_to_repo: 'https://git.example.com/team/site.git', visibility: 'private' }], { 'x-next-page': '' });
@@ -140,7 +144,7 @@ test('API сервисов: профиль, права и срок токена,
   const list = await H.listRepos(corp, 'glpat', { search: 'Site', page: 1, fetchImpl });
   assert.deepEqual(list, { items: [{ name: 'team/site', url: 'https://git.example.com/team/site.git', private: true }], more: false });
   assert.match(seen.at(-1)[0], /^https:\/\/git\.example\.com\/api\/v4\/projects\?membership=true.*&page=2&search=site$/);
-  assert.ok(seen.every(([, token]) => token === 'glpat'));
+  assert.ok(seen.every(([, auth]) => auth === 'Bearer glpat'));
 });
 
 test('окружение git бота: без токена бота, без хуков и помощников входа; настройки — через окружение', () => {

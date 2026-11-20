@@ -95,7 +95,11 @@ const text = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 after(() => {
   globalThis.fetch = realFetch;
   ctx.db.close();
-  rmSync(home, { recursive: true, force: true });
+  try {
+    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    /* Windows не всегда сразу отпускает папку, в которой только что работал git: уборка временной папки — не предмет теста */
+  }
 });
 
 test('метки агента [[git:push]] / [[git:pull]]: убираются из ответа, в коде не срабатывают, в черновике не мелькают', () => {

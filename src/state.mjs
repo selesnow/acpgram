@@ -6,7 +6,7 @@ import { canUseEngine, parseJson } from './access.mjs';
 import { DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
 import { HOME, ROOT, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
-import { agentGitEnv } from './gitAccess.mjs';
+import { GIT_AGENT_AUTH, agentGitEnv, refreshAccounts } from './gitAccess.mjs';
 
 const states = new Map(); // userId -> состояние
 
@@ -337,6 +337,8 @@ async function startAgent(st, { resume } = {}) {
     log('⚠️ папка проекта недоступна или вне корня пользователя — агент не запущен | пользователь', st.userId, '| проект', st.project);
     throw new ProjectError(t('state.projectGone', langOf(st.userId)));
   }
+  // в режиме «вход у агента» токен должен быть свежим на старте сессии (вход по коду у GitLab живёт 2 часа)
+  if (GIT_AGENT_AUTH) await refreshAccounts(st.userId).catch((e) => log('git: обновление входа перед запуском агента:', e.message));
   releaseSessionElsewhere(st, resume);
   reserveSlot(st);
   const engine = engineOf(st);

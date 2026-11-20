@@ -171,6 +171,11 @@ export function openDb(path = 'data/bot.db') {
   ]);
   // v1.19: тему можно убрать из списка тем проекта (Telegram не сообщает боту об удалении темы)
   addColumns('topics', [['hidden', 'INTEGER NOT NULL DEFAULT 0']]);
+  // v1.30: вход по ссылке и коду — у GitLab такой токен живёт 2 часа и обновляется токеном обновления
+  addColumns('git_accounts', [
+    ['refresh_token', 'TEXT'], // токен обновления (есть только у входа по коду)
+    ['access_until', 'TEXT'], // до какого времени действует текущий токен (у бессрочного — пусто)
+  ]);
 
   const q = {
     getUser: db.prepare('SELECT * FROM users WHERE user_id = ?'),
@@ -247,10 +252,12 @@ export function openDb(path = 'data/bot.db') {
     listGitAccounts: db.prepare('SELECT * FROM git_accounts WHERE user_id = ? ORDER BY added_at'),
     allGitAccounts: db.prepare('SELECT * FROM git_accounts'),
     saveGitAccount: db.prepare(
-      `INSERT INTO git_accounts (user_id, host, login, name, email, token, expires_at, added_at) VALUES (?,?,?,?,?,?,?,?)
+      `INSERT INTO git_accounts (user_id, host, login, name, email, token, expires_at, added_at, refresh_token, access_until) VALUES (?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(user_id, host) DO UPDATE SET login = excluded.login, name = excluded.name, email = excluded.email,
-       token = excluded.token, expires_at = excluded.expires_at, added_at = excluded.added_at`,
+       token = excluded.token, expires_at = excluded.expires_at, added_at = excluded.added_at,
+       refresh_token = excluded.refresh_token, access_until = excluded.access_until`,
     ),
+    setGitTokens: db.prepare('UPDATE git_accounts SET token = ?, refresh_token = ?, access_until = ? WHERE user_id = ? AND host = ?'),
     deleteGitAccount: db.prepare('DELETE FROM git_accounts WHERE user_id = ? AND host = ?'),
     deleteGitAccountsByHost: db.prepare('DELETE FROM git_accounts WHERE host = ?'),
   };
@@ -329,9 +336,14 @@ export function openDb(path = 'data/bot.db') {
     listGitAccounts: (userId) => safe(() => q.listGitAccounts.all(userId))() ?? [],
     /** Аккаунты всех пользователей (для напоминаний об истекающих токенах). */
     allGitAccounts: () => safe(() => q.allGitAccounts.all())() ?? [],
-    /** Сохраняет аккаунт сервиса: {host, login, name, email, token, expiresAt}. Возвращает true, если записано. */
+    /**
+     * Сохраняет аккаунт сервиса: {host, login, name, email, token, expiresAt, refreshToken, accessUntil}.
+     * refreshToken и accessUntil — только у входа по коду с обновляемым токеном. Возвращает true, если записано.
+     */
     saveGitAccount: (userId, a) =>
-      safe(() => q.saveGitAccount.run(userId, a.host, a.login ?? null, a.name ?? null, a.email ?? null, a.token, a.expiresAt ?? null, now()).changes === 1)() ?? false,
+      safe(() => q.saveGitAccount.run(userId, a.host, a.login ?? null, a.name ?? null, a.email ?? null, a.token, a.expiresAt ?? null, now(), a.refreshToken ?? null, a.accessUntil ?? null).changes === 1)() ?? false,
+    /** Записывает обновлённую пару токенов аккаунта. */
+    setGitTokens: safe((userId, host, { token, refreshToken, accessUntil }) => q.setGitTokens.run(token, refreshToken ?? null, accessUntil ?? null, userId, host)),
     deleteGitAccount: safe((userId, host) => q.deleteGitAccount.run(userId, host)),
     /** Удаляет аккаунты всех пользователей на сервисе (сервис убран администратором). Возвращает число удалённых. */
     deleteGitAccountsByHost: (host) => safe(() => Number(q.deleteGitAccountsByHost.run(host).changes))() ?? 0,
