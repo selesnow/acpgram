@@ -27,7 +27,7 @@ import { createAlbumBuffer } from './albums.mjs';
 import { dropQueue, enqueue, onAskCallback, onPermissionCallback, onQueueCallback, runTurn } from './turn.mjs';
 import { nearCommand, quoteOf, unsupportedKind } from './incoming.mjs';
 import { onWidgetQuery } from './widgetsUi.mjs';
-import { startView } from './ui.mjs';
+import { DOCS_URL, docsMenuButton, helpMarkup, startView } from './ui.mjs';
 
 if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
   console.error('Нужны TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID (см. .env)');
@@ -55,6 +55,11 @@ const sendStart = (st) => {
   const topics = topicsSupport.enabled ? (topicsOn(st.userId) ? 'on' : 'off') : null; // режим «диалоги», если у бота есть темы
   return sendRich(st.to, startView({ level: levelLabel(st.userId), project: userPath(st.userId, st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
 };
+
+function helpCommand(st) {
+  const lang = langOf(st.userId);
+  return say(st.to, t('help.text', lang, { url: DOCS_URL }), { reply_markup: helpMarkup(lang) });
+}
 
 /** Кнопка «⏹ Остановить» под сообщениями «запрос ещё выполняется» — вместо набора /stop. */
 const stopMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.stop', lang), callback_data: 'ui:stop' }]] });
@@ -132,6 +137,7 @@ const COMMANDS = [
   { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
   { name: 'topics', menu: () => topicsSupport.enabled, button: true, run: (st) => handleTopics(st) }, // в меню — если у бота включены темы
   { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
+  { name: 'help', menu: true, run: helpCommand },
   { name: 'start', menu: true, run: (st) => sendStart(st) },
 ];
 
@@ -268,6 +274,7 @@ async function setupCommands() {
     await tg('setMyCommands', { scope: { type: 'default' }, language_code: code, commands: menuFor(code, false) });
     await tg('setMyCommands', { scope: { type: 'chat', chat_id: ADMIN_ID }, language_code: code, commands: menuFor(code, true) });
   }
+  await tg('setChatMenuButton', { menu_button: docsMenuButton() });
 }
 
 async function handleUpdate(u) {
@@ -466,7 +473,7 @@ async function main() {
       ? `темы в личном чате включены (режим «диалоги», /topics)${topicsSupport.usersCreate ? '' : ' — пользователи не могут создавать темы сами, только через /new'}`
       : 'темы в личном чате выключены — режим «диалоги» недоступен',
   );
-  await setupCommands().catch((e) => log('setMyCommands:', e.message));
+  await setupCommands().catch((e) => log('настройка меню:', e.message));
   // пропускаем накопившиеся до запуска обновления
   const old = await tg('getUpdates', { offset: -1, timeout: 0 });
   let offset = old.length ? old[old.length - 1].update_id + 1 : 0;

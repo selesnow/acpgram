@@ -4,6 +4,14 @@ import { DEFAULT_LANG, LOCALES, plural, t } from './i18n.mjs';
 import { RICH_LIMIT, balanceMarkdown, escHtml } from './telegram.mjs';
 import { splitCode } from './files.mjs';
 
+export const DOCS_URL = 'https://alexey-seleznev.pro/acpgram/docs/';
+
+export const helpMarkup = (lang = DEFAULT_LANG) => ({
+  inline_keyboard: [[{ text: t('help.btn.browser', lang), url: DOCS_URL }, { text: t('help.btn.app', lang), web_app: { url: DOCS_URL } }]],
+});
+
+export const docsMenuButton = () => ({ type: 'web_app', text: '📖 Docs', web_app: { url: DOCS_URL } });
+
 // Rich-разметка Telegram превращает теги <tg-button> в настоящие кнопки с callback_data — в любом месте текста,
 // в любом регистре, и без <tg-button-row>. Текст агента (а в него попадает содержимое файлов и веб-страниц) не должен
 // уметь рисовать кнопки бота: иначе нажатие «Продолжить» в ответе могло бы выполнить adm:… от имени администратора.
@@ -739,6 +747,7 @@ const button = (text, data) => `<tg-button type="callback_data" data="${data}">$
 export function startView({ level, project, engine, model, isAdmin, note, topics = null, lang = DEFAULT_LANG }) {
   const cmd = (key) => t(`help.${key}`, lang);
   const commands = [
+    cmd('help'),
     cmd('project'),
     cmd('files'),
     cmd('git'),

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { plural, t } from '../src/i18n.mjs';
 import { fixTables, mediaBlock, mediaIdsOf, richToPlain, splitRich, stripMedia } from '../src/telegram.mjs';
-import { ANIM, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, defuseTgTags, engineMenu, hBold, hCode, hRaw, neutralizeTgTags, th, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
+import { ANIM, DOCS_URL, FREE_GROUP, MODEL_PAGE, OTHER_SUB, activeSessionsView, browseGroup, docsMenuButton, helpMarkup, modelSearchMenu, modelSubgroupsOf, searchModels, composeDraft, defuseTgTags, engineMenu, hBold, hCode, hRaw, neutralizeTgTags, th, sessionStatus, finalExtras, finalMessages, fmtDuration, lastThoughtTitle, modelGrantsView, modelGroupMenu, modelGroupsOf, modelMenu, skillName, startView, stepLine } from '../src/ui.mjs';
 
 const step = (o) => ({ toolCallId: 'x', tool: 'read_file', kind: 'read', title: 'src/a.mjs', description: '', status: null, ...o });
 const RU = { lang: 'ru' };
@@ -438,4 +438,19 @@ test('th: шаблон и параметры экранируются, hCode / h
   // служебный знак вставки в обычном параметре не превращается в разметку
   const mark = String.fromCharCode(1);
   assert.equal(th('proj.same', 'ru', { p: `${mark}0${mark}` }), '📁 Проект уже выбран: 0');
+});
+
+test('help: кнопки ведут на страницу справки и открывают её мини-приложением', () => {
+  assert.equal(DOCS_URL, 'https://alexey-seleznev.pro/acpgram/docs/');
+  assert.deepEqual(docsMenuButton(), { type: 'web_app', text: '📖 Docs', web_app: { url: DOCS_URL } });
+  for (const lang of ['en', 'ru', 'uk']) {
+    const kb = helpMarkup(lang);
+    assert.deepEqual(Object.keys(kb.inline_keyboard[0][0]), ['text', 'url']);
+    assert.equal(kb.inline_keyboard[0][0].url, DOCS_URL);
+    assert.deepEqual(Object.keys(kb.inline_keyboard[0][1]), ['text', 'web_app']);
+    assert.equal(kb.inline_keyboard[0][1].web_app.url, DOCS_URL);
+    assert.ok(t('help.text', lang, { url: DOCS_URL }).includes(DOCS_URL));
+    assert.ok(t('menu.help', lang).trim());
+    assert.ok(startView({ level: 'Full', project: 'p', engine: 'Gemini', isAdmin: false, lang }).includes(t('help.help', lang)));
+  }
 });

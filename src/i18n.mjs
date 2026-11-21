@@ -99,6 +99,7 @@ const M = {
   'menu.close': { en: 'Close the session and free the slot', ru: 'Закрыть сессию и освободить слот', uk: 'Закрити сесію та звільнити слот' },
   'menu.language': { en: 'Choose the interface language', ru: 'Выбрать язык интерфейса', uk: 'Обрати мову інтерфейсу' },
   'menu.start': { en: 'Welcome and the current project', ru: 'Приветствие и текущий проект', uk: 'Привітання та поточний проєкт' },
+  'menu.help': { en: 'Documentation with AI chat', ru: 'Документация с ИИ-чатом', uk: 'Документація з AI-чатом' },
   'menu.active': { en: 'Active sessions: who holds the slots', ru: 'Активные сессии: кто занимает слоты', uk: 'Активні сесії: хто займає слоти' },
   'menu.users': { en: 'Users with access: levels and revocation', ru: 'Сотрудники с доступом: уровни и отзыв', uk: 'Співробітники з доступом: рівні та відкликання' },
   'menu.usage': { en: 'Usage: requests and tokens by user', ru: 'Расход: запросы и токены по сотрудникам', uk: 'Витрати: запити й токени по співробітниках' },
@@ -130,6 +131,10 @@ const M = {
   'help.active': { en: '/active — active sessions', ru: '/active — активные сессии', uk: '/active — активні сесії' },
   'help.usage': { en: '/usage — requests and tokens by user', ru: '/usage — запросы и токены по сотрудникам', uk: '/usage — запити й токени по співробітниках' },
   'help.invite': { en: '/invite — invite a user', ru: '/invite — пригласить сотрудника', uk: '/invite — запросити співробітника' },
+  'help.help': { en: '/help — full documentation with an AI chat', ru: '/help — полная документация с ИИ-чатом', uk: '/help — повна документація з AI-чатом' },
+  'help.text': { en: '📖 Full documentation with an AI chat: {url}\n\nAsk a question and get an answer with links to the right section.', ru: '📖 Полная документация с ИИ-чатом: {url}\n\nЗадайте вопрос — ответ придёт со ссылкой на нужный раздел.', uk: '📖 Повна документація з AI-чатом: {url}\n\nЗадайте запитання — відповідь буде з посиланням на потрібний розділ.' },
+  'help.btn.browser': { en: 'Open in browser', ru: 'Открыть в браузере', uk: 'Відкрити у браузері' },
+  'help.btn.app': { en: 'Open mini app', ru: 'Открыть мини-приложение', uk: 'Відкрити мінізастосунок' },
 
   // ---------- уровни доступа ----------
   'level.read.label': { en: 'Read-only', ru: 'Чтение', uk: 'Читання' },
