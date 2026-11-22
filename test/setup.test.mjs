@@ -8,7 +8,7 @@ import { parseEnv } from 'node:util';
 import { resolveHomeDir } from '../src/app.mjs';
 import { homedir } from 'node:os';
 import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, serializeEnv, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
-import { LOGON_FAILURE, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
+import { LOGON_FAILURE, findNssm, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 import { setCliLang } from '../src/cli-i18n.mjs';
 
@@ -131,6 +131,30 @@ test('nssmCommands: программа отдельно, аргументы в �
   assert.deepEqual(byKey.AppRotateOnline, ['0'], 'онлайн-ротация (чтение вывода через pipe) подвешивает nssm.exe при остановке');
   assert.deepEqual(byKey.ObjectName, ['.\\u', 'p@ss']);
   assert.ok(!nssmCommands({ name: 'svc', node: 'n' }).some((c) => c[2] === 'ObjectName'), 'без учётной записи — LocalSystem');
+});
+
+test('findNssm: NSSM_PATH, затем bin каталога установки, потом PATH', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'acpgram-nssm-'));
+  try {
+    const home = join(dir, 'home');
+    const own = join(home, 'bin', 'nssm.exe');
+    mkdirSync(join(home, 'bin'), { recursive: true });
+    writeFileSync(own, '');
+    const pathDir = join(dir, 'path');
+    mkdirSync(pathDir);
+    const fromPath = join(pathDir, 'nssm.exe');
+    writeFileSync(fromPath, '');
+    const custom = join(dir, 'custom.exe');
+    writeFileSync(custom, '');
+    const env = { PATH: pathDir };
+
+    assert.equal(findNssm({ env, homeDir: home, extra: [] }), own, 'приватный nssm из каталога установки важнее PATH');
+    assert.equal(findNssm({ env: { ...env, NSSM_PATH: custom }, homeDir: home, extra: [] }), custom, 'явный путь важнее всего');
+    rmSync(own);
+    assert.equal(findNssm({ env, homeDir: home, extra: [] }), fromPath, 'без приватной копии — поиск по PATH');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('systemdUnit: «%» и «$» в путях экранируются (спецификаторы и подстановка systemd)', () => {

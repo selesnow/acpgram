@@ -56,6 +56,15 @@ test('install.ps1: acpgram.cmd обновляет сам, без node.exe (за�
   assert.ok(block.includes(`'  exit /b'`), 'блок завершается exit /b: cmd.exe разобрал его целиком до перезаписи файла');
 });
 
+test('install.ps1: приватный nssm ставится до мастера с проверкой SHA-256', () => {
+  const ps = readFileSync(new URL('../install.ps1', import.meta.url), 'utf8');
+  assert.ok(ps.includes('ACPGRAM_NO_NSSM'), 'установку можно отключить');
+  assert.ok(ps.includes("$NssmVersion = '2.24-101-g897c7ad'"));
+  assert.ok(ps.includes('99f5045fffbffb745d67fe3a065a953c4a3d9c253b868892d9b685b0ee7d07b8'), 'архив проверяется контрольной суммой');
+  assert.ok(ps.includes(String.raw`win64\nssm.exe`), 'ставится 64-разрядный nssm');
+  assert.ok(ps.indexOf('---------- nssm (Windows service manager) ----------') < ps.indexOf('---------- release ----------'), 'nssm ставится до релиза и мастера');
+});
+
 test('cli.mjs как команда: version и код выхода при ошибке', () => {
   const ok = spawnSync(process.execPath, [CLI, 'version'], { encoding: 'utf8' });
   assert.equal(ok.status, 0);

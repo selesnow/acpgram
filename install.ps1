@@ -4,12 +4,14 @@
 #
 # Installs (or updates) the latest release into %LOCALAPPDATA%\acpgram, adds the `acpgram` command to the user PATH,
 # installs a private Node.js 24 if the system one is missing or older (official build from nodejs.org, checksum verified),
-# then runs the setup wizard. Settings (.env) and data (data\) are kept on update.
+# installs a private nssm (Windows service manager) into bin\ if it is not found, then runs the setup wizard.
+# Settings (.env) and data (data\) are kept on update.
 #
 # Environment: ACPGRAM_HOME        install dir (default %LOCALAPPDATA%\acpgram)
 #              ACPGRAM_VERSION     release tag, e.g. v1.10.0 (default: latest)
 #              ACPGRAM_RELEASE_URL where to download the release from (mirror or local test; default GitHub Releases)
 #              ACPGRAM_NO_SETUP=1  do not run the setup wizard
+#              ACPGRAM_NO_NSSM=1   do not install a private nssm
 #              ACPGRAM_YES=1       answer "yes" to questions (non-interactive)
 
 & {
@@ -20,6 +22,10 @@
   $Repo = 'selesnow/acpgram'
   $NodeMajor = 24
   $AppHome = if ($env:ACPGRAM_HOME) { $env:ACPGRAM_HOME } else { Join-Path $env:LOCALAPPDATA 'acpgram' }
+  $bin = Join-Path $AppHome 'bin'
+  $NssmVersion = '2.24-101-g897c7ad'
+  $NssmUrl = "https://nssm.cc/ci/nssm-$NssmVersion.zip"
+  $NssmHash = '99f5045fffbffb745d67fe3a065a953c4a3d9c253b868892d9b685b0ee7d07b8'
 
   function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
   function Fail($text) { throw "AcpGram installer: $text" }
@@ -46,6 +52,8 @@
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ("acpgram-" + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $tmp | Out-Null
+  New-Item -ItemType Directory -Path $bin -Force | Out-Null
+  $env:Path = "$bin;$env:Path" # the wizard and commands started below see the tools installed here right away
   try {
     # ---------- Node.js ----------
     $node = $null
@@ -79,6 +87,36 @@
     }
     Write-Host "Node.js $(& $node -v): $node"
 
+    # ---------- nssm (Windows service manager) ----------
+    $nssmExe = Join-Path $bin 'nssm.exe'
+    $found = Get-Command nssm -ErrorAction SilentlyContinue
+    if ($found) {
+      $nssmExe = $found.Source
+      Write-Host "nssm: $nssmExe"
+    }
+    elseif (Test-Path $nssmExe) {
+      Write-Host "nssm: $nssmExe"
+    }
+    elseif ($env:ACPGRAM_NO_NSSM -eq '1') {
+      Write-Host 'Skipping nssm (ACPGRAM_NO_NSSM=1)'
+    }
+    else {
+      Step "Installing nssm $NssmVersion"
+      try {
+        $zip = "$tmp\nssm-$NssmVersion.zip"
+        Download $NssmUrl $zip
+        if ((Sha256 $zip) -ne $NssmHash) { Fail 'nssm checksum mismatch' }
+        $nssmDir = Join-Path $tmp 'nssm'
+        Expand-Archive -Path $zip -DestinationPath $nssmDir -Force
+        Copy-Item -Path (Join-Path $nssmDir "$NssmVersion\win64\nssm.exe") -Destination $nssmExe -Force
+        Write-Host "nssm: $nssmExe"
+      }
+      catch {
+        Write-Host "Could not install nssm: $($_.Exception.Message)"
+        Write-Host 'To run the bot as a service, install nssm: winget install --id NSSM.NSSM -e'
+      }
+    }
+
     # ---------- release ----------
     if ($env:ACPGRAM_VERSION) { $tag = $env:ACPGRAM_VERSION }
     else {
@@ -102,8 +140,6 @@
     Get-ChildItem -Path $src -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination $AppHome -Recurse -Force }
 
     # ---------- the acpgram command ----------
-    $bin = Join-Path $AppHome 'bin'
-    New-Item -ItemType Directory -Path $bin -Force | Out-Null
     # Paths relative to the .cmd itself (%~dp0 = ...\acpgram\bin\): the file stays pure ASCII whatever the install path
     # (non-ASCII folder names would break in the console code page) and the same on every update.
     # ACPGRAM_HOME is passed so that `acpgram update` updates this very installation.
@@ -142,24 +178,19 @@
       [Environment]::SetEnvironmentVariable('ACPGRAM_PATH_UPDATED', $null, 'User')
       Write-Host "Added $bin to the user PATH (open a new terminal to use 'acpgram')"
     }
-    $env:Path = "$bin;$env:Path"
     Write-Host "Command: $bin\acpgram.cmd"
 
     # ---------- setup / restart ----------
     if ($update) {
       Step "Updated to $tag"
-      $nssm = Get-Command nssm -ErrorAction SilentlyContinue
       $svc = ''
       # PowerShell 5.1 with ErrorActionPreference=Stop throws on native stderr, hence try/catch
-      if ($nssm) { try { $svc = ((& $nssm.Source status acpgram 2>&1) | Out-String) -replace "`0", '' } catch { $svc = '' } }
+      if (Test-Path $nssmExe) { try { $svc = ((& $nssmExe status acpgram 2>&1) | Out-String) -replace "`0", '' } catch { $svc = '' } }
       if ($svc -match 'SERVICE_') {
         Write-Host "Restart the service to apply the update (terminal as administrator): acpgram service restart"
       }
     }
     if (-not (Test-Path (Join-Path $AppHome '.env')) -and $env:ACPGRAM_NO_SETUP -ne '1') {
-      if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
-        Write-Host "Tip: to run the bot as a Windows service you need nssm: winget install --id NSSM.NSSM -e"
-      }
       Step 'Setup'
       & $node --disable-warning=ExperimentalWarning (Join-Path $AppHome 'src\setup.mjs')
       if ($LASTEXITCODE -ne 0) { Write-Host "Setup did not finish: run 'acpgram setup' later" }

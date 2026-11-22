@@ -127,7 +127,7 @@ irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
 ```
 
-The installer downloads the latest [release](https://github.com/selesnow/acpgram/releases) (checksum verified) into `%LOCALAPPDATA%\acpgram` or `~/.local/share/acpgram`, installs a private Node.js 24 if yours is missing or older (official build, checksum verified, no admin rights), adds the `acpgram` command to your PATH and starts the setup wizard. Run it again — or `acpgram update` — to update; your settings and data are kept.
+The installer downloads the latest [release](https://github.com/selesnow/acpgram/releases) (checksum verified) into `%LOCALAPPDATA%\acpgram` or `~/.local/share/acpgram`, installs a private Node.js 24 if yours is missing or older and a private `nssm.exe` (Windows service manager) if it is not found — both official builds, SHA-256 verified, no admin rights — adds the `acpgram` command to your PATH and starts the setup wizard. An existing nssm is left alone; `ACPGRAM_NO_NSSM=1` skips it. Run it again — or `acpgram update` — to update; your settings and data are kept.
 
 ```text
 acpgram                    start the bot
@@ -137,6 +137,8 @@ acpgram update             update to the latest release
 ```
 
 From source instead (Node.js 24+): `git clone https://github.com/selesnow/acpgram.git && cd acpgram && npm start` — npm scripts mirror the commands: `npm run setup`, `npm run service:install`.
+
+> On Windows, `nssm` is only needed to run the bot as a service. The one-line `install.ps1` installs it automatically into `%LOCALAPPDATA%\acpgram\bin`; with `npm install -g acpgram` you need to install it yourself: `winget install --id NSSM.NSSM -e`. Running `acpgram` in a terminal does not need nssm.
 
 The **setup wizard** (`acpgram setup` / `npm run setup`, safe to re-run — current values are suggested):
 
@@ -154,7 +156,7 @@ Autostart with the system and restart on failure — one command:
 
 | OS | How | Command |
 |---|---|---|
-| Windows | Windows service via [nssm](https://nssm.cc) (`winget install --id NSSM.NSSM -e`); run the terminal as administrator; you will be offered to run the service under your account (where the agents are signed in) | `npm run service:install` |
+| Windows | Windows service via [nssm](https://nssm.cc) (the Windows installer already puts a private `nssm.exe` into `%LOCALAPPDATA%\acpgram\bin`; for an npm install use `winget install --id NSSM.NSSM -e`); run the terminal as administrator; you will be offered to run the service under your account (where the agents are signed in) | `npm run service:install` |
 | Linux | `systemd --user` (to keep it running without a login session: `sudo loginctl enable-linger $USER`) | `npm run service:install` |
 | macOS | LaunchAgent (`launchd`) | `npm run service:install` |
 

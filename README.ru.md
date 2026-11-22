@@ -246,7 +246,7 @@ irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
 ```
 
-Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 (официальная сборка, с проверкой контрольной суммы, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | restart | stop | status | uninstall`, `acpgram update`.
+Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 и приватный `nssm.exe` (менеджер служб Windows; обе сборки официальные, с проверкой SHA-256, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Уже установленный nssm не перезаписывается; `ACPGRAM_NO_NSSM=1` отключает его установку. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | restart | stop | status | uninstall`, `acpgram update`.
 
 Два способа, выбирайте под машину:
 
@@ -292,11 +292,13 @@ npm start            # первый запуск без .env сам открое
 
 Вручную: скопировать `.env.example` в `.env`, заполнить и запустить `npm start`.
 
+> `nssm` нужен только для запуска как служба Windows. Однострочный установщик (`install.ps1`) ставит его автоматически в `%LOCALAPPDATA%\acpgram\bin`; при установке через `npm install -g acpgram` его нужно установить самостоятельно: `winget install --id NSSM.NSSM -e`. Для обычного запуска в консоли `nssm` не нужен.
+
 **Служба одной командой** — автозапуск с системой и перезапуск при сбое:
 
 | ОС | Как | Команда |
 |---|---|---|
-| Windows | служба через [nssm](https://nssm.cc) (`winget install --id NSSM.NSSM -e`), терминал от имени администратора; мастер предложит запускать службу от вашей учётной записи (там авторизованы агенты) | `npm run service:install` |
+| Windows | служба через [nssm](https://nssm.cc) (установщик Windows уже кладёт приватный `nssm.exe` в `%LOCALAPPDATA%\acpgram\bin`; при установке из npm — `winget install --id NSSM.NSSM -e`), терминал от имени администратора; мастер предложит запускать службу от вашей учётной записи (там авторизованы агенты) | `npm run service:install` |
 | Linux | `systemd --user` (для работы без входа в систему: `sudo loginctl enable-linger $USER`) | `npm run service:install` |
 | macOS | LaunchAgent (`launchd`) | `npm run service:install` |
 

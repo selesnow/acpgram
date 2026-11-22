@@ -146,10 +146,12 @@ const run = (cmd, args, { dry = false, secretAt = -1, quiet = false, timeout = 3
 
 const WINGET_LINKS = process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links')] : [];
 
-/** nssm: NSSM_PATH, затем PATH (поиск средствами Node — `where` портит пути с кириллицей), затем ссылки WinGet. */
-function findNssm() {
-  if (process.env.NSSM_PATH && existsSync(process.env.NSSM_PATH)) return process.env.NSSM_PATH;
-  return findOnPath('nssm', { exists: existsSync, exts: ['.exe'], extra: WINGET_LINKS });
+/** nssm: NSSM_PATH, каталог установки bin\, затем PATH (поиск средствами Node — `where` портит пути с кириллицей) и ссылки WinGet. */
+export function findNssm({ env = process.env, homeDir = HOME_DIR, extra = WINGET_LINKS } = {}) {
+  if (env.NSSM_PATH && existsSync(env.NSSM_PATH)) return env.NSSM_PATH;
+  const privateNssm = join(homeDir, 'bin', 'nssm.exe');
+  if (existsSync(privateNssm)) return privateNssm;
+  return findOnPath('nssm', { exists: existsSync, exts: ['.exe'], pathVar: env.PATH ?? env.Path ?? '', extra });
 }
 
 const isWinAdmin = () => spawnSync('net', ['session'], { windowsHide: true, stdio: 'ignore' }).status === 0;
