@@ -7,7 +7,7 @@
 //   • значения состояний (RUNNING, STOP_PENDING…) и формат «число  (0xHEX)» зашиты в sc.exe;
 //   • ключи и значения реестра (DeleteFlag), столбцы CSV tasklist.
 // Текст вывода используется только для показа пользователю.
-import { win32 } from 'node:path';
+import { delimiter, join, win32 } from 'node:path';
 import { tc } from './cli-i18n.mjs';
 
 /** Код Windows «служба не существует» (ERROR_SERVICE_DOES_NOT_EXIST) — его возвращает sc.exe как код выхода. */
@@ -116,9 +116,13 @@ export const parseOemCp = (output) => Number(/OEMCP\s+REG_SZ\s+(\d+)/.exec(outpu
  * @param {{pathVar?: string, exts?: string[], exists: (p: string) => boolean, extra?: string[]}} o
  */
 export function findOnPath(cmd, { pathVar = process.env.PATH ?? process.env.Path ?? '', exts = ['.exe', '.cmd', '.bat'], exists, extra = [] } = {}) {
-  const dirs = [...pathVar.split(';').map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean), ...extra];
+  const pathJoin = process.platform === 'win32' ? win32.join : join;
+  const dirs = [...pathVar.split(delimiter).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean), ...extra];
   // имя уже с расширением («gemini.cmd», «codex-acp.cmd») — проверяем как есть, иначе получилось бы «codex-acp.cmd.cmd»
   const hasExt = exts.some((e) => cmd.toLowerCase().endsWith(e));
-  for (const dir of dirs) for (const ext of hasExt ? [''] : exts) if (exists(win32.join(dir, cmd + ext))) return win32.join(dir, cmd + ext);
+  for (const dir of dirs) for (const ext of hasExt ? [''] : exts) {
+    const file = pathJoin(dir, cmd + ext);
+    if (exists(file)) return file;
+  }
   return null;
 }
