@@ -231,7 +231,7 @@ test('песочница: команды git бота выполняются в�
   await G.runGit(['init', '-q', '-b', 'main', repo], { cwd: ws1, ...inWs });
   writeFileSync(join(repo, 'a.txt'), '1');
   writeFileSync(join(repo, '.env'), 'S=1');
-  assert.deepEqual(await G.commitAll(repo, 'первый', { cwd: repo, ...inRepo }), { committed: true, skipped: ['.env'], tracked: [] });
+  assert.deepEqual(await G.commitAll(repo, 'первый', { cwd: repo, ...inRepo }), { committed: true, skipped: ['.env'], tracked: [], ignoreWarning: false });
   const st = await G.repoState(repo, inRepo);
   assert.deepEqual([st.top, st.branch, st.changed], [repo, 'main', 0]);
   assert.equal((await G.runGit(['log', '-1', '--format=%an <%ae>'], { cwd: repo, ...inRepo })).trim(), 'Ann <ann@example.com>');
