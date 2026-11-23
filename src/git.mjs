@@ -54,7 +54,10 @@ export const SAFE_CONFIG = [
   ['core.hooksPath', devNull],
   ['core.fsmonitor', 'false'],
   ['credential.helper', ''],
+  ['protocol.allow', 'never'],
+  ['protocol.https.allow', 'always'],
   ['protocol.ext.allow', 'never'],
+  ['safe.bareRepository', 'explicit'],
   ['advice.detachedHead', 'false'],
   ['core.quotePath', 'false'], // имена файлов не латиницей — как есть, а не восьмеричными кодами
 ];
@@ -65,7 +68,7 @@ export const SAFE_CONFIG = [
  * На Linux и macOS общий и системный конфиги не читаются: в песочнице общий конфиг лежит в папке, куда пишет агент.
  */
 export function gitEnv({ identity = null, auth = [], base = process.env } = {}) {
-  const env = { ...agentEnv({ apiKeys: [] }, base), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_PAGER: 'cat', LC_ALL: 'C' };
+  const env = { ...agentEnv({ apiKeys: [] }, base), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', GIT_EDITOR: 'true', GIT_PAGER: 'cat', LC_ALL: 'C' };
   if (!IS_WIN) Object.assign(env, { GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' });
   if (identity?.name && identity?.email) {
     Object.assign(env, { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email });
@@ -80,6 +83,13 @@ export class GitError extends Error {
     this.code = code;
     this.stderr = stderr;
     this.timeout = timeout;
+  }
+}
+
+export class GitConfigError extends GitError {
+  constructor(keys) {
+    super(`небезопасные настройки репозитория: ${keys.join(', ')}`);
+    this.keys = keys;
   }
 }
 
@@ -138,6 +148,28 @@ export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120
   });
 }
 
+const DENIED_CONFIG = (key) =>
+  ['core.sshcommand', 'core.askpass', 'gpg.program', 'core.alternaterefscommand'].includes(key) ||
+  key === 'include.path' ||
+  /^includeif\..*\.path$/.test(key) ||
+  /^remote\..+\.(uploadpack|receivepack)$/.test(key) ||
+  (/^filter\./.test(key) && !key.startsWith('filter.lfs.'));
+
+const isFalse = (value) => /^(false|no|off|0)$/i.test(String(value).trim());
+
+export async function assertPlainConfig(cwd, opts = {}) {
+  const raw = await runGit(['config', '--local', '--list', '-z'], { cwd, ...opts });
+  const bad = [];
+  for (const rec of raw.split('\0')) {
+    if (!rec) continue;
+    const cut = rec.indexOf('\n');
+    const key = (cut < 0 ? rec : rec.slice(0, cut)).toLowerCase();
+    const value = cut < 0 ? '' : rec.slice(cut + 1);
+    if (DENIED_CONFIG(key) || (/^http(\..+)?\.sslverify$/.test(key) && isFalse(value))) bad.push(key);
+  }
+  if (bad.length) throw new GitConfigError([...new Set(bad)]);
+}
+
 /**
  * Разбор `git status --porcelain=v2 --branch`.
  * @returns {{branch: string|null, upstream: string|null, ahead: number, behind: number, changed: number}}
@@ -174,17 +206,26 @@ export async function repoState(cwd, opts = {}) {
 }
 
 /** Клонирует репозиторий url в папку dest (её ещё нет), запускается из её родительской папки cwd. Подмодули не тянутся. */
-export const cloneRepo = (url, dest, { cwd, ...opts }) => runGit(['clone', '--no-recurse-submodules', '--', url, dest], { cwd, timeoutMs: 10 * 60_000, ...opts });
+export async function cloneRepo(url, dest, { cwd, ...opts }) {
+  await runGit(['clone', '--no-recurse-submodules', '--', url, dest], { cwd, timeoutMs: 10 * 60_000, ...opts });
+  await assertPlainConfig(join(cwd, dest), opts);
+}
+
+const fetchRaw = (cwd, opts) => runGit(['fetch', '--prune', 'origin'], { cwd, timeoutMs: 60_000, ...opts });
 
 /** Сверяется с сервером (git fetch): рабочие файлы не трогает, обновляет сведения о ветках сервера. */
-export const fetchRepo = (cwd, opts = {}) => runGit(['fetch', '--prune', 'origin'], { cwd, timeoutMs: 60_000, ...opts });
+export async function fetchRepo(cwd, opts = {}) {
+  await assertPlainConfig(cwd, opts);
+  return fetchRaw(cwd, opts);
+}
 
 /**
  * Получает изменения с сервера: fetch и перемотка вперёд, если это возможно без слияния.
  * @returns {Promise<'updated'|'uptodate'|'diverged'|'noupstream'>} diverged — истории разошлись, нужно слияние (его делает агент)
  */
 export async function pullRepo(cwd, opts = {}) {
-  await fetchRepo(cwd, opts);
+  await assertPlainConfig(cwd, opts);
+  await fetchRaw(cwd, opts);
   const before = parseStatus(await runGit(['status', '--porcelain=v2', '--branch'], { cwd, ...opts }));
   if (!before.upstream) return 'noupstream';
   if (!before.behind) return 'uptodate';
@@ -211,7 +252,10 @@ export async function unpushedSecrets(cwd, opts = {}) {
 }
 
 /** Отправляет текущую ветку на сервер (и связывает её с веткой сервера). */
-export const pushRepo = (cwd, opts = {}) => runGit(['push', '-u', 'origin', 'HEAD'], { cwd, ...opts });
+export async function pushRepo(cwd, opts = {}) {
+  await assertPlainConfig(cwd, opts);
+  return runGit(['push', '-u', 'origin', 'HEAD'], { cwd, ...opts });
+}
 
 /**
  * Коммитит все изменения, кроме файлов с секретами: их из коммита убирает, новые — дописывает в .gitignore.
@@ -221,6 +265,7 @@ export const pushRepo = (cwd, opts = {}) => runGit(['push', '-u', 'origin', 'HEA
  *   подменён ссылкой или недоступен, правила туда не записаны
  */
 export async function commitAll(cwd, message, opts = {}) {
+  await assertPlainConfig(cwd, opts);
   await runGit(['add', '-A'], { cwd, ...opts });
   const staged = (await runGit(['diff', '--cached', '--name-status'], { cwd, ...opts }))
     .split(/\r?\n/)

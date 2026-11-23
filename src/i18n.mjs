@@ -324,6 +324,7 @@ const M = {
   'git.cloneExists': { en: "⚠️ The folder {name} already exists in {dir}. Choose it in /project or rename it.", ru: "⚠️ Папка {name} уже есть в {dir}. Выберите её в /project или переименуйте.", uk: "⚠️ Папка {name} уже є в {dir}. Оберіть її в /project або перейменуйте." },
   'git.cloneBadName': { en: "⚠️ This repository cannot be cloned here: its name is not suitable for a folder.", ru: "⚠️ Этот репозиторий сюда клонировать нельзя: его название не подходит для папки.", uk: "⚠️ Цей репозиторій сюди клонувати не можна: його назва не підходить для папки." },
   'git.opFail': { en: "⚠️ Git: {msg}", ru: "⚠️ Git: {msg}", uk: "⚠️ Git: {msg}" },
+  'git.unsafeConfig': { en: "⚠️ Git: unsafe repository settings found: {keys}. Remove them and try again.", ru: "⚠️ Git: в настройках репозитория найдены небезопасные параметры: {keys}. Уберите их и повторите.", uk: "⚠️ Git: у налаштуваннях репозиторію знайдено небезпечні параметри: {keys}. Приберіть їх і повторіть." },
   'git.busy': { en: "Wait for the current Git operation to finish.", ru: "Дождитесь завершения текущей операции Git.", uk: "Дочекайтеся завершення поточної операції Git." },
   'git.agentBusy': { en: "First wait for the agent to answer or stop it: /stop", ru: "Сначала дождитесь ответа агента или остановите его: /stop", uk: "Спочатку дочекайтеся відповіді агента або зупиніть його: /stop" },
   'git.pulling': { en: "⏳ Pulling changes…", ru: "⏳ Получаю изменения…", uk: "⏳ Отримую зміни…" },

@@ -28,7 +28,13 @@ delete process.env.GIT_COMMAND;
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
 process.env.ALLOWED_USER_ID ??= '1';
 // «сервер»: адрес репозитория на GitHub ведёт в локальный репозиторий
-Object.assign(process.env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `url.${bare}.insteadOf`, GIT_CONFIG_VALUE_0: REPO_URL });
+Object.assign(process.env, {
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: `url.${bare}.insteadOf`,
+  GIT_CONFIG_VALUE_0: REPO_URL,
+  GIT_CONFIG_KEY_1: 'protocol.file.allow',
+  GIT_CONFIG_VALUE_1: 'always',
+});
 
 const TOKEN = 'ghp_test0123456789secretTOKEN';
 const sent = [];

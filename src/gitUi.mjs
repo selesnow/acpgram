@@ -1,21 +1,22 @@
 // Команда /git: аккаунты GitHub и GitLab пользователя (вход по токену доступа), клонирование репозитория кнопками,
 // состояние репозитория проекта, «Получить», «Отправить», «Сохранить и отправить».
 // Токен вводится сообщением, которое не передаётся агенту и удаляется из чата; команды git с входом выполняет бот.
+import { lstatSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, langOf, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
-import { GitError, cloneRepo, commitAll, fetchRepo, gitAvailable, gitCommand, gitEnv, pullRepo, pushRepo, repoState, unpushedSecrets } from './git.mjs';
+import { cloneRepo, commitAll, fetchRepo, gitAvailable, pullRepo, pushRepo, repoState, unpushedSecrets } from './git.mjs';
 import { DeviceError, deviceLogin, startDeviceLogin, waitDeviceLogin } from './gitDevice.mjs';
 import { recall, remember } from './gitKeys.mjs';
-import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, identityOf, refreshAccounts, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
+import { acquireGitLock, failText, gitNetOpts, gitOpts, projectOf, releaseGitLock, repoOf } from './gitCtx.mjs';
+import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, refreshAccounts, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
 import { PUBLISH_ACTIONS, PUBLISH_INPUTS, canPublish, onPublishCallback, onPublishInput } from './gitPublishUi.mjs';
 import { REPO_ACTIONS, onBranchInput, onRepoCallback } from './gitRepoUi.mjs';
-import { HostError, authConfig, customHost, fetchProfile, listRepos, missingScopes, probeHost, repoFolder, showRemote } from './gitHosts.mjs';
-import { LOCALES, errText, t } from './i18n.mjs';
-import { ROOT, folderName, insideRoot, isPersonalRoot, navStart } from './projects.mjs';
+import { HostError, customHost, fetchProfile, listRepos, missingScopes, probeHost, repoFolder, showRemote } from './gitHosts.mjs';
+import { LOCALES, t } from './i18n.mjs';
+import { folderName, insideRoot, isPersonalRoot, navStart } from './projects.mjs';
 import { canCreateProject, selectProject } from './projectsUi.mjs';
-import { agentSandbox } from './sandbox.mjs';
-import { isAdmin, rootOf, sandboxed, userPath } from './state.mjs';
+import { isAdmin, rootOf, userPath } from './state.mjs';
 import { dest, tg } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
 
@@ -25,32 +26,6 @@ export const GIT_WAIT_MS = 10 * 60_000;
 
 const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] });
 const dateOf = (iso, lang) => (iso ? new Date(iso).toLocaleDateString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—');
-
-/** Папка проекта диалога, если она доступна, иначе null. */
-const projectOf = (st) => insideRoot(st.project, rootOf(st.userId));
-
-/**
- * Как запускать git для этого пользователя: окружение (автор коммитов, вход в сервис), песочница сотрудника
- * (если она включена) и строки, которые нужно вычистить из сообщений об ошибках.
- */
-function gitOpts(st, cwd, { host = null, account = null } = {}) {
-  const who = account ?? accountsOf(st.userId)[0]?.account ?? null;
-  const auth = host && account ? authConfig(host, account.token) : [];
-  const root = rootOf(st.userId);
-  const wrap = sandboxed(st.userId)
-    ? agentSandbox({ userId: st.userId, cwd, root, command: gitCommand(), protect: isPersonalRoot(root) ? [ROOT] : [] })
-    : null;
-  return { env: gitEnv({ identity: identityOf(who), auth }), wrap, hide: account ? [account.token, auth[0]?.[1]?.split(' ').pop()] : [] };
-}
-
-/** Репозиторий проекта и его сервис: {state, host, account} или null, если проект не репозиторий (или репозиторий выше корня пользователя). */
-async function repoOf(st, project) {
-  const state = await repoState(project, gitOpts(st, project));
-  if (!state || !insideRoot(state.top, rootOf(st.userId))) return null;
-  const host = hostFor(state.remote);
-  const account = host ? db.getGitAccount(st.userId, host.id) : null;
-  return { state, host, account };
-}
 
 /**
  * Экран /git: состояние репозитория проекта, аккаунты, кнопки. Текст — HTML.
@@ -67,12 +42,17 @@ export async function gitView(st, lang = langOf(st.userId), { sync = false } = {
   let repo = await load();
   let syncError = null;
   if (sync && repo?.account && !st.busy && !st.gitBusy) {
-    try {
-      await fetchRepo(project, gitOpts(st, project, repo));
-      repo = await load();
-    } catch (e) {
-      log('git: сверка с сервером:', e.message, '| пользователь', st.userId);
-      syncError = e.message;
+    const lock = acquireGitLock(st, project);
+    if (lock) {
+      try {
+        await fetchRepo(project, gitNetOpts(st, project, repo));
+        repo = await load();
+      } catch (e) {
+        log('git: сверка с сервером:', e.message, '| пользователь', st.userId);
+        syncError = e.message;
+      } finally {
+        releaseGitLock(st, lock);
+      }
     }
   }
   if (repo) {
@@ -91,7 +71,7 @@ export async function gitView(st, lang = langOf(st.userId), { sync = false } = {
     rows.push([{ text: t('git.changesBtn', lang), callback_data: 'gt:ch:0' }, { text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }]);
   } else lines.push(th('git.noRepo', lang));
   // папку, которая ещё не связана с сервером, можно опубликовать: бот создаст для неё репозиторий
-  const publishable = project && !repo?.state.remote ? await canPublish(st, project, { gitOpts }).catch(() => false) : false;
+  const publishable = project && !repo?.state.remote ? await canPublish(st, project).catch(() => false) : false;
   if (publishable) rows.push([{ text: t('git.pbBtn', lang), callback_data: 'gt:pb' }]);
   lines.push(accounts.length ? [t('git.accounts', lang), ...accounts.map(({ host, account }) => th('git.accLine', lang, { host: host.label, login: account.login }))].join('\n') : th('git.noAccounts', lang));
   if (accounts.length && canCreateProject(st.userId)) rows.push([{ text: t('git.clone', lang), callback_data: 'gt:cl' }]);
@@ -153,9 +133,6 @@ export async function offerGitActions(st, actions) {
   return say(st.to, t(actions.length > 1 ? 'git.offer.both' : `git.offer.${actions[0]}`, lang), { reply_markup: { inline_keyboard: [row] } });
 }
 
-/** Текст ошибки git или сервиса для пользователя. */
-const failText = (e, lang) => th('git.opFail', lang, { msg: e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang) });
-
 /** Куда клонировать: личное пространство сотрудника, иначе — папка рядом с текущим проектом (или корень). */
 function cloneBase(st) {
   const root = rootOf(st.userId);
@@ -178,6 +155,17 @@ async function reposView(st, host, account, { page = 0, search = '' } = {}, lang
   return { text: items.length ? head : `${head}\n\n<i>${th('git.reposNone', lang)}</i>`, markup: { inline_keyboard: rows } };
 }
 
+export function cleanFailedClone(st, target, base) {
+  try {
+    const info = lstatSync(target);
+    const real = realpathSync.native(target);
+    if (!info.isDirectory() || info.isSymbolicLink() || !insideRoot(real, base)) return;
+    rmSync(real, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (e) {
+    log('git: папка неудачного клона не убрана:', e.message, '| пользователь', st.userId);
+  }
+}
+
 /** Клонирует выбранный репозиторий в пространство пользователя и выбирает его проектом. */
 async function cloneChosen(st, repo, host, account, lang, edit) {
   const base = cloneBase(st);
@@ -187,9 +175,10 @@ async function cloneChosen(st, repo, host, account, lang, edit) {
   if (insideRoot(target, rootOf(st.userId))) return edit({ text: th('git.cloneExists', lang, { name: hCode(name), dir: hCode(userPath(st.userId, base, lang)) }) });
   await edit({ text: th('git.cloning', lang, { name: hCode(repo.name) }) });
   try {
-    await cloneRepo(repo.url, name, { cwd: base, ...gitOpts(st, base, { host, account }) });
+    await cloneRepo(repo.url, name, { cwd: base, ...gitNetOpts(st, base, { host, account }) });
   } catch (e) {
     log('git: клонирование:', e.message, '| пользователь', st.userId);
+    cleanFailedClone(st, target, base);
     return edit({ text: failText(e, lang) });
   }
   const dir = insideRoot(target, rootOf(st.userId));
@@ -205,18 +194,20 @@ async function cloneChosen(st, repo, host, account, lang, edit) {
  */
 async function repoAction(st, action, lang, edit, { message = null } = {}) {
   const project = projectOf(st);
-  const repo = project ? await repoOf(st, project) : null;
-  if (!repo?.account) return edit(await gitView(st, lang));
-  const opts = gitOpts(st, project, repo);
+  const lock = acquireGitLock(st, project ?? st.userId);
+  if (!lock) return edit({ text: t('git.busy', lang) });
   const done = async (text) => {
     const v = await gitView(st, lang);
     return edit({ text: `${text}\n\n${v.text}`, markup: v.markup });
   };
-  st.gitBusy = true;
   try {
+    const repo = project ? await repoOf(st, project) : null;
+    if (!repo?.account) return edit(await gitView(st, lang));
+    const opts = gitOpts(st, project, repo.account);
+    const net = gitNetOpts(st, project, repo);
     if (action === 'pull') {
       await edit({ text: th('git.pulling', lang) });
-      const result = await pullRepo(project, opts);
+      const result = await pullRepo(project, net);
       log('git: получено:', st.userId, project, '|', result);
       return await done(th(`git.pull.${result}`, lang));
     }
@@ -241,7 +232,7 @@ async function repoAction(st, action, lang, edit, { message = null } = {}) {
     const state = await repoState(project, opts);
     if (state?.upstream && !state.ahead) return await done(th('git.nothingToPush', lang) + note);
     try {
-      await pushRepo(project, opts);
+      await pushRepo(project, net);
     } catch (e) {
       if (/rejected|non-fast-forward|fetch first/i.test(`${e.message} ${e.stderr ?? ''}`)) return await done(th('git.pushRejected', lang) + note);
       throw e;
@@ -252,7 +243,7 @@ async function repoAction(st, action, lang, edit, { message = null } = {}) {
     log(`git: ${action}:`, e.message, '| пользователь', st.userId);
     return await done(failText(e, lang));
   } finally {
-    st.gitBusy = false;
+    releaseGitLock(st, lock);
   }
 }
 
@@ -362,9 +353,9 @@ export async function onGitCallback(st, cb) {
     return edit(hostsView(lang, th('git.hosts.deleted', lang, { label: own.label, n: n ?? 0 })));
   }
   // экраны «Изменения» и «Ветки» — gitRepoUi
-  if (REPO_ACTIONS.includes(action)) return onRepoCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st), repoOf, gitOpts });
+  if (REPO_ACTIONS.includes(action)) return onRepoCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st) });
   // «Опубликовать проект» и «Запрос на слияние» — gitPublishUi
-  if (PUBLISH_ACTIONS.includes(action)) return onPublishCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st), repoOf, gitOpts, view: () => gitView(st, lang) });
+  if (PUBLISH_ACTIONS.includes(action)) return onPublishCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st), view: () => gitView(st, lang) });
   const host = findHost(arg);
   const account = host ? db.getGitAccount(st.userId, host.id) : null;
   try {
@@ -425,13 +416,13 @@ export async function onGitCallback(st, cb) {
       const acc = h ? db.getGitAccount(st.userId, h.id) : null;
       if (!repo || !acc || !canCreateProject(st.userId)) return ack(t('proj.stale', lang));
       if (hostFor(repo.url)?.id !== h.id) return ack(t('proj.stale', lang)); // адрес обязан принадлежать своему сервису
-      if (st.gitBusy) return ack(t('git.busy', lang));
+      const lock = acquireGitLock(st, cloneBase(st) ?? st.userId);
+      if (!lock) return ack(t('git.busy', lang));
       await ack();
-      st.gitBusy = true;
       try {
         return await cloneChosen(st, repo, h, acc, lang, edit);
       } finally {
-        st.gitBusy = false;
+        releaseGitLock(st, lock);
       }
     }
     // ---- репозиторий проекта ----
@@ -499,8 +490,8 @@ export async function onGitInput(st, text, { messageId, now = Date.now() } = {})
 
   st.pendingInput = null;
   if (expired) return false; // адрес сервера, строка поиска и описание изменений — не секреты: позже это обычный запрос агенту
-  if (wait.kind === 'gitBranch') return onBranchInput(st, text, { wait, now, lang, project: projectOf(st), repoOf, gitOpts });
-  if (PUBLISH_INPUTS.includes(wait.kind)) return onPublishInput(st, text, { wait, now, lang, send, project: projectOf(st), repoOf, gitOpts, view: () => gitView(st, lang) });
+  if (wait.kind === 'gitBranch') return onBranchInput(st, text, { wait, now, lang, project: projectOf(st) });
+  if (PUBLISH_INPUTS.includes(wait.kind)) return onPublishInput(st, text, { wait, now, lang, send, project: projectOf(st), view: () => gitView(st, lang) });
   // свои серверы: адрес нового сервера или новое название — только от администратора
   if (wait.kind === 'gitHostUrl' || wait.kind === 'gitHostName') {
     if (!isAdmin(st.userId)) return false;

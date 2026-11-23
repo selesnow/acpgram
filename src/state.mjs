@@ -124,6 +124,7 @@ export function getState(userId, chatId, threadId = null) {
       agent: null,
       engine: row?.engine ?? db.getSetting(`engine:${userId}`), // выбор пользователя; null — движок по умолчанию (DEFAULT_ENGINE)
       busy: false,
+      gitBusy: false,
       requestId: null,
       onUpdate: null, // обработчик событий текущего запроса
       perms: new Map(), // ожидающие запросы разрешений

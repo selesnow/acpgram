@@ -3,7 +3,7 @@
 // безопасными настройками и, при включённой песочнице, внутри неё.
 import { lstatSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { GitError, runGit } from './git.mjs';
+import { assertPlainConfig, GitError, runGit } from './git.mjs';
 import { samePath } from './projects.mjs';
 
 /** Сколько изменённых файлов показывать (в большом несобранном проекте их могут быть тысячи). */
@@ -158,12 +158,16 @@ export async function branchName(input, { cwd, ...opts }) {
  */
 export async function switchBranch(cwd, branch, opts = {}) {
   if (!branch?.name || branch.name.startsWith('-')) throw new GitError('некорректное название ветки');
+  await assertPlainConfig(cwd, opts);
   if (branch.local) return runGit(['switch', '--quiet', branch.name], { cwd, ...opts });
   return runGit(['switch', '--quiet', '--track', `origin/${branch.name}`], { cwd, ...opts });
 }
 
 /** Создаёт ветку от текущего коммита и переключается на неё (несохранённые изменения остаются в рабочей папке). */
-export const createBranch = (cwd, name, opts = {}) => runGit(['switch', '--quiet', '-c', name], { cwd, ...opts });
+export async function createBranch(cwd, name, opts = {}) {
+  await assertPlainConfig(cwd, opts);
+  return runGit(['switch', '--quiet', '-c', name], { cwd, ...opts });
+}
 
 /**
  * Отменяет несохранённые изменения файлов (записи из changedFiles): изменённые и удалённые возвращаются к последнему
@@ -172,6 +176,7 @@ export const createBranch = (cwd, name, opts = {}) => runGit(['switch', '--quiet
  */
 export async function discardFiles(cwd, files, opts = {}) {
   if (!files.length) return 0;
+  await assertPlainConfig(cwd, opts);
   const top = (await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts })).trim();
   const at = { cwd: top, ...opts };
   const paths = [...new Set(files.flatMap((f) => [f.path, f.from]).filter(Boolean))];

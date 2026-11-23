@@ -26,11 +26,13 @@ for (const k of ['GITLAB_URL', 'GITHUB_URL', 'GIT_AGENT_AUTH', 'AGENT_SANDBOX', 
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
 process.env.ALLOWED_USER_ID ??= '1';
 Object.assign(process.env, {
-  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_COUNT: '3',
   GIT_CONFIG_KEY_0: `url.${bareApp}.insteadOf`,
   GIT_CONFIG_VALUE_0: APP_URL,
   GIT_CONFIG_KEY_1: `url.${bareNew}.insteadOf`,
   GIT_CONFIG_VALUE_1: NEW_URL,
+  GIT_CONFIG_KEY_2: 'protocol.file.allow',
+  GIT_CONFIG_VALUE_2: 'always',
 });
 
 const TOKEN = 'ghp_test0123456789secretTOKEN';

@@ -2,17 +2,18 @@
 // Публикация: папка, которая ещё не связана с сервером, становится репозиторием — пользователь выбирает сервис, место
 // (личное пространство, группа или организация), видимость и название; бот создаёт репозиторий, делает первый коммит
 // (без файлов с секретами) и отправляет. Запрос на слияние: из текущей ветки в основную ветку репозитория.
-// Вызывается из gitUi.mjs, который передаёт общие помощники (h).
+// Общие помощники (проект, репозиторий, запуск git) живут в gitCtx.mjs.
 import { basename } from 'node:path';
 import { db, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
-import { GitError, commitAll, pushRepo, repoState } from './git.mjs';
+import { commitAll, pushRepo, repoState } from './git.mjs';
 import { accountsOf, findHost, hostFor } from './gitAccess.mjs';
+import { acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf } from './gitCtx.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { createRepo, listNamespaces, openMergeRequest, repoInfo, repoSlug, visibilities } from './gitApi.mjs';
 import { HostError, showRemote } from './gitHosts.mjs';
 import { ensureRepo, hasCommits, isRepoRoot, lastSubject, setRemote } from './gitInspect.mjs';
-import { errText, t } from './i18n.mjs';
+import { t } from './i18n.mjs';
 import { userPath } from './state.mjs';
 import { hCode, th } from './ui.mjs';
 
@@ -27,16 +28,10 @@ const VIS_MARK = { private: '🔒', internal: '🏢', public: '🌍' };
 const backRow = (lang) => [{ text: t('btn.back', lang), callback_data: 'gt:v' }];
 const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] });
 
-/** Текст ошибки: не хватило прав токена — отдельной подсказкой (нужен токен с правом api). */
-const failText = (e, lang, host) => {
-  if (e instanceof HostError && e.code === 'forbidden') return th('git.needApi', lang, { host: host?.label ?? 'Git', msg: e.message });
-  return th('git.opFail', lang, { msg: e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang) });
-};
-
 /** Можно ли публиковать проект: это ещё не репозиторий с адресом сервера (свой репозиторий без origin — тоже можно). */
-export async function canPublish(st, project, h) {
+export async function canPublish(st, project) {
   if (!canManageFiles(st.userId) || !accountsOf(st.userId).length) return false;
-  const opts = h.gitOpts(st, project);
+  const opts = gitOpts(st, project);
   if (!(await isRepoRoot(project, opts))) return true;
   return !(await repoState(project, opts))?.remote;
 }
@@ -72,11 +67,13 @@ function summaryView(st, project, lang) {
 }
 
 /** Создаёт репозиторий на сервисе, делает первый коммит и отправляет. */
-async function publish(st, project, lang, edit, h) {
+async function publish(st, project, lang, edit, view) {
   const pub = st.gitPublish;
   const { host, account } = accountOf(st, pub);
-  const opts = h.gitOpts(st, project, { host, account });
-  st.gitBusy = true;
+  const opts = gitOpts(st, project, account);
+  const net = gitNetOpts(st, project, { host, account });
+  const lock = acquireGitLock(st, project);
+  if (!lock) return edit({ text: t('git.busy', lang), markup: { inline_keyboard: [backRow(lang)] } });
   try {
     await edit({ text: th('git.pb.working', lang) });
     // сначала локальная часть: если публиковать нечего, репозиторий на сервере не создаётся
@@ -88,7 +85,7 @@ async function publish(st, project, lang, edit, h) {
     // адрес из ответа сервиса уходит в настройки репозитория: чужой адрес (или не адрес вовсе) не принимаем
     if (hostFor(created.url)?.id !== host.id) throw new HostError('http', `${host.label}: unexpected repository address`);
     await setRemote(project, created.url, opts);
-    await pushRepo(project, opts);
+    await pushRepo(project, net);
     log('git: проект опубликован:', st.userId, project, '→', created.path);
     st.gitPublish = null;
     const note = [
@@ -96,21 +93,21 @@ async function publish(st, project, lang, edit, h) {
       ...(first.tracked.length ? [th('git.tracked', lang, { files: first.tracked.join(', ') })] : []),
       ...(first.ignoreWarning ? [th('git.ignoreLink', lang)] : []),
     ].map((s) => `\n${s}`).join('');
-    const v = await h.view();
+    const v = await view();
     const open = created.web ? [[{ text: t('git.open', lang), url: created.web }]] : [];
     return await edit({ text: `${th('git.pb.done', lang, { address: hCode(showRemote(created.url)) })}${note}\n\n${v.text}`, markup: { inline_keyboard: [...open, ...v.markup.inline_keyboard] } });
   } catch (e) {
     log('git: публикация:', e.message, '| пользователь', st.userId);
     return await edit({ text: failText(e, lang, host), markup: { inline_keyboard: [backRow(lang)] } });
   } finally {
-    st.gitBusy = false;
+    releaseGitLock(st, lock);
   }
 }
 
 /** Создаёт запрос на слияние текущей ветки в основную (или находит уже открытый) и даёт ссылку. */
-async function mergeRequest(st, project, title, lang, edit, h) {
+async function mergeRequest(st, project, title, lang, edit) {
   const mr = st.gitMr;
-  const repo = await h.repoOf(st, project);
+  const repo = await repoOf(st, project);
   if (!mr || !repo?.account) return edit({ text: th('git.diff.gone', lang), markup: { inline_keyboard: [backRow(lang)] } });
   st.gitMr = null;
   try {
@@ -124,9 +121,9 @@ async function mergeRequest(st, project, title, lang, edit, h) {
   }
 }
 
-/** Кнопки «Опубликовать проект» (pb…) и «Запрос на слияние» (mr…). h — помощники из gitUi. */
+/** Кнопки «Опубликовать проект» (pb…) и «Запрос на слияние» (mr…). */
 export async function onPublishCallback(st, cb, h) {
-  const { action, arg, lang, ack, edit, project } = h;
+  const { action, arg, lang, ack, edit, project, view } = h;
   if (!project) return ack(t('state.projectGone', lang));
   if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
   if (st.gitBusy) return ack(t('git.busy', lang));
@@ -134,14 +131,14 @@ export async function onPublishCallback(st, cb, h) {
   try {
     // ---- запрос на слияние ----
     if (action === 'mr') {
-      const repo = await h.repoOf(st, project);
+      const repo = await repoOf(st, project);
       if (!repo?.account || !repo.state.branch) return ack(t('proj.stale', lang));
       await ack();
       const info = await repoInfo(repo.host, repo.account.token, repo.state.remote);
       const s = repo.state;
       if (s.branch === info.defaultBranch) return edit({ text: th('git.mr.onDefault', lang, { branch: hCode(s.branch) }), markup: { inline_keyboard: [[{ text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }], backRow(lang)] } });
       if (!s.upstream || s.ahead) return edit({ text: th('git.mr.pushFirst', lang, { branch: hCode(s.branch) }), markup: { inline_keyboard: [[{ text: t('git.push', lang), callback_data: 'gt:push' }], backRow(lang)] } });
-      const suggested = (await lastSubject(project, h.gitOpts(st, project, repo))) || s.branch;
+      const suggested = (await lastSubject(project, gitOpts(st, project, repo.account))) || s.branch;
       st.gitMr = { branch: s.branch, target: info.defaultBranch, suggested };
       st.pendingInput = { kind: 'gitMrTitle', at: Date.now() };
       const markup = { inline_keyboard: [[{ text: [...`«${suggested}»`].slice(0, 60).join(''), callback_data: 'gt:mrgo' }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] };
@@ -150,10 +147,10 @@ export async function onPublishCallback(st, cb, h) {
     if (action === 'mrgo') {
       st.pendingInput = null;
       await ack();
-      return await mergeRequest(st, project, st.gitMr?.suggested ?? '', lang, edit, h);
+      return await mergeRequest(st, project, st.gitMr?.suggested ?? '', lang, edit);
     }
     // ---- публикация ----
-    if (!(await canPublish(st, project, h))) return ack(t('proj.stale', lang));
+    if (!(await canPublish(st, project))) return ack(t('proj.stale', lang));
     const accounts = accountsOf(st.userId);
     if (action === 'pb') {
       await ack();
@@ -200,7 +197,7 @@ export async function onPublishCallback(st, cb, h) {
     if (action === 'pbgo') {
       if (!pub.slug) return ack(t('git.pb.nameBad', lang));
       await ack();
-      return await publish(st, project, lang, edit, h);
+      return await publish(st, project, lang, edit, view);
     }
     return ack(t('proj.stale', lang));
   } catch (e) {
@@ -212,7 +209,7 @@ export async function onPublishCallback(st, cb, h) {
 
 /**
  * Текст пользователя для публикации и запроса на слияние: строка поиска группы, название репозитория, заголовок запроса.
- * @param {object} h {wait, now, lang, project, send, repoOf, gitOpts, view}
+ * @param {object} h {wait, now, lang, project, send, view}
  * @returns {Promise<boolean>} true — текст обработан здесь
  */
 export async function onPublishInput(st, text, h) {
@@ -222,7 +219,7 @@ export async function onPublishInput(st, text, h) {
     if (wait.kind === 'gitMrTitle') {
       if (st.gitBusy || st.busy) return (await say(st.to, t(st.busy ? 'git.agentBusy' : 'git.busy', lang)), true);
       const title = [...text.trim().split(/\r?\n/)[0]].slice(0, 200).join('') || st.gitMr?.suggested || '';
-      await mergeRequest(st, project, title, lang, send, h);
+      await mergeRequest(st, project, title, lang, send);
       return true;
     }
     const pub = st.gitPublish;

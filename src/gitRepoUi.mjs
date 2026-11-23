@@ -1,15 +1,16 @@
 // Экраны /git «Изменения» и «Ветки»: что изменено в проекте (список файлов, изменения по файлу, неотправленные и
 // ожидающие на сервере коммиты) и ветки (список, переключение, новая ветка). Смотреть может любой пользователь —
 // без агента и без запросов к модели; переключать и создавать ветки — тот, кому разрешено менять файлы проекта.
-// Вызывается из gitUi.mjs, который передаёт сюда общие помощники (h): проект, репозиторий, запуск git.
+// Общие помощники (проект, репозиторий, запуск git) живут в gitCtx.mjs.
 import { basename } from 'node:path';
 import { log, say } from './ctx.mjs';
 import { isSecretName, safeFileName } from './files.mjs';
 import { canManageFiles } from './filesUi.mjs';
-import { GitError, fetchRepo } from './git.mjs';
+import { fetchRepo } from './git.mjs';
+import { acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf } from './gitCtx.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { branchName, changedFiles, commitList, createBranch, discardFiles, fileDiff, listBranches, switchBranch } from './gitInspect.mjs';
-import { errText, t } from './i18n.mjs';
+import { t } from './i18n.mjs';
 import { endAgent, userPath } from './state.mjs';
 import { escHtml, sendBuffer } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
@@ -23,7 +24,6 @@ export const DIFF_INLINE_MAX = 3200;
 const DIFF_FILE_MAX = 1024 * 1024;
 const MARK = { new: '🆕', modified: '✏️', deleted: '🗑', renamed: '🔀', conflict: '⚠️' };
 
-const failText = (e, lang) => th('git.opFail', lang, { msg: e instanceof GitError ? e.message : errText(e, lang) });
 /** Длинный путь на кнопке показывается хвостом: имя файла важнее начала пути. */
 const tail = (s, n) => ([...s].length > n ? `…${[...s].slice(-(n - 1)).join('')}` : s);
 const counts = (f) => [f.added ? `+${f.added}` : '', f.deleted ? `−${f.deleted}` : ''].filter(Boolean).join(' ');
@@ -60,9 +60,20 @@ async function changesView(st, project, repo, opts, page, lang) {
 const isSecretFile = (f) => isSecretName(`/${f.path}`);
 
 /** Экран «Ветки»: текущая отмечена, ветки только с сервера помечены облаком; нажатие переключает. */
-async function branchesView(st, project, repo, opts, page, lang, { sync = false } = {}) {
+async function branchesView(st, project, repo, opts, net, page, lang, { sync = false } = {}) {
   // ветки сервера узнаём сверкой с ним — нужен подключённый аккаунт; не вышло — показываем то, что известно
-  if (sync && repo.account && !st.busy && !st.gitBusy) await fetchRepo(project, opts).catch((e) => log('git: сверка веток:', e.message, '| пользователь', st.userId));
+  if (sync && repo.account && net && !st.busy && !st.gitBusy) {
+    const lock = acquireGitLock(st, project);
+    if (lock) {
+      try {
+        await fetchRepo(project, net);
+      } catch (e) {
+        log('git: сверка веток:', e.message, '| пользователь', st.userId);
+      } finally {
+        releaseGitLock(st, lock);
+      }
+    }
+  }
   const { current, branches } = await listBranches(project, opts);
   const pages = Math.max(1, Math.ceil(branches.length / PAGE));
   page = Math.min(Math.max(page, 0), pages - 1);
@@ -98,15 +109,19 @@ async function commitsView(project, opts, which, lang) {
 
 /**
  * Кнопки экранов «Изменения» и «Ветки».
- * @param {object} h помощники из gitUi: {action, arg, lang, ack, edit, project, repoOf, gitOpts}
+ * @param {object} h {action, arg, lang, ack, edit, project}
  */
 export async function onRepoCallback(st, cb, h) {
   const { action, arg, lang, ack, edit, project } = h;
   if (!project) return ack(t('state.projectGone', lang));
+  const mutating = ['dX', 'dA', 'bs'].includes(action);
+  const lock = mutating ? acquireGitLock(st, project) : null;
+  if (mutating && !lock) return ack(t('git.busy', lang));
   try {
-    const repo = await h.repoOf(st, project);
+    const repo = await repoOf(st, project);
     if (!repo) return (await ack(), edit({ text: th('git.noRepo', lang), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } }));
-    const opts = h.gitOpts(st, project, repo);
+    const opts = gitOpts(st, project, repo.account);
+    const net = repo.account ? gitNetOpts(st, project, repo) : null;
     if (action === 'ch') return (await ack(), edit(await changesView(st, project, repo, opts, Number(arg) || 0, lang)));
     if (action === 'cm') return (await ack(), edit(await commitsView(project, opts, arg, lang)));
     if (action === 'cf') {
@@ -117,10 +132,10 @@ export async function onRepoCallback(st, cb, h) {
       await ack();
       return await showDiff(st, project, file, arg, opts, lang, edit);
     }
-    if (action === 'br') return (await ack(), edit(await branchesView(st, project, repo, opts, Number(arg) || 0, lang, { sync: true })));
+    if (action === 'br') return (await ack(), edit(await branchesView(st, project, repo, opts, net, Number(arg) || 0, lang, { sync: true })));
     // ---- переключение и создание ветки меняют проект ----
     if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
-    if (st.gitBusy) return ack(t('git.busy', lang));
+    if (!mutating && st.gitBusy) return ack(t('git.busy', lang));
     if (st.busy) return ack(t('git.agentBusy', lang));
     if (action === 'bn') {
       await ack();
@@ -130,16 +145,9 @@ export async function onRepoCallback(st, cb, h) {
     // ---- отмена изменений: необратимо, поэтому сначала вопрос, а список файлов берётся заново ----
     if (['dx', 'dX', 'da', 'dA'].includes(action)) {
       const fresh = (await changedFiles(project, opts)).files;
-      const run = async (list) => {
-        st.gitBusy = true;
-        try {
-          return await discardFiles(project, list, opts);
-        } finally {
-          st.gitBusy = false;
-        }
-      };
+      const run = async (list) => discardFiles(project, list, opts);
       const show = async (note) => {
-        const v = await changesView(st, project, await h.repoOf(st, project), opts, 0, lang);
+        const v = await changesView(st, project, await repoOf(st, project), opts, 0, lang);
         return edit({ text: `${note}\n\n${v.text}`, markup: v.markup });
       };
       if (action === 'dx' || action === 'dX') {
@@ -180,51 +188,53 @@ export async function onRepoCallback(st, cb, h) {
       return edit({ text: th('git.br.dirty', lang, { n: repo.state.changed, name: hCode(branch.name) }), markup });
     }
     await ack();
-    st.gitBusy = true;
-    try {
-      await switchBranch(project, branch, opts);
-    } finally {
-      st.gitBusy = false;
-    }
+    await switchBranch(project, branch, net ?? opts);
     // файлы проекта сменились целиком: сессия агента с прежним представлением о них продолжаться не должна
     endAgent(st, 'branch');
     log('git: ветка переключена:', st.userId, project, '→', branch.name);
-    const v = await branchesView(st, project, repo, opts, 0, lang);
+    const v = await branchesView(st, project, repo, opts, net, 0, lang);
     return edit({ text: `${th('git.br.switched', lang, { name: hCode(branch.name) })}\n\n${v.text}`, markup: v.markup });
   } catch (e) {
     log(`git: ${action}:`, e.message, '| пользователь', st.userId);
     await ack();
     return edit({ text: failText(e, lang), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
+  } finally {
+    releaseGitLock(st, lock);
   }
 }
 
 /**
  * Название новой ветки от пользователя (после кнопки «Новая ветка»): создаёт ветку от текущей и переключается на неё.
  * Несохранённые изменения остаются в рабочей папке, сессия агента продолжается — файлы те же.
- * @param {object} h {wait, now, lang, project, repoOf, gitOpts}
+ * @param {object} h {wait, now, lang, project}
  * @returns {Promise<boolean>} true — текст обработан здесь
  */
 export async function onBranchInput(st, text, h) {
-  const { lang, project } = h;
+  const { wait, now, lang, project } = h;
   const html = { parse_mode: 'HTML' };
   if (!project || !canManageFiles(st.userId)) return false;
   if (st.gitBusy || st.busy) return (await say(st.to, t(st.busy ? 'git.agentBusy' : 'git.busy', lang)), true);
+  const lock = acquireGitLock(st, project);
+  if (!lock) return (await say(st.to, t('git.busy', lang), html), true);
   try {
-    const repo = await h.repoOf(st, project);
+    const repo = await repoOf(st, project);
     if (!repo) return (await say(st.to, th('git.noRepo', lang), html), true);
-    const opts = h.gitOpts(st, project, repo);
+    const opts = gitOpts(st, project, repo.account);
+    const net = repo.account ? gitNetOpts(st, project, repo) : null;
     const name = await branchName(text, { cwd: project, ...opts });
     if (!name) {
-      st.pendingInput = { ...h.wait, at: h.now }; // название не подошло — ждём другое
+      st.pendingInput = { ...wait, at: now }; // название не подошло — ждём другое
       return (await say(st.to, t('git.br.badName', lang), { reply_markup: { inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] } }), true);
     }
-    await createBranch(project, name, opts);
+    await createBranch(project, name, net ?? opts);
     log('git: ветка создана:', st.userId, project, name);
     const markup = { inline_keyboard: [[{ text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }, { text: t('btn.back', lang), callback_data: 'gt:v' }]] };
     await say(st.to, th('git.br.created', lang, { name: hCode(name) }), { ...html, reply_markup: markup });
   } catch (e) {
     log('git: новая ветка:', e.message, '| пользователь', st.userId);
     await say(st.to, failText(e, lang), html);
+  } finally {
+    releaseGitLock(st, lock);
   }
   return true;
 }
