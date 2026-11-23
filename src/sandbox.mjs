@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { accessSync, constants, mkdirSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path';
 import { checkCommand } from './acp.mjs';
+import { PROVIDER_KEYS } from './engines.mjs';
 import { DATA_DIR, ENV_PATH } from './app.mjs';
 import { outboxDir, uploadsDir } from './files.mjs';
 import { isWithin } from './projects.mjs';
@@ -107,8 +108,10 @@ export function bwrapArgs({ cwd, rw, ro = [], system = SYSTEM_DIRS }) {
   const uniq = (list) => [...new Set(list.filter(Boolean))];
   const args = [
     '--die-with-parent', // бот завершился — агент не остаётся работать
+    '--new-session',
     '--unshare-pid', // свои процессы: чужих не видно и не убить; завершение bwrap завершает всё дерево агента
     '--unshare-ipc',
+    '--unshare-uts',
     '--proc', '/proc',
     '--dev', '/dev',
     '--tmpfs', '/tmp',
@@ -122,11 +125,20 @@ export function bwrapArgs({ cwd, rw, ro = [], system = SYSTEM_DIRS }) {
 
 // Переменные, указывающие на домашнюю папку и службы учётной записи бота: в песочнице их нет
 const HOST_ONLY_ENV = /^(XDG_(CONFIG|DATA|CACHE|STATE)_HOME|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|SSH_AUTH_SOCK|ACPGRAM_HOME)$/;
+const SANDBOX_ENV_EXACT = new Set(['PATH', 'PATHEXT', 'TMP', 'TEMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE']);
+const SANDBOX_ENV_MATCH = /^(LANG(UAGE)?|LC_|TERM|TZ|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE)/i;
+const envList = (value) => new Set(String(value ?? '').split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean));
 
 /** Окружение процесса в песочнице: своя домашняя папка, временные файлы в /tmp, Node бота — в PATH. */
 export function sandboxEnv(env, { home, nodeDir = dirname(process.execPath) } = {}) {
   const out = {};
-  for (const [k, v] of Object.entries(env)) if (!HOST_ONLY_ENV.test(k)) out[k] = v;
+  const pass = envList(env.AGENT_ENV_PASS);
+  for (const [k, v] of Object.entries(env)) {
+    const key = k.toUpperCase();
+    if (HOST_ONLY_ENV.test(k)) continue;
+    if (!(SANDBOX_ENV_EXACT.has(key) || SANDBOX_ENV_MATCH.test(k) || pass.has(key) || PROVIDER_KEYS.has(key))) continue;
+    out[k] = v;
+  }
   const path = pathList(out.PATH);
   if (nodeDir && !path.includes(nodeDir)) path.push(nodeDir);
   return { ...out, HOME: home, TMPDIR: '/tmp', PATH: path.join(delimiter) };
@@ -195,6 +207,9 @@ export function agentSandbox({
 }) {
   const inner = findCommand(command);
   if (!inner) throw new SandboxError(`команда не найдена: ${command}`);
+  for (const p of [root ?? cwd, ...extraRo]) {
+    if (p && isWithin(p, DATA_DIR)) throw new SandboxError(`папка ${p} лежит в данных бота`);
+  }
   const rw = [root ?? cwd, home, outbox];
   const ro = [uploads, ...commandBinds(inner), ...nodeBinds(), ...extraRo, resolvConf()].filter(Boolean);
   // свои каталоги сотрудника лежат внутри данных бота — это не утечка; опасна только папка, внутри которой лежит секрет

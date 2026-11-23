@@ -15,6 +15,8 @@ export const DEPTH_MAX = 8;
 
 // В эти папки бот не пишет и их не показывает: служебные данные git и тяжёлые каталоги зависимостей
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'renv', 'packrat', 'site-packages']);
+const CONFIG_DIRS = new Set(['.claude', '.gemini', '.codex', '.opencode']);
+const CONFIG_FILES = new Set(['opencode.json']);
 
 /** Ошибка операции с файлом проекта: code — причина для сообщения пользователю (ключ files.err.<code>). */
 export class FileError extends Error {
@@ -29,7 +31,7 @@ export class FileError extends Error {
  * Возвращает части пути или null, если путь не подходит: абсолютный, с «..», с запрещёнными символами, в служебной папке.
  * Имена с точки (.env, .Renviron) разрешены — ради них это и сделано.
  */
-export function relPath(input) {
+export function relPath(input, { hideConfig = false } = {}) {
   const raw = String(input ?? '').trim().replace(/\\/g, '/');
   if (!raw || raw.startsWith('/') || /^[A-Za-z]:/.test(raw) || raw.startsWith('~')) return null;
   const parts = raw.split('/').map((s) => s.trim());
@@ -39,7 +41,9 @@ export function relPath(input) {
     // eslint-disable-next-line no-control-regex -- управляющие символы в имени файла недопустимы
     if (/[\u0000-\u001f<>:"|?*]/.test(p) || /[. ]$/.test(p)) return null;
     if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(p)) return null;
-    if (SKIP_DIRS.has(p.toLowerCase())) return null;
+    const lower = p.toLowerCase();
+    if (SKIP_DIRS.has(lower)) return null;
+    if (hideConfig && (CONFIG_DIRS.has(lower) || CONFIG_FILES.has(lower))) return null;
   }
   return parts;
 }
@@ -146,15 +150,17 @@ export function deleteProjectFile(project, path) {
  * Содержимое папки проекта: папки и файлы по алфавиту, со скрытыми файлами (.env), без ссылок и служебных папок.
  * @returns {{dirs: string[], files: {name: string, size: number, mtime: number}[]}}
  */
-export function listProjectDir(project, dir) {
+export function listProjectDir(project, dir, { hideConfig = false } = {}) {
   const { real } = inProject(project, dir);
   const dirs = [];
   const files = [];
   for (const d of readdirSync(real, { withFileTypes: true })) {
     if (d.isSymbolicLink() || d.name.endsWith('.tmp') && d.name.startsWith('.acpgram-')) continue;
+    const lower = d.name.toLowerCase();
     if (d.isDirectory()) {
-      if (!SKIP_DIRS.has(d.name.toLowerCase())) dirs.push(d.name);
+      if (!SKIP_DIRS.has(lower) && !(hideConfig && CONFIG_DIRS.has(lower))) dirs.push(d.name);
     } else if (d.isFile()) {
+      if (hideConfig && CONFIG_FILES.has(lower)) continue;
       const st = lstat(join(real, d.name));
       if (st) files.push({ name: d.name, size: st.size, mtime: st.mtimeMs });
     }

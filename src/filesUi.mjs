@@ -45,7 +45,7 @@ const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_i
 
 /** Экран папки проекта: папки, файлы с размером, «Вверх», «Создать файл» и «Загрузить файл». Текст — HTML. */
 export function filesView(st, project, dir, page = 0, lang = langOf(st.userId)) {
-  const { dirs, files } = listProjectDir(project, dir);
+  const { dirs, files } = listProjectDir(project, dir, { hideConfig: !canManageFiles(st.userId) });
   const entries = [...dirs.map((name) => ({ name, dir: true })), ...files];
   const pages = Math.max(1, Math.ceil(entries.length / PAGE));
   page = Math.min(Math.max(page, 0), pages - 1);
@@ -189,7 +189,7 @@ export async function onFilesCallback(st, cb) {
       return edit(filesView(st, project, dirname(path), 0, lang));
     }
     if (action === 'n' || action === 'u') {
-      listProjectDir(project, path); // папка должна быть внутри проекта
+      listProjectDir(project, path, { hideConfig: !canManageFiles(st.userId) }); // папка должна быть внутри проекта
       await ack();
       st.pendingInput = { kind: action === 'n' ? 'fileName' : 'fileUpload', dir: path, at: Date.now() };
       return say(st.to, th(action === 'n' ? 'files.nameAsk' : 'files.uploadAsk', lang, { dir: hCode(relShow(project, path)) }), { ...HTML, reply_markup: cancelMarkup(lang) });
@@ -249,7 +249,7 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
     st.pendingInput = null;
     return (await say(st.to, t('state.projectGone', lang)), true);
   }
-  const parts = relPath(text);
+  const parts = relPath(text, { hideConfig: !canManageFiles(st.userId) });
   if (!parts) return (await say(st.to, t('files.nameBad', lang), { reply_markup: cancelMarkup(lang) }), true);
   let target;
   try {
@@ -282,7 +282,8 @@ export async function onFileUpload(st, msg, now = Date.now()) {
   if (!meta) return false;
   if (meta.size > MAX_FILE_BYTES) return (await say(st.to, t('file.tooBig', lang)), true);
   // имя — как у присланного файла (с точкой в начале, если она есть); непригодное заменяется безопасным
-  const parts = relPath(basename(String(meta.name).replace(/\\/g, '/'))) ?? relPath(safeFileName(meta.name));
+  const opts = { hideConfig: !canManageFiles(st.userId) };
+  const parts = relPath(basename(String(meta.name).replace(/\\/g, '/')), opts) ?? relPath(safeFileName(meta.name), opts);
   if (!parts) return (await say(st.to, t('files.nameBad', lang)), true);
   const job = { dir, parts, meta, messageId: msg.message_id };
   try {

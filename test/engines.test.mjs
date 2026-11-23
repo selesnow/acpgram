@@ -341,20 +341,26 @@ test('parseCatalog: у моделей OpenRouter — вендор (sub) и ег�
 
 test('agentEnv: токен бота и ключи чужих провайдеров до процесса агента не доходят', () => {
   const env = {
-    PATH: '/bin', HTTPS_PROXY: 'http://p', PLANFIX_API_KEY: 'pf', Telegram_Bot_Token: 't', TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1', ALLOWED_USERNAME: 'u',
+    PATH: '/bin', HTTPS_PROXY: 'http://p', PLANFIX_API_KEY: 'pf', GITHUB_TOKEN: 'gh', DEPT_EMAIL_PWD: 'mail', Telegram_Bot_Token: 't', TELEGRAM_BOT_TOKEN: 't', ALLOWED_USER_ID: '1', ALLOWED_USERNAME: 'u',
     GEMINI_API_KEY: 'g', GOOGLE_API_KEY: 'gg', ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o', OPENROUTER_API_KEY: 'r', GROQ_API_KEY: 'q',
   };
   const keys = (id) => Object.keys(agentEnv(ENGINES[id], env)).sort();
-  const common = ['HTTPS_PROXY', 'PATH', 'PLANFIX_API_KEY']; // переменные скриптов проекта и системы — как есть
+  const common = ['HTTPS_PROXY', 'PATH']; // системные переменные — как есть
   assert.deepEqual(keys('claude'), ['ANTHROPIC_API_KEY', ...common]);
   assert.deepEqual(keys('codex'), [...common.slice(0, 1), 'OPENAI_API_KEY', ...common.slice(1)]);
   assert.deepEqual(keys('gemini'), ['GEMINI_API_KEY', 'GOOGLE_API_KEY', ...common]);
   assert.deepEqual(keys('agy'), keys('gemini'));
   // OpenCode работает с моделями всех провайдеров — ключи все, но не переменные бота
-  assert.deepEqual(keys('opencode'), ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'HTTPS_PROXY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PATH', 'PLANFIX_API_KEY']);
+  assert.deepEqual(keys('opencode'), ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'HTTPS_PROXY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PATH']);
+  for (const hidden of ['GITHUB_TOKEN', 'PLANFIX_API_KEY', 'DEPT_EMAIL_PWD', 'TELEGRAM_BOT_TOKEN']) assert.ok(!Object.keys(agentEnv(ENGINES.gemini, env)).includes(hidden), hidden);
   assert.equal(env.TELEGRAM_BOT_TOKEN, 't', 'исходное окружение не меняется');
   // у каждого движка ключи заданы явно: забытое поле означало бы «все ключи»
   for (const e of Object.values(ENGINES)) assert.ok(e.apiKeys === null ? e.id === 'opencode' : e.apiKeys.every((k) => PROVIDER_KEYS.has(k)), e.id);
+});
+
+test('agentEnv: AGENT_ENV_HIDE и AGENT_ENV_PASS задают исключения из фильтра секретов', () => {
+  const env = { PATH: '/bin', PLANFIX_API_KEY: 'pf', CUSTOM_SECRET: 's', AGENT_ENV_HIDE: 'PATH', AGENT_ENV_PASS: 'PLANFIX_API_KEY' };
+  assert.deepEqual(agentEnv(ENGINES.gemini, env), { PLANFIX_API_KEY: 'pf' });
 });
 
 test('createAgent: процесс агента не видит токен бота и чужие ключи, свои — видит', async () => {

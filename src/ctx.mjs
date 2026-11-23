@@ -4,6 +4,8 @@ import { appendFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DATA_DIR, positiveEnv } from './app.mjs';
 import { openDb } from './db.mjs';
+import { createPendingStore } from './pending.mjs';
+import { protectWindowsPath } from './protect.mjs';
 import { normLang, pickLang, t } from './i18n.mjs';
 import { log } from './log.mjs';
 
@@ -56,8 +58,11 @@ export { log }; // журнал — log.mjs (им же пользуются acp,
 // ACPGRAM_DEBUG=1: черновик пишется каждую секунду, без выключателя и ротации файл рос бесконечно.
 // Запись асинхронная, по очереди; больше DEBUG_MAX_BYTES — файл переименовывается в debug.log.1 (хранится один прошлый).
 mkdirSync(DATA_DIR, { recursive: true });
+protectWindowsPath(DATA_DIR, { directory: true });
 export const DEBUG = process.env.ACPGRAM_DEBUG === '1';
 export const DEBUG_MAX_BYTES = 5 * 1024 * 1024;
+export const HISTORY_KEEP_DAYS = positiveEnv('HISTORY_KEEP_DAYS', 0);
+export const LOGS_KEEP_DAYS = positiveEnv('LOGS_KEEP', 0);
 export const createDebugLog = (path, maxBytes = DEBUG_MAX_BYTES) => {
   let queue = Promise.resolve();
   let size = null;
@@ -83,6 +88,7 @@ export const dbg = (kind, text) => debugLog?.(kind, text);
 
 // база работы бота: сессии, запросы, вызовы инструментов, разрешения, ответы, сотрудники
 export const db = openDb(join(DATA_DIR, 'bot.db'));
+export const pending = createPendingStore(db);
 
 /** Сообщение пользователю: to — id чата или {chat_id, message_thread_id} (тема), обычно st.to. */
 export const say = (to, text, extra = {}) => tg('sendMessage', { ...dest(to), text, ...extra }).catch((e) => log('sendMessage:', e.message));

@@ -124,6 +124,8 @@ export const PROVIDER_KEYS = new Set([...GOOGLE_KEYS, 'ANTHROPIC_API_KEY', 'OPEN
 
 /** Переменные самого бота: процессу агента не нужны, а токен даёт полный контроль над ботом. */
 const BOT_ONLY_ENV = new Set(['TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'ALLOWED_USERNAME']);
+const SECRET_ENV = /(?:^|_)(TOKEN|SECRET|PASSWORD|PWD|PAT|KEY)$/i;
+const envList = (value) => new Set(String(value ?? '').split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean));
 
 /**
  * Окружение процесса агента: окружение бота без переменных самого бота (BOT_ONLY_ENV) и без ключей API чужих
@@ -134,11 +136,15 @@ const BOT_ONLY_ENV = new Set(['TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'ALLOWED_
  */
 export function agentEnv(engine, env = process.env) {
   const own = engine.apiKeys ? new Set(engine.apiKeys) : null;
+  const hide = envList(env.AGENT_ENV_HIDE);
+  const pass = envList(env.AGENT_ENV_PASS);
   const out = {};
   for (const [name, value] of Object.entries(env)) {
     const key = name.toUpperCase();
-    if (BOT_ONLY_ENV.has(key)) continue;
-    if (own && PROVIDER_KEYS.has(key) && !own.has(key)) continue;
+    if (BOT_ONLY_ENV.has(key) || hide.has(key) || key === 'AGENT_ENV_HIDE' || key === 'AGENT_ENV_PASS') continue;
+    const provider = PROVIDER_KEYS.has(key);
+    if (provider && own && !own.has(key)) continue;
+    if (!provider && !pass.has(key) && SECRET_ENV.test(key)) continue;
     out[name] = value;
   }
   return out;
@@ -470,6 +476,11 @@ export function selectionRequest(engine, sessionId, kind, value) {
   return ['session/set_config_option', { sessionId, configId: kind === 'model' ? 'model' : engine.effortConfig, value }];
 }
 
+export function actualModelFromUpdate(update) {
+  const meta = update?._meta;
+  return meta?.['_claude/model'] || (Array.isArray(meta?.quota?.model_usage) && meta.quota.model_usage[0]?.model) || null;
+}
+
 /**
  * Расход запроса из ответа session/prompt и последнего usage_update.
  * Реальная модель: _meta.quota.model_usage (Gemini CLI, Claude Code) или _meta._claude/model.
@@ -480,7 +491,7 @@ export function parseUsage(res, usageUpdate) {
   const num = (v) => (Number.isFinite(v) ? v : null);
   const usageModels = res?._meta?.quota?.model_usage;
   // у Claude Code в model_usage бывают и модели субагентов — основная модель сессии в _claude/model
-  const model = usageUpdate?._meta?.['_claude/model'] || (Array.isArray(usageModels) && usageModels[0]?.model) || null;
+  const model = actualModelFromUpdate(usageUpdate) || (Array.isArray(usageModels) && usageModels[0]?.model) || null;
   const cost = usageUpdate?.cost;
   return {
     model,

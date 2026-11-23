@@ -1,7 +1,7 @@
 // Модели, уровни рассуждений и расход: разбор ответов агентов (сняты с живых Gemini CLI 0.68, claude-agent-acp 0.106, agy 1.5.5).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ENGINES, autoValue, parseCatalog, parseUsage, selectionRequest } from '../src/engines.mjs';
+import { actualModelFromUpdate, ENGINES, autoValue, parseCatalog, parseUsage, selectionRequest } from '../src/engines.mjs';
 import { engineGrants, finalExtras, fmtCost, fmtTokens, modelGrantsOverview, modelChosen, modelGrantsView, modelMenu, startView } from '../src/ui.mjs';
 
 const GEMINI_NEW = {
@@ -93,6 +93,7 @@ test('parseUsage: токены, реальная модель и стоимос�
   // у Claude Code в model_usage могут быть субагенты — основная модель берётся из _claude/model
   const sub = parseUsage({ _meta: { quota: { model_usage: [{ model: 'claude-haiku-5-5' }, { model: 'claude-opus-5-5' }] } } }, { _meta: { '_claude/model': 'claude-opus-5-5' } });
   assert.equal(sub.model, 'claude-opus-5-5');
+  assert.equal(actualModelFromUpdate({ _meta: { quota: { model_usage: [{ model: 'claude-haiku-5-5' }] } } }), 'claude-haiku-5-5');
 
   const gemini = parseUsage({ usage: { inputTokens: 36561, outputTokens: 1, thoughtTokens: 166, totalTokens: 36562 }, _meta: { quota: { model_usage: [{ model: 'gemini-3.8-flash' }] } } }, { used: 36562, size: 1048576 });
   assert.equal(gemini.model, 'gemini-3.8-flash');

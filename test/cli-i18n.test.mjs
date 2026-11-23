@@ -69,6 +69,7 @@ test('tc: язык по умолчанию и явный, подстановки
   assert.match(tc('cli.updating', { before: '1.0.0' }, 'ru'), /^Обновляю AcpGram \(сейчас 1\.0\.0\)/);
   assert.match(tc('cli.updating', { before: '1.0.0' }, 'uk'), /^Оновлюю AcpGram \(зараз 1\.0\.0\)/);
   assert.equal(tc('svc.notInstalledOk', { name: 'x' }, 'de'), '  The service x is not installed.', 'неизвестный язык — английский');
+  for (const code of CLI_LANGS) assert.match(tc('svc.localSystem', {}, code), /SYSTEM/);
   assert.throws(() => tc('no.such.key'), /нет ключа/);
 });
 

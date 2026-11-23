@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { APP, DATA_DIR, ENV_PATH, HOME_DIR } from './app.mjs';
 import { getCliLang, tc } from './cli-i18n.mjs';
+import { protectWindowsPath } from './protect.mjs';
 import { ENGINES, checkEngines } from './engines.mjs';
 import { prompter } from './prompt.mjs';
 import { findOnPath } from './winsvc.mjs';
@@ -114,11 +115,14 @@ export function writeEnvFile(values, path = ENV_PATH, backup = envBackupPath()) 
     mkdirSync(dirname(backup), { recursive: true });
     copyFileSync(path, backup);
     chmodSync(backup, 0o600);
+    protectWindowsPath(backup);
   } catch (e) {
     if (e.code !== 'ENOENT') throw e;
   }
   writeFileSync(path, text, { encoding: 'utf8', mode: 0o600 });
   chmodSync(path, 0o600);
+  protectWindowsPath(dirname(backup), { directory: true });
+  protectWindowsPath(path);
 }
 
 // ---------- перенос из прежней установки (install.ps1 / install.sh) ----------
@@ -351,6 +355,16 @@ export async function runSetup({ fromStart = false } = {}) {
         ok(tc('setup.sbOn'));
       } else delete env.AGENT_SANDBOX;
     }
+    if (env.AGENT_SANDBOX === 'bwrap' && env.PROJECTS_ROOT) {
+      console.log(tc('setup.adminSbNote'));
+      if (await p.yes(tc('setup.adminSbAsk'), env.ADMIN_SANDBOX === '1')) {
+        env.ADMIN_SANDBOX = '1';
+        ok(tc('setup.adminSbOn'));
+      } else {
+        delete env.ADMIN_SANDBOX;
+        ok(tc('setup.adminSbOff'));
+      }
+    } else delete env.ADMIN_SANDBOX;
 
     // 4. движки
     step(4, tc('setup.s4'));

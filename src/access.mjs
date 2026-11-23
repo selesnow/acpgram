@@ -201,6 +201,15 @@ export function allowedModels(userId, engineId) {
   return r ? models.filter((m) => r.includes(m.id)) : models;
 }
 
+export function modelAllowed(userId, engineId, actualId) {
+  const restriction = modelRestriction(userId, engineId);
+  if (!restriction || !actualId) return true;
+  const actual = String(actualId).toLowerCase();
+  const models = allowedModels(userId, engineId);
+  const ids = models.length ? models.flatMap((m) => [m.id, m.name, m.short]) : restriction;
+  return ids.some((id) => id != null && String(id).toLowerCase() === actual);
+}
+
 /**
  * Включает или выключает модель в ограничении сотрудника. Если включены все — ограничение снимается.
  * Последнюю разрешённую модель выключить нельзя. Возвращает {ok, restriction}.

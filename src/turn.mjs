@@ -7,6 +7,9 @@ import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { errText, t } from './i18n.mjs';
 import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler, topicProject, userPath } from './state.mjs';
+import { clipText } from './clip.mjs';
+import { positiveEnv } from './app.mjs';
+import { clearStopTimer, forceStopAfter } from './forceStop.mjs';
 import { diffOf, parseTool } from './tools.mjs';
 import { lineDiff } from './diff.mjs';
 import { gitNote } from './gitAccess.mjs';
@@ -22,6 +25,7 @@ const DRAFT_INTERVAL_MS = 1000;
 const DRAFT_WAIT_MS = 3000; // сколько итоговый ответ ждёт последний черновик
 const OUTBOX_NOTE_EVERY = 10; // подсказка об отправке файлов — в первом запросе сессии и затем раз в столько запросов
 const HEARTBEAT_MS = 8000; // черновик живёт 30 с — обновляем и без изменений
+const TURN_IDLE_MS = positiveEnv('TURN_IDLE_MINUTES', 0) * 60_000;
 
 // ---- запрос разрешения: inline-кнопки (приходят самому пользователю, чей это запрос) ----
 const PERM_KINDS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'];
@@ -74,6 +78,10 @@ function settlePermissionMessage(chatId, messageId, label, style, fallbackText) 
 async function askPermission(st, params) {
   const seq = ++permSeq;
   const lang = langOf(st.userId);
+  const clipped = (value, max) => {
+    const s = String(value ?? '');
+    return s.length <= max ? s : clipText(s, Math.ceil(max / 2), Math.floor(max / 2), t('perm.trimmed', lang, { shown: max, total: s.length }));
+  };
   const tc = params.toolCall || {};
   const engine = engineOf(st);
   const info = parseTool(tc, engine);
@@ -101,18 +109,18 @@ async function askPermission(st, params) {
     const reject = options.find((o) => o.kind.startsWith('reject'));
     const id = dbId();
     db.permissionAnswered(id, reject?.optionId ?? null, reject ? 'auto-rejected' : 'cancelled');
-    say(st.to, t('perm.blocked', lang, { head, what: trunc(what, 300) }));
+    say(st.to, t('perm.blocked', lang, { head, what: clipped(what, 300) }));
     return reject ? { outcome: 'selected', optionId: reject.optionId } : { outcome: 'cancelled' };
   }
   // команда — блоком кода, для остального (путь к файлу и т.п.) — моноширинный текст
   const isCmd = info.kind === 'execute' && info.title;
   const body = isCmd
-    ? `${escHtml(trunc(info.description || t('step.command', lang), 400))}\n\n<pre>${escHtml(trunc(info.title, 1200))}</pre>`
-    : `<code>${escHtml(trunc(what, 600))}</code>`;
+    ? `${escHtml(clipped(info.description || t('step.command', lang), 400))}\n\n<pre>${escHtml(clipped(info.title, 1200))}</pre>`
+    : `<code>${escHtml(clipped(what, 600))}</code>`;
   // правка файла: показываем, что именно изменится, — иначе разрешение даётся вслепую, по одному пути
   const change = isCmd ? null : diffOf(tc);
   const diff = change ? lineDiff(change.oldText, change.newText, { maxLines: 30 }).text : '';
-  const diffBlock = diff ? `\n\n<pre><code class="language-diff">${escHtml(trunc(diff, 1800))}</code></pre>` : '';
+  const diffBlock = diff ? `\n\n<pre><code class="language-diff">${escHtml(clipped(diff, 1800))}</code></pre>` : '';
   const text = `${t('perm.ask', lang)}\n\n<b>${escHtml(head)}</b>: ${body}${diffBlock}`;
 
   const permId = dbId();
@@ -249,6 +257,16 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   st.busy = true;
   st.suppress = false;
   st.lastActive = Date.now();
+  st.turnId = Symbol('turn');
+  let lastEvent = Date.now();
+  const idleTimer = TURN_IDLE_MS
+    ? setInterval(() => {
+        if (Date.now() - lastEvent <= TURN_IDLE_MS) return;
+        log('ход без событий дольше', TURN_IDLE_MS / 60_000, 'мин — завершаем процесс | пользователь', st.userId);
+        lastEvent = Date.now();
+        forceStopAfter(st, { ms: 0, kill: (a) => a.close() });
+      }, Math.min(TURN_IDLE_MS, 30_000))
+    : null;
   const draftId = (Date.now() % 2_000_000_000) + 1;
   const startedAt = Date.now();
   let answer = '';
@@ -292,6 +310,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   const timer = setInterval(pushDraft, DRAFT_INTERVAL_MS);
 
   st.onUpdate = (u) => {
+    lastEvent = Date.now();
     const kind = u.sessionUpdate;
     if (kind === 'agent_message_chunk' && u.content?.type === 'text') {
       // текст после вызова инструмента — новый абзац, иначе фразы склеиваются («…test.Команда…»)
@@ -376,6 +395,9 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     if (!requestId) requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
   } finally {
     clearInterval(timer);
+    if (idleTimer) clearInterval(idleTimer);
+    clearStopTimer(st);
+    st.turnId = null;
     st.onUpdate = null;
     dropPermissions(st);
     st.requestId = null; // запросы разрешений этого хода сняты; следующий ход выставит свой номер

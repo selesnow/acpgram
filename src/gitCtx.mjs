@@ -13,7 +13,7 @@ export const projectOf = (st) => insideRoot(st.project, rootOf(st.userId));
 
 const baseOpts = (st, cwd, account, auth, hide) => {
   const root = rootOf(st.userId);
-  const wrap = sandboxed(st.userId)
+  const wrap = sandboxed(st.userId, cwd)
     ? agentSandbox({ userId: st.userId, cwd, root, command: gitCommand(), protect: isPersonalRoot(root) ? [ROOT] : [] })
     : null;
   return { env: gitEnv({ identity: identityOf(account), auth }), wrap, hide };

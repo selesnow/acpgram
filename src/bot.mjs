@@ -1,12 +1,13 @@
 // Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) через ACP.
 // Доступ: главный администратор (ALLOWED_USER_ID) и сотрудники, которым он выдал доступ. Остальным бот не отвечает,
 // кроме запроса доступа администратору.
+import { rmSync } from 'node:fs';
 import { DEFAULT_ENGINE, agentEnv, checkEngines, isRequired, setAvailability, setSandboxBroken } from './engines.mjs';
 import { SANDBOX, checkInSandbox, probeSandbox } from './sandbox.mjs';
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
-import { ADMIN_ID, IDLE_MINUTES, LEVEL_KEYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
+import { ADMIN_ID, DATA_DIR, HISTORY_KEEP_DAYS, IDLE_MINUTES, LEVEL_KEYS, LOGS_KEEP_DAYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, LOCALES, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
@@ -16,7 +17,7 @@ import { checkGit, gitCommand } from './git.mjs';
 import { GIT_AGENT_AUTH, tokenReminders } from './gitAccess.mjs';
 import { handleGit, onGitCallback, onGitInput } from './gitUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
-import { dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { ADMIN_SANDBOX, dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
 import { deleteTopic, isAutoTopicCommand, topicInfoOf } from './topics.mjs';
 import { setSyncKill } from './acp.mjs';
@@ -28,6 +29,18 @@ import { dropQueue, enqueue, onAskCallback, onPermissionCallback, onQueueCallbac
 import { nearCommand, quoteOf, unsupportedKind } from './incoming.mjs';
 import { onWidgetQuery } from './widgetsUi.mjs';
 import { DOCS_URL, docsMenuButton, helpMarkup, startView } from './ui.mjs';
+import { positiveEnv } from './app.mjs';
+import { createQueue } from './queue.mjs';
+import { directorySize, fitsUpload, freeBytes } from './quota.mjs';
+import { forceStopAfter } from './forceStop.mjs';
+import { looksLikeSecret } from './pending.mjs';
+import { cleanupLogs } from './log.mjs';
+import { maybeNotifySafety } from './warnings.mjs';
+
+const UPLOADS_QUOTA_MB = positiveEnv('UPLOADS_QUOTA_MB', 0);
+const MIN_FREE_MB = positiveEnv('MIN_FREE_MB', 100);
+const receiveQueue = createQueue(1);
+const reservedUploads = new Map();
 
 if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
   console.error('Нужны TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID (см. .env)');
@@ -97,6 +110,7 @@ function stopCommand(st) {
   const queued = dropQueue(st); // «стоп» отменяет и сообщение, которое ждало своей очереди
   if (!st.busy) return queued ? undefined : say(st.to, t('stop.none', langOf(st.userId)));
   st.agent?.cancel();
+  forceStopAfter(st);
   dropPermissions(st);
 }
 
@@ -169,6 +183,10 @@ async function handleText(st, text, { quote = null, messageId = null } = {}) {
   if (await onFileInput(st, text, { messageId })) return;
   // бот ждёт токен доступа к GitHub / GitLab, строку поиска репозитория или описание изменений (/git)
   if (await onGitInput(st, text, { messageId })) return;
+  if (looksLikeSecret(text)) {
+    if (messageId) await tg('deleteMessage', { chat_id: st.chatId, message_id: messageId }).catch(() => {});
+    return say(st.to, t('secret.detected', lang));
+  }
   if (name && !st.agent?.commands?.has(name)) {
     const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
     if (guess) {
@@ -191,15 +209,32 @@ async function onRawCommandCallback(st, cb) {
   return sendToAgent(st, text);
 }
 
-/**
- * Принимает файл: скачивает, сохраняет в каталог загрузок и (для архивов) распаковывает рядом.
- * Возвращает описание файла для агента или null, если файл не принят (пользователь уже уведомлён).
- */
+const reservedFor = (userId) => reservedUploads.get(String(userId)) ?? 0;
+const reserveUpload = (userId, bytes) => reservedUploads.set(String(userId), reservedFor(userId) + bytes);
+const releaseUpload = (userId, bytes) => reservedUploads.set(String(userId), Math.max(0, reservedFor(userId) - bytes));
+
+function dropReceived(files) {
+  for (const f of files) {
+    try {
+      if (f.unpacked?.dir) rmSync(f.unpacked.dir, { recursive: true, force: true });
+      rmSync(f.path, { force: true });
+    } catch (e) {
+      log('удаление непринятого файла:', e.message);
+    }
+  }
+}
+
 async function receiveFile(st, meta, lang) {
   if (meta.size > MAX_FILE_BYTES) {
     await say(st.to, t('file.tooBig', lang));
     return null;
   }
+  const dir = uploadsDir(st.userId);
+  if (!fitsUpload({ usedBytes: directorySize(dir), incomingBytes: meta.size, limitMb: UPLOADS_QUOTA_MB, free: freeBytes(dir), minFreeMb: MIN_FREE_MB, reservedBytes: reservedFor(st.userId) })) {
+    await say(st.to, t('file.quota', lang));
+    return null;
+  }
+  reserveUpload(st.userId, meta.size);
   let data;
   try {
     data = await downloadFile(meta.id);
@@ -207,22 +242,23 @@ async function receiveFile(st, meta, lang) {
     log('скачивание файла:', e.message, '| пользователь', st.userId);
     await say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang) }));
     return null;
+  } finally {
+    releaseUpload(st.userId, meta.size);
   }
   if (data.length > MAX_FILE_BYTES) {
     await say(st.to, t('file.tooBig', lang));
     return null;
   }
-  const path = saveUpload(uploadsDir(st.userId), meta.name, data);
+  const path = saveUpload(dir, meta.name, data);
   log('файл принят', st.userId, path, `${data.length} Б`);
   const file = { path, name: meta.name, mime: meta.mime, size: data.length };
-  if (isImageMime(meta.mime) && data.length <= IMAGE_BLOCK_MAX) file.data = data; // только картинки и только небольшие
+  if (isImageMime(meta.mime) && data.length <= IMAGE_BLOCK_MAX) file.data = data;
   const kind = archiveKind(meta.name);
   if (kind) {
-    // архив: рядом с ним папка с содержимым; не вышло — агент получит сам архив, пользователь причину
-    const dir = `${path}_unpacked`;
+    const unpacked = `${path}_unpacked`;
     try {
-      file.unpacked = { dir, ...(await extractArchiveAsync(data, kind, dir)) };
-      log('архив распакован', st.userId, dir, `${file.unpacked.files.length} файлов, пропущено ${file.unpacked.skipped}`);
+      file.unpacked = { dir: unpacked, ...(await extractArchiveAsync(data, kind, unpacked)) };
+      log('архив распакован', st.userId, unpacked, `${file.unpacked.files.length} файлов, пропущено ${file.unpacked.skipped}`);
     } catch (e) {
       log('архив не распакован:', e.reason ?? e.message, '| пользователь', st.userId);
       await say(st.to, t('file.archiveSkipped', lang, { name: meta.name, why: t(`file.archiveWhy.${e.reason ?? 'corrupt'}`, lang) }));
@@ -231,20 +267,32 @@ async function receiveFile(st, meta, lang) {
   return file;
 }
 
-/**
- * Фото или файлы от пользователя (одно сообщение или целый альбом): скачиваем, сохраняем и передаём агенту
- * вместе с подписью (первая найденная подпись). Изображения уходят блоком image (если агент это умеет), остальное — путём.
- */
 async function processAttachments(st, msgs) {
   const lang = langOf(st.userId);
+  if (st.receiving) return say(st.to, t('file.receiving', lang));
   if (st.busy) return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
-  const received = await Promise.all(msgs.map((m) => describeAttachment(m)).filter(Boolean).map((meta) => receiveFile(st, meta, lang)));
-  const files = received.filter(Boolean);
-  if (!files.length) return;
-  // пока качался альбом, пользователь мог отправить текст и занять агента
-  if (st.busy) return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
-  const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
-  return runTurn(st, caption, { files });
+  st.receiving = true;
+  try {
+    const files = await receiveQueue.add(async () => {
+      const out = [];
+      for (const msg of msgs) {
+        const meta = describeAttachment(msg);
+        if (!meta) continue;
+        const file = await receiveFile(st, meta, lang);
+        if (file) out.push(file);
+      }
+      return out;
+    });
+    if (!files.length) return;
+    if (st.busy) {
+      dropReceived(files);
+      return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
+    }
+    const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
+    return await runTurn(st, caption, { files });
+  } finally {
+    st.receiving = false;
+  }
 }
 
 // альбом приходит отдельными сообщениями с общим media_group_id: собираем и обрабатываем одним запросом
@@ -411,7 +459,7 @@ async function setupSandbox(checks) {
 ${probe.hint}`);
     process.exit(1);
   }
-  log('песочница агентов сотрудников включена (bubblewrap): агент видит только папку проектов сотрудника, его файлы и его домашнюю папку; администратор работает без песочницы');
+  log(`песочница агентов включена (bubblewrap): агент видит только папку проектов сотрудника, его файлы и его домашнюю папку; администратор ${ADMIN_SANDBOX ? 'песочнится в папках сотрудников (ADMIN_SANDBOX=1)' : 'работает без песочницы'}`);
   const usable = checks.filter((r) => r.ok || r.timeout);
   const inside = await Promise.all(usable.map((r) => checkInSandbox(r.command, r.engine.versionArgs, agentEnv(r.engine))));
   const broken = [];
@@ -430,6 +478,10 @@ ${probe.hint}`);
 }
 
 async function main() {
+  if (SANDBOX && !ROOT) {
+    console.error('AGENT_SANDBOX=bwrap: задайте PROJECTS_ROOT — без корня сотрудник может выбрать проектом любую папку сервера');
+    process.exit(1);
+  }
   // все движки проверяем параллельно; без движка по умолчанию (DEFAULT_ENGINE) бот не запускается, остальные — по возможности
   const asked = process.env.DEFAULT_ENGINE?.trim().toLowerCase();
   if (asked && asked !== DEFAULT_ENGINE) log(`⚠️ DEFAULT_ENGINE=${asked} не распознан (gemini | claude | agy | codex | opencode), используется ${DEFAULT_ENGINE}`);
@@ -475,6 +527,7 @@ async function main() {
       : 'темы в личном чате выключены — режим «диалоги» недоступен',
   );
   await setupCommands().catch((e) => log('настройка меню:', e.message));
+  maybeNotifySafety();
   // пропускаем накопившиеся до запуска обновления
   const old = await tg('getUpdates', { offset: -1, timeout: 0 });
   let offset = old.length ? old[old.length - 1].update_id + 1 : 0;
@@ -487,6 +540,10 @@ async function main() {
     } catch (e) {
       log('очистка файлов:', e.message);
     }
+    const h = db.cleanupHistory(HISTORY_KEEP_DAYS);
+    if (h) log(`удалено старых записей истории: ${h}`);
+    const l = cleanupLogs(DATA_DIR, LOGS_KEEP_DAYS);
+    if (l) log(`удалено старых файлов журнала: ${l}`);
   };
   sweep();
   setInterval(sweep, 24 * 3600_000).unref();

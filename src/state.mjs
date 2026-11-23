@@ -1,10 +1,10 @@
 // Состояние по пользователям: у каждого свой процесс агента, движок, проект, флаг «занят» и разрешения.
-import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVEL_KEYS, MAX_AGENTS, db, langOf, levelName, log, say } from './ctx.mjs';
+import { ADMIN_ID, IDLE_MINUTES, IDLE_MS, LEVEL_KEYS, MAX_AGENTS, db, langOf, levelName, log, pending, say } from './ctx.mjs';
 import { positiveEnv } from './app.mjs';
 import { t } from './i18n.mjs';
-import { canUseEngine, parseJson } from './access.mjs';
-import { DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
-import { HOME, ROOT, insideRoot, isPersonalRoot, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
+import { canUseEngine, modelAllowed, parseJson } from './access.mjs';
+import { actualModelFromUpdate, DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
+import { HOME, ROOT, insideRoot, isPersonalRoot, isWithin, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
 import { GIT_AGENT_AUTH, agentGitEnv, refreshAccounts } from './gitAccess.mjs';
 
@@ -15,6 +15,8 @@ const states = new Map(); // userId -> состояние
  * Без ограничения зависший агент (например, ждёт входа в аккаунт) держал бы пользователя в «агент занят» до /close.
  */
 export const START_TIMEOUT_MS = positiveEnv('AGENT_START_TIMEOUT', 120) * 1000;
+
+export const ADMIN_SANDBOX = process.env.ADMIN_SANDBOX === '1';
 
 export const isAdmin = (id) => id === ADMIN_ID;
 
@@ -131,6 +133,13 @@ export function getState(userId, chatId, threadId = null) {
       suppress: false, // администратор прервал запрос — итоговый ответ не отправляем
       queued: null, // сообщение, пришедшее во время запроса: уйдёт агенту следующим (turn.mjs)
       lastActive: Date.now(),
+      get pendingInput() {
+        return pending.get(this.userId, `topic:${this.topic}`);
+      },
+      set pendingInput(value) {
+        if (value == null) pending.clear(this.userId, `topic:${this.topic}`);
+        else pending.set(this.userId, `topic:${this.topic}`, value);
+      },
       project,
       // сессия агента темы: возобновится при первом запросе (после простоя или перезапуска бота)
       resumeId: moved ? null : row?.acp_session_id || null,
@@ -312,15 +321,18 @@ export function releaseSessionElsewhere(st, sessionId) {
   }
 }
 
-/** Работает ли агент пользователя в песочнице: она включена (AGENT_SANDBOX), а пользователь — не администратор. */
-export const sandboxed = (userId) => Boolean(SANDBOX) && !isAdmin(userId);
+export const sandboxed = (userId, cwd = null) => {
+  if (!SANDBOX) return false;
+  if (!isAdmin(userId)) return true;
+  return Boolean(ADMIN_SANDBOX && ROOT && cwd && isWithin(cwd, ROOT));
+};
 
 /**
  * Песочница для агента диалога (sandbox.agentSandbox) или null. На запись — корень пользователя (без корня — только
  * папка проекта). У сотрудника с личным пространством общий корень проектов целиком открыть нельзя: там чужие папки.
  */
 function sandboxFor(st, cwd, engine) {
-  if (!sandboxed(st.userId)) return null;
+  if (!sandboxed(st.userId, cwd)) return null;
   const root = rootOf(st.userId);
   try {
     return agentSandbox({ userId: st.userId, cwd, root, command: engineCommand(engine), protect: isPersonalRoot(root) ? [ROOT] : [] });
@@ -373,7 +385,14 @@ async function startAgent(st, { resume } = {}) {
       // стоимость (Claude Code) — нарастающим итогом за процесс; запоминаем при любом событии, даже вне запроса
       if (u.sessionUpdate === 'usage_update') {
         if (Number.isFinite(u.cost?.amount)) a.lastCostTotal = u.cost.amount;
-        if (u._meta?.['_claude/model']) a.lastModel = u._meta['_claude/model'];
+        const model = actualModelFromUpdate(u);
+        if (model) a.lastModel = model;
+        if (a.sessionId && st.agent === a && model && !modelAllowed(st.userId, engine.id, model)) {
+          log(`⛔ ${engine.label} использовал модель ${model} вне разрешённого списка — сессия закрыта | пользователь`, st.userId);
+          stopUser(st, 'model-violation');
+          say(st.to, t('state.modelViolation', langOf(st.userId), { model }));
+          return;
+        }
       }
       st.onUpdate?.(u);
     },

@@ -1,16 +1,29 @@
 // База работы бота (SQLite): сессии, запросы пользователя, вызовы инструментов, разрешения, ответы модели.
 // Используется встроенный в Node модуль node:sqlite — без внешних зависимостей.
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { logError } from './log.mjs';
 
 const now = () => new Date().toISOString();
 const cut = (s, n) => (s == null ? null : String(s).slice(0, n));
 
+const securePath = (path, mode) => {
+  if (process.platform === 'win32' || !existsSync(path)) return;
+  try {
+    chmodSync(path, mode);
+  } catch (e) {
+    logError('не удалось ограничить права:', path, e.message);
+  }
+};
+
 export function openDb(path = 'data/bot.db') {
-  mkdirSync(dirname(path), { recursive: true });
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
+  securePath(dir, 0o700);
+  securePath(path, 0o600);
+  for (const suffix of ['-wal', '-shm']) securePath(path + suffix, 0o600);
   db.exec(`
     PRAGMA journal_mode = WAL;
     -- при WAL безопасно: база не повреждается, после сбоя питания теряются лишь последние записи журнала;
@@ -210,6 +223,8 @@ export function openDb(path = 'data/bot.db') {
         GROUP BY s.acp_session_id ORDER BY last_at DESC LIMIT ?`,
     ),
     getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
+    allSettings: db.prepare('SELECT key, value FROM settings'),
+    deleteGitAccounts: db.prepare('DELETE FROM git_accounts WHERE user_id = ?'),
     setSetting: db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
     startSession: db.prepare('INSERT INTO sessions (acp_session_id, user_id, chat_id, mode, cwd, started_at, engine) VALUES (?,?,?,?,?,?,?)'),
     endSession: db.prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL'),
@@ -232,6 +247,10 @@ export function openDb(path = 'data/bot.db') {
     ),
     addPermission: db.prepare('INSERT INTO permissions (request_id, tool_call_id, title, options, asked_at) VALUES (?,?,?,?,?)'),
     answerPermission: db.prepare('UPDATE permissions SET chosen_option = ?, outcome = ?, answered_at = ? WHERE id = ?'),
+    cleanupPermissions: db.prepare('DELETE FROM permissions WHERE asked_at < ?'),
+    cleanupTools: db.prepare('DELETE FROM tool_calls WHERE started_at < ?'),
+    cleanupRequests: db.prepare('DELETE FROM requests WHERE started_at < ?'),
+    cleanupSessions: db.prepare('DELETE FROM sessions WHERE started_at < ? AND ended_at IS NOT NULL'),
     // расход по пользователям с момента since: запросы, токены, стоимость (что прислали агенты)
     usageSummary: db.prepare(
       `SELECT s.user_id AS user_id, COUNT(r.id) AS requests, COALESCE(SUM(r.total_tokens), 0) AS tokens, SUM(r.cost_usd) AS cost
@@ -281,7 +300,11 @@ export function openDb(path = 'data/bot.db') {
     upsertUser: safe((u) => q.upsertUser.run(u.user_id, u.username ?? null, u.first_name ?? null, u.level, u.added_by ?? null, now())),
     setUserLevel: safe((id, level) => q.setUserLevel.run(level, id)),
     touchUser: safe((id, username, firstName) => q.touchUser.run(username ?? null, firstName ?? null, id)),
-    revokeUser: safe((id) => q.revokeUser.run(now(), id)),
+    revokeUser: safe((id) => {
+      const result = q.revokeUser.run(now(), id);
+      if (result.changes) q.deleteGitAccounts.run(id);
+      return result;
+    }),
     createInvite: safe((code, level, createdBy, expiresAt) => q.createInvite.run(code, level, createdBy, now(), expiresAt)),
     /** Гасит приглашение и возвращает его уровень; null — если код неверный, уже использован или просрочен. */
     consumeInvite: safe((code, userId) => {
@@ -297,6 +320,7 @@ export function openDb(path = 'data/bot.db') {
     usageSummary: (since) => safe(() => q.usageSummary.all(since))() ?? [],
     // --- прочее ---
     getSetting: safe((key) => q.getSetting.get(key)?.value ?? null),
+    allSettings: safe(() => q.allSettings.all() ?? []),
     setSetting: safe((key, value) => q.setSetting.run(key, value)),
     startSession: safe((acpSessionId, userId, chatId, mode, cwd, engine) =>
       Number(q.startSession.run(acpSessionId, userId, chatId, mode ?? null, cwd ?? null, now(), engine ?? null).lastInsertRowid)),
@@ -318,6 +342,20 @@ export function openDb(path = 'data/bot.db') {
     permissionAsked: safe((requestId, toolCallId, title, options) =>
       Number(q.addPermission.run(requestId, toolCallId ?? null, cut(title, 2000), JSON.stringify(options), now()).lastInsertRowid)),
     permissionAnswered: safe((id, chosen, outcome) => id && q.answerPermission.run(chosen ?? null, outcome, now(), id)),
+    cleanupHistory: safe((days) => {
+      if (!(Number(days) > 0)) return 0;
+      const before = new Date(Date.now() - Number(days) * 86400_000).toISOString();
+      db.exec('BEGIN');
+      try {
+        const removed = q.cleanupPermissions.run(before).changes + q.cleanupTools.run(before).changes +
+          q.cleanupRequests.run(before).changes + q.cleanupSessions.run(before).changes;
+        db.exec('COMMIT');
+        return removed;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    }),
     // --- темы ---
     getTopic: safe((userId, threadId) => q.getTopic.get(userId, threadId) ?? null),
     /** Создаёт тему, если её нет, и обновляет переданные поля (name, named, project, engine, acpSessionId); остальные не трогает. */

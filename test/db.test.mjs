@@ -28,3 +28,26 @@ test('миграция: старые сессии без колонки engine �
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('cleanupHistory: HISTORY_KEEP_DAYS удаляет старую историю, при 0 не трогает ничего', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bot-history-'));
+  const path = join(dir, 'bot.db');
+  const db = openDb(path);
+  const old = new Date(Date.now() - 10 * 86400_000).toISOString();
+  const raw = new DatabaseSync(path);
+  raw.prepare(`INSERT INTO sessions (acp_session_id, user_id, chat_id, mode, cwd, started_at, ended_at)
+               VALUES ('old', 1, 1, 'plan', '/p', ?, ?)`).run(old, old);
+  raw.prepare("INSERT INTO requests (session_id, user_text, started_at) VALUES (1, 'old', ?)").run(old);
+  raw.close();
+  try {
+    assert.equal(db.cleanupHistory(0), 0);
+    assert.ok(db.cleanupHistory(7) >= 2);
+    const left = new DatabaseSync(path);
+    assert.equal(left.prepare('SELECT COUNT(*) AS n FROM sessions').get().n, 0);
+    assert.equal(left.prepare('SELECT COUNT(*) AS n FROM requests').get().n, 0);
+    left.close();
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

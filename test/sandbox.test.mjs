@@ -101,12 +101,13 @@ test('exposedSecret и agentSandbox: папку, внутри которой с�
 });
 
 test('sandboxEnv: своя домашняя папка, без переменных учётной записи бота, Node — в PATH', () => {
-  const env = S.sandboxEnv({ PATH: ['/a', '/b'].join(delimiter), HOME: '/home/bot', XDG_CONFIG_HOME: '/home/bot/.config', XDG_RUNTIME_DIR: '/run/user/1', SSH_AUTH_SOCK: '/s', ACPGRAM_HOME: '/x', OPENROUTER_API_KEY: 'k' }, { home: '/h/1', nodeDir: '/node/bin' });
+  const env = S.sandboxEnv({ PATH: ['/a', '/b'].join(delimiter), HOME: '/home/bot', XDG_CONFIG_HOME: '/home/bot/.config', XDG_RUNTIME_DIR: '/run/user/1', SSH_AUTH_SOCK: '/s', ACPGRAM_HOME: '/x', OPENROUTER_API_KEY: 'k', GITHUB_TOKEN: 'gh', PROJECT_SECRET: 's', LANG: 'ru_RU.UTF-8' }, { home: '/h/1', nodeDir: '/node/bin' });
   assert.equal(env.HOME, '/h/1');
   assert.equal(env.TMPDIR, '/tmp');
   assert.equal(env.PATH, ['/a', '/b', '/node/bin'].join(delimiter));
   assert.equal(env.OPENROUTER_API_KEY, 'k', 'ключи движка остаются');
-  for (const k of ['XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'SSH_AUTH_SOCK', 'ACPGRAM_HOME']) assert.equal(k in env, false, k);
+  for (const k of ['XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'SSH_AUTH_SOCK', 'ACPGRAM_HOME', 'GITHUB_TOKEN', 'PROJECT_SECRET']) assert.equal(k in env, false, k);
+  assert.equal(env.LANG, 'ru_RU.UTF-8');
   assert.equal(S.sandboxEnv({ PATH: '/node/bin' }, { home: '/h', nodeDir: '/node/bin' }).PATH, '/node/bin', 'без повтора');
 });
 
