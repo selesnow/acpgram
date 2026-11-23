@@ -313,7 +313,10 @@ export async function onAdminCallback(cb) {
   }
   if (action === 'l') {
     if (!isLevel(b) || b === user.level) return ack();
-    db.setUserLevel(id, b);
+    if (db.setUserLevel(id, b)?.changes !== 1) {
+      log('⚠️ уровень не изменён (ошибка базы)', id, b);
+      return ack(t('access.saveFail', al));
+    }
     for (const st of statesOf(id)) stopUser(st, 'level'); // режим агента задаётся при создании сессии — перезапускаем
     log('уровень изменён', id, b);
     await ack(t('adm.ackLevelChanged', al));
@@ -328,7 +331,11 @@ export async function onAdminCallback(cb) {
     });
   }
   if (action === 'ro') {
-    db.revokeUser(id);
+    // запись не прошла (ошибка базы) — доступ остался: «отозван» сообщать нельзя
+    if (db.revokeUser(id)?.changes !== 1) {
+      log('⚠️ доступ не отозван (ошибка базы)', id);
+      return ack(t('access.saveFail', al));
+    }
     for (const st of statesOf(id)) stopUser(st, 'revoked');
     log('доступ отозван', id);
     await ack(t('adm.ackRevoked', al));

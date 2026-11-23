@@ -1,7 +1,7 @@
 // Git: что изменилось и какие есть ветки — для экранов «Изменения» и «Ветки» в /git.
 // Только чтение репозитория, кроме переключения и создания ветки. Команды запускает runGit (git.mjs) — с теми же
 // безопасными настройками и, при включённой песочнице, внутри неё.
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { GitError, runGit } from './git.mjs';
 import { samePath } from './projects.mjs';
@@ -58,7 +58,9 @@ export function parseNumstat(text) {
 /** Число строк нового файла (которого git ещё не знает) или null, если он велик, двоичный или не читается. */
 function countLines(file) {
   try {
-    if (statSync(file).size > COUNT_MAX_BYTES) return null;
+    // файл лежит в папке, куда пишет агент: ссылку не читаем (она может вести на любой файл сервера)
+    const st = lstatSync(file);
+    if (!st.isFile() || st.size > COUNT_MAX_BYTES) return null;
     const buf = readFileSync(file);
     if (buf.includes(0)) return null;
     if (!buf.length) return 0;
@@ -173,8 +175,9 @@ export async function discardFiles(cwd, files, opts = {}) {
   const top = (await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts })).trim();
   const at = { cwd: top, ...opts };
   const paths = [...new Set(files.flatMap((f) => [f.path, f.from]).filter(Boolean))];
-  // какие пути есть в последнем коммите: их возвращаем, остальные (новые файлы) убираем
-  const tracked = new Set((await runGit(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...paths], at).catch(() => '')).split('\0').filter(Boolean));
+  // какие пути есть в последнем коммите: их возвращаем, остальные (новые файлы) убираем. Коммитов ещё нет — все файлы
+  // новые; любой другой сбой git — ошибка: иначе изменённые файлы были бы приняты за новые и удалены
+  const tracked = new Set((await hasCommits(top, opts)) ? (await runGit(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...paths], at)).split('\0').filter(Boolean) : []);
   const restore = paths.filter((p) => tracked.has(p));
   const remove = paths.filter((p) => !tracked.has(p));
   await runGit(['reset', '-q', '--', ...paths], at).catch(() => {}); // убрать из подготовленного к коммиту

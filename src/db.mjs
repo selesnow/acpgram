@@ -17,6 +17,8 @@ export function openDb(path = 'data/bot.db') {
     -- без этого каждая запись (шаги агента, запросы разрешений) ждала сброса на диск
     PRAGMA synchronous = NORMAL;
     PRAGMA foreign_keys = ON;
+    -- базу на секунды может занять другой процесс (копирование, отчёт): ждём, а не теряем запись
+    PRAGMA busy_timeout = 5000;
 
     CREATE TABLE IF NOT EXISTS sessions (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -27,8 +27,12 @@ export function parseRegValue(stdout) {
   return m ? m[1] : null;
 }
 
+// reg.exe — по полному пути из папки Windows: имя без пути Windows искала бы сначала в текущей папке, а acpgram
+// запускают откуда угодно (в том числе из папки чужого проекта)
+const REG_EXE = process.env.SystemRoot ? `${process.env.SystemRoot}\\System32\\reg.exe` : 'reg';
+
 const regQuery = (key, name) => {
-  const r = spawnSync('reg', ['query', key, '/v', name], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+  const r = spawnSync(REG_EXE, ['query', key, '/v', name], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
   return r.status === 0 ? parseRegValue(r.stdout) : null;
 };
 

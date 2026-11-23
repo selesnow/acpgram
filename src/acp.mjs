@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
 import { i18nError } from './i18n.mjs';
 import { logError } from './log.mjs';
+import { resolveProgram } from './winsvc.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -11,7 +12,9 @@ const IS_WIN = process.platform === 'win32';
 export function spawnCommand(command, args, opts = {}) {
   if (IS_WIN) {
     const q = (s) => (/\s/.test(s) ? `"${s}"` : s);
-    return spawn([command, ...args].map(q).join(' '), { ...opts, shell: true, windowsHide: true });
+    // полный путь по PATH: имя без пути cmd.exe искал бы сначала в рабочей папке (у агента это папка проекта)
+    const program = resolveProgram(command, { env: opts.env ?? process.env, shell: true });
+    return spawn([program, ...args].map(q).join(' '), { ...opts, shell: true, windowsHide: true });
   }
   // своя группа процессов, чтобы при остановке завершить и всех потомков
   return spawn(command, args, { ...opts, detached: true });
@@ -32,8 +35,9 @@ export function killTree(proc, graceMs = 3000) {
   if (!proc?.pid) return;
   if (IS_WIN) {
     const args = ['/pid', String(proc.pid), '/T', '/F'];
-    if (syncKill) spawnSync('taskkill', args, { windowsHide: true });
-    else spawn('taskkill', args, { windowsHide: true, stdio: 'ignore' }).on('error', (e) => logError('[acp] taskkill:', e.message));
+    const taskkill = resolveProgram('taskkill');
+    if (syncKill) spawnSync(taskkill, args, { windowsHide: true });
+    else spawn(taskkill, args, { windowsHide: true, stdio: 'ignore' }).on('error', (e) => logError('[acp] taskkill:', e.message));
     return;
   }
   const signal = (sig) => {
@@ -135,7 +139,8 @@ export class AcpAgent {
   start() {
     // окружение задаётся целиком: с окружением бота не смешивается, иначе в него вернулся бы токен бота
     this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], ...(this.env ? { env: this.env } : {}) });
-    readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l));
+    // ошибка разбора одной строки агента не должна ронять бота (обработчик асинхронный: без catch это необработанное отклонение)
+    readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l).catch((e) => logError(`[${this.name}] строка агента не обработана:`, e.message)));
     const skip = quietStderrFilter(this.quietStderr, this.quietStderrBlock);
     readline.createInterface({ input: this.proc.stderr }).on('line', (l) => {
       if (!skip(l)) logError(`[${this.name}:stderr]`, l);
@@ -252,6 +257,7 @@ export class AcpAgent {
     } catch {
       return; // не JSON-RPC (например, служебный вывод) — игнорируем
     }
+    if (!msg || typeof msg !== 'object') return; // «null», число, строка — тоже валидный JSON, но не сообщение
     // ответ на наш запрос
     if (msg.id !== undefined && !msg.method) {
       const p = this.pending.get(msg.id);

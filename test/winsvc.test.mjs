@@ -2,7 +2,7 @@
 // «не видел» существующую службу, потому что искал английские подписи sc.exe).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from '../src/winsvc.mjs';
+import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, resolveProgram, serviceErrorCode, serviceExists, serviceState } from '../src/winsvc.mjs';
 import { winMessage } from '../src/service.mjs';
 import { setCliLang } from '../src/cli-i18n.mjs';
 
@@ -88,6 +88,19 @@ test('winMessage / isGarbled: нечитаемые сообщения (знак�
   assert.equal(isGarbled('\uFFFD\uFFFD\uFFFD\uFFFD'), true);
   assert.equal(isGarbled('Access is denied.'), false);
   assert.match(winMessage('\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD'), /не отображается в этой кодировке/);
+});
+
+test('resolveProgram: программа бота ищется по PATH, а не в рабочей папке (Windows)', () => {
+  const present = new Set([String.raw`C:\Program Files\Git\cmd\git.exe`, String.raw`C:\npm\gemini.cmd`, String.raw`C:\Windows\System32\taskkill.exe`]);
+  const o = { platform: 'win32', exists: (p) => present.has(p), env: { Path: String.raw`C:\Windows\System32;C:\Program Files\Git\cmd;C:\npm` } };
+  assert.equal(resolveProgram('git', o), String.raw`C:\Program Files\Git\cmd\git.exe`, 'имя PATH в окружении — в любом регистре');
+  assert.equal(resolveProgram('taskkill', o), String.raw`C:\Windows\System32\taskkill.exe`);
+  assert.equal(resolveProgram('gemini', o), 'gemini', 'без оболочки Windows запускает только .com и .exe — .cmd не подставляется');
+  assert.equal(resolveProgram('gemini', { ...o, shell: true }), String.raw`C:\npm\gemini.cmd`, 'через cmd.exe — и .cmd');
+  assert.equal(resolveProgram('agy', { ...o, shell: true }), 'agy', 'не нашлась — как было');
+  assert.equal(resolveProgram(String.raw`D:\tools\git.exe`, o), String.raw`D:\tools\git.exe`, 'путь — как есть');
+  assert.equal(resolveProgram(String.raw`.\git.exe`, o), String.raw`.\git.exe`);
+  assert.equal(resolveProgram('git', { ...o, platform: 'linux' }), 'git', 'на Linux и macOS имя без пути и так ищется только по PATH');
 });
 
 test('findOnPath: поиск по PATH без where.exe (кириллица в путях сохраняется)', () => {

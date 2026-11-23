@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { checkCommand, killTree } from './acp.mjs';
 import { agentEnv } from './engines.mjs';
 import { isSecretName } from './files.mjs';
+import { resolveProgram } from './winsvc.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -92,7 +93,8 @@ export class GitError extends Error {
 export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120_000, hide = [], okCodes = [0], maxOut = 4 * 1024 * 1024 } = {}) {
   // okCodes — коды выхода, которые не считаются ошибкой (git diff --no-index возвращает 1, когда различия есть);
   // maxOut — сколько символов вывода хранить (остальное отбрасывается: большой diff целиком не нужен)
-  const command = wrap ? wrap.command : gitCommand();
+  // полный путь по PATH: рабочая папка git — проект, и Windows иначе запустила бы `git.exe`, лежащий в нём
+  const command = wrap ? wrap.command : resolveProgram(gitCommand(), { env });
   const argv = wrap ? [...wrap.args, ...args] : args;
   const clean = (s) => hide.filter(Boolean).reduce((acc, h) => acc.replaceAll(h, '***'), s);
   return new Promise((resolve, reject) => {
@@ -161,7 +163,8 @@ export async function repoState(cwd, opts = {}) {
   let top;
   try {
     top = (await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts })).trim();
-  } catch {
+  } catch (e) {
+    if (e?.timeout) throw e; // git не ответил — это сбой, а не «папка не репозиторий»
     return null;
   }
   // адрес как записан в настройках репозитория (без подстановок url.*.insteadOf): по нему определяется сервис
@@ -193,9 +196,17 @@ export async function pullRepo(cwd, opts = {}) {
 /** Файлы с секретами среди коммитов, которые ещё не отправлены на сервер (по именам: .env, ключи, учётные данные). */
 export async function unpushedSecrets(cwd, opts = {}) {
   const st = parseStatus(await runGit(['status', '--porcelain=v2', '--branch'], { cwd, ...opts }));
-  // без ветки на сервере сравнивать не с чем — смотрим все файлы текущего коммита
-  const args = st.upstream ? ['diff', '--name-only', '--diff-filter=AM', '@{u}', 'HEAD'] : ['ls-tree', '-r', '--name-only', 'HEAD'];
-  const names = await runGit(args, { cwd, ...opts }).then((s) => s.split(/\r?\n/).filter(Boolean), () => []);
+  const list = (args) => runGit(args, { cwd, ...opts }).then((s) => s.split(/\r?\n/).filter(Boolean));
+  // без ветки на сервере (или если она уже удалена) сравнивать не с чем — смотрим все файлы текущего коммита
+  const all = () => list(['ls-tree', '-r', '--name-only', 'HEAD']);
+  let names;
+  try {
+    names = st.upstream ? await list(['diff', '--name-only', '--diff-filter=AM', '@{u}', 'HEAD']).catch(all) : await all();
+  } catch (e) {
+    // в репозитории ещё нет коммитов — проверять нечего; любой другой сбой git — это не «секретов нет»
+    if (await runGit(['rev-parse', '--verify', '-q', 'HEAD'], { cwd, ...opts }).then(() => true, () => false)) throw e;
+    names = [];
+  }
   return names.filter((n) => isSecretName(`/${n}`));
 }
 

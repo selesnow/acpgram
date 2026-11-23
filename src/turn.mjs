@@ -261,6 +261,9 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   let lastSent = 0;
   let lastText = '';
   let lastUsage = null; // последнее событие usage_update
+  // номер записи запроса в базе — свой у каждого хода: st.requestId (для запросов разрешений) следующий ход
+  // перезапишет раньше, чем этот дойдёт до записи итога
+  let requestId = null;
 
   // Черновик (оформление в ui.mjs): пока агент молчит — родные анимированные точки Telegram,
   // затем заголовок мыслей и ход работы, а как пошёл ответ — последний шаг и сам ответ.
@@ -307,7 +310,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
       const tool = parseTool(u, engine);
       breakBeforeText = true;
       steps.push(tool);
-      db.toolStarted(st.requestId, tool);
+      db.toolStarted(requestId, tool);
       dirty = true;
     } else if (kind === 'plan' && Array.isArray(u.entries)) {
       plan = u.entries; // агент присылает план целиком при каждом изменении
@@ -322,7 +325,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
         if (tool.title) step.title = tool.title;
         if (tool.description) step.description = tool.description;
       }
-      db.toolUpdated(st.requestId, tool);
+      db.toolUpdated(requestId, tool);
       dirty = true;
     }
   };
@@ -339,7 +342,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     const a = (agent = await ensureAgent(st));
     // модель и уровень рассуждений — как выбрал пользователь (/model) и разрешил администратор
     await syncSelection(st.userId, a);
-    st.requestId = db.startRequest(a.dbSessionId, dbText);
+    st.requestId = requestId = db.startRequest(a.dbSessionId, dbText);
     const outbox = outboxDir(st.userId);
     mkdirSync(outbox, { recursive: true });
     // подсказка агенту, как прислать файл: в первом запросе сессии и затем раз в OUTBOX_NOTE_EVERY запросов
@@ -355,7 +358,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   } catch (e) {
     error = e.message;
     // запрос упал или прерван, но агент мог успеть потратить токены — учитываем стоимость этому запросу
-    if (agent && st.requestId) usage = turnUsage(agent, null, lastUsage);
+    if (agent && requestId) usage = turnUsage(agent, null, lastUsage);
     if (e instanceof ModelAccessError || e instanceof ProjectError) {
       limited = true; // понятное сообщение без пометки «Ошибка» и без подвала
       answer = e.message;
@@ -370,11 +373,12 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
       log('ошибка запроса:', e.message);
       answer += `\n\n${t('turn.error', lang, { msg: errText(e, lang) })}`;
     }
-    if (!st.requestId) st.requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
+    if (!requestId) requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
   } finally {
     clearInterval(timer);
     st.onUpdate = null;
     dropPermissions(st);
+    st.requestId = null; // запросы разрешений этого хода сняты; следующий ход выставит свой номер
     st.busy = false;
     st.lastActive = Date.now();
   }
@@ -389,8 +393,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   const asked = extractAsks(gitted.text); // метки [[ask: …]] → заглушки: на их место встанут кнопки быстрого ответа
   const sent = extractSendMarks(asked.text, { placeholders: true });
   const answerText = sent.text.replace(FILE_PLACEHOLDER, '').replace(ASK_PLACEHOLDER, '').trim(); // ответ без файлов и кнопок: для базы и проверки «пустой ли»
-  db.finishRequest(st.requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });
-  st.requestId = null;
+  db.finishRequest(requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });
   if (st.suppress) {
     // администратор отозвал доступ или сменил уровень — результат пользователю не отправляем
     st.suppress = false;

@@ -25,6 +25,7 @@ export async function onWidgetQuery(q) {
     const item = findByRef(db.listSessions(st.userId, st.project, 50), query.ref, (s) => s.acp_id);
     const check = checkResumable(st, item);
     if (check.error) return answer(check.error);
+    st.busy = true; // синхронно, до ответа Telegram (см. resumeSession)
     await answer(t('wid.resuming', lang));
     // загрузка сессии занимает секунды — ход и итог приходят обычными сообщениями в диалог
     return resumeSession(st, item, check.engine, (text) => say(st.to, text));

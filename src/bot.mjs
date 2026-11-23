@@ -301,6 +301,7 @@ async function handleUpdate(u) {
   const from = msg?.from || cb?.from;
   if (!from || from.is_bot) return;
   if (msg && msg.chat.type !== 'private') return; // работаем только в личных чатах
+  if (cb?.message?.chat && cb.message.chat.type !== 'private') return; // и кнопки принимаем только из личного чата
   // бот работает только в личных чатах, поэтому id чата = id пользователя (на случай кнопки без cb.message)
   const chatId = msg?.chat.id ?? cb.message?.chat?.id ?? from.id;
 
@@ -543,6 +544,16 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
     process.exit(0);
   });
 }
+
+// Ошибка в обработчике события или таймере, которую никто не поймал, не должна молча завершать бот для всех
+// пользователей: отклонённый промис — в журнал и работаем дальше; необработанное исключение — в журнал, агенты
+// завершаются, и процесс выходит (служба поднимет его заново).
+process.on('unhandledRejection', (e) => log('⚠️ необработанное отклонение:', e?.stack ?? e));
+process.on('uncaughtException', (e) => {
+  console.error(new Date().toISOString(), 'необработанное исключение:', e?.stack ?? e);
+  shutdown();
+  process.exit(1);
+});
 
 main().catch((e) => {
   console.error(e);

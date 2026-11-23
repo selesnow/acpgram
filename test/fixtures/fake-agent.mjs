@@ -8,6 +8,8 @@ const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { s
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 process.stderr.write('fake-agent started\n');
 console.log('не JSON: служебный вывод должен игнорироваться');
+// строки, которые разбираются как JSON, но сообщениями не являются: бот не должен от них падать
+if (process.env.FAKE_JUNK) for (const s of ['null', '42', '"x"', '[]', 'true']) console.log(s);
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const msg = JSON.parse(line);

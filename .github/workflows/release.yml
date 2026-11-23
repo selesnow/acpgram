@@ -19,8 +19,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: 24
       - run: npm test
 
@@ -32,6 +35,8 @@ jobs:
       contents: write # create a GitHub Release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Tag matches package.json version
         run: |
           VERSION="v$(node -p "require('./package.json').version")"
@@ -86,7 +91,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh"
+          URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh"
           curl -fsSL "$URL" | bash
           echo 'KEEP=1' > "$HOME/.local/share/acpgram/.env"
           curl -fsSL "$URL" | bash
@@ -96,7 +101,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $url = "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.ps1"
+          $url = "https://raw.githubusercontent.com/$($env:GITHUB_REPOSITORY)/$($env:GITHUB_REF_NAME)/install.ps1"
           irm $url | iex
           Set-Content -Path "$env:LOCALAPPDATA\acpgram\.env" -Value 'KEEP=1'
           irm $url | iex

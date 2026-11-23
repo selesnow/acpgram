@@ -7,7 +7,7 @@ import { basename } from 'node:path';
 import { db, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { GitError, commitAll, pushRepo, repoState } from './git.mjs';
-import { accountsOf, findHost } from './gitAccess.mjs';
+import { accountsOf, findHost, hostFor } from './gitAccess.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { createRepo, listNamespaces, openMergeRequest, repoInfo, repoSlug, visibilities } from './gitApi.mjs';
 import { HostError, showRemote } from './gitHosts.mjs';
@@ -85,6 +85,8 @@ async function publish(st, project, lang, edit, h) {
     if (!(await hasCommits(project, opts))) return await edit({ text: th('git.pb.empty', lang), markup: { inline_keyboard: [backRow(lang)] } });
     const created = await createRepo(host, account.token, { name: pub.name, slug: pub.slug, namespace: pub.namespace, visibility: pub.visibility });
     log('git: репозиторий создан:', st.userId, host.id, created.path);
+    // адрес из ответа сервиса уходит в настройки репозитория: чужой адрес (или не адрес вовсе) не принимаем
+    if (hostFor(created.url)?.id !== host.id) throw new HostError('http', `${host.label}: unexpected repository address`);
     await setRemote(project, created.url, opts);
     await pushRepo(project, opts);
     log('git: проект опубликован:', st.userId, project, '→', created.path);

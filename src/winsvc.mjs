@@ -7,6 +7,7 @@
 //   • значения состояний (RUNNING, STOP_PENDING…) и формат «число  (0xHEX)» зашиты в sc.exe;
 //   • ключи и значения реестра (DeleteFlag), столбцы CSV tasklist.
 // Текст вывода используется только для показа пользователю.
+import { existsSync } from 'node:fs';
 import { join, win32 } from 'node:path';
 import { tc } from './cli-i18n.mjs';
 
@@ -126,4 +127,22 @@ export function findOnPath(cmd, { pathVar = process.env.PATH ?? process.env.Path
     if (exists(file)) return file;
   }
   return null;
+}
+
+/**
+ * Полный путь программы, которую запускает сам бот (git, движок, taskkill, reg…). Windows ищет имя без пути сначала
+ * в рабочей папке процесса, а у git и агента это папка проекта с недоверенным содержимым: `git.exe` из клонированного
+ * репозитория запустился бы вместо настоящего. Поэтому имя заранее разрешается по PATH — без рабочей папки.
+ * На Linux и macOS имя без пути ищется только по PATH — там возвращается как есть. Не нашлась — тоже как есть
+ * (запуск поведёт себя по-прежнему). Окружение агента при этом не меняется: его команды работают как раньше.
+ * @param {string} command имя («git») или путь
+ * @param {{env?: object, shell?: boolean, platform?: string, exists?: (p: string) => boolean}} [o]
+ *   shell — запуск через cmd.exe (он запускает и .cmd / .bat); без оболочки Windows запускает только .com и .exe
+ */
+export function resolveProgram(command, { env = process.env, shell = false, platform = process.platform, exists = existsSync } = {}) {
+  const cmd = String(command ?? '');
+  if (platform !== 'win32' || !cmd || /[\\/]/.test(cmd)) return command; // путь (полный или относительный) — как есть
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  const pathVar = (key ? env[key] : '') || process.env.PATH || '';
+  return findOnPath(cmd, { pathVar, exists, exts: shell ? ['.com', '.exe', '.bat', '.cmd'] : ['.com', '.exe'] }) ?? command;
 }

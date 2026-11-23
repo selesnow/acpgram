@@ -86,11 +86,13 @@ export function checkResumable(st, item) {
 export async function resumeSession(st, item, engine, report) {
   const lang = langOf(st.userId);
   const label = trunc(oneLine(item.first_text), 80);
-  await report(t('ses.resuming', lang, { when: when(item.last_at, lang), label }));
-  st.busy = true; // пока идёт загрузка, новые запросы не принимаем
+  // «занят» — до первого await: сообщение, пришедшее в это время, встаёт в очередь, а не запускает второй запрос,
+  // агента которого возобновление тут же закрыло бы
+  st.busy = true;
   const prevEngine = st.engine; // выбор пользователя до возобновления — вернём, если не получится
   let switched = false;
   try {
+    await report(t('ses.resuming', lang, { when: when(item.last_at, lang), label }));
     endAgent(st, 'resume');
     // сессия живёт в своём движке: при необходимости переключаем выбор пользователя на него
     switched = engineOf(st).id !== engine.id;
@@ -124,6 +126,7 @@ export async function onSessionCallback(st, cb) {
   const item = db.listSessions(st.userId, st.project, 50).find((s) => s.acp_id === id);
   const check = checkResumable(st, item);
   if (check.error) return ack(check.error);
+  st.busy = true; // синхронно, до ответа Telegram (см. resumeSession)
   await ack();
   return resumeSession(st, item, check.engine, edit);
 }

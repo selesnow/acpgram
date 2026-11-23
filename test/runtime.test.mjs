@@ -13,9 +13,14 @@ delete process.env.PROJECTS_ROOT; // проект — любая папка (и�
 process.env.TELEGRAM_BOT_TOKEN ??= 'test';
 process.env.WIDGETS = '1'; // виджеты выключены по умолчанию — в тестах отправки они нужны
 process.env.ALLOWED_USER_ID ??= '1';
+// Telegram в тестах не вызывается: без подмены сообщение из проверяемого кода (say) ушло бы настоящим запросом в Bot API —
+// а в окружении, где задан токен рабочего бота, ещё и от его имени
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => ({ json: async () => ({ ok: true, result: { message_id: 1 } }) });
 const ctx = await import('../src/ctx.mjs');
 const { CATALOG_TTL_MS, catalogFresh, catalogStaleReason, envSignature } =await import('../src/access.mjs');
 after(() => {
+  globalThis.fetch = realFetch;
   ctx.db.close();
   rmSync(home, { recursive: true, force: true });
 });

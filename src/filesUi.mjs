@@ -220,10 +220,12 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
   if (wait.kind === 'fileContent') {
     // это может быть секрет: что бы ни случилось, агенту текст не уходит, а сообщение удаляется
     st.pendingInput = null;
+    // до первого await: вторая часть разбитого Telegram сообщения обрабатывается параллельно и иначе ушла бы агенту
+    const tooLong = [...text].length > INLINE_MAX;
+    if (tooLong) st.swallowUntil = now + SWALLOW_MS;
     await dropMessage(st, messageId);
     if (expired || !project || !canManageFiles(st.userId)) return (await say(st.to, t('files.contentExpired', lang)), true);
-    if ([...text].length > INLINE_MAX) {
-      st.swallowUntil = now + SWALLOW_MS;
+    if (tooLong) {
       const markup = { inline_keyboard: [[{ text: t('files.upload', lang), callback_data: `fl:u:${pathToken(wait.dir)}` }]] };
       return (await say(st.to, t('files.contentLong', lang, { max: INLINE_MAX }), { reply_markup: markup }), true);
     }

@@ -137,3 +137,20 @@ test('AcpAgent: ошибки процесса несут перевод для �
   assert.equal(errText(e, 'ru'), e.message);
   await exited;
 });
+
+test('AcpAgent: строки «null», число и подобные в выводе агента не роняют бот', async () => {
+  const rejections = [];
+  const onRejection = (e) => rejections.push(e);
+  process.on('unhandledRejection', onRejection);
+  const agent = new AcpAgent({ cwd: process.cwd(), command: process.execPath, args: [FAKE], env: { ...process.env, FAKE_JUNK: '1' } });
+  try {
+    await agent.init('plan');
+    const res = await agent.prompt('привет');
+    assert.equal(res.stopReason, 'end_turn', 'после мусорных строк обмен продолжается');
+    await new Promise((r) => setTimeout(r, 50)); // необработанное отклонение пришло бы на следующем обороте цикла событий
+    assert.deepEqual(rejections, [], 'обработчик строки не оставляет необработанных отклонений');
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    agent.close();
+  }
+});

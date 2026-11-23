@@ -188,6 +188,15 @@ test('/files: слишком длинное и запоздавшее содер
   assert.ok(take().some((c) => c.method === 'deleteMessage' && c.body.message_id === 91));
   assert.equal(await U.onFileInput(ann, 'обычный запрос', { messageId: 92, now: now + 60_000 }), false, 'позже текст снова идёт агенту');
 
+  // обе части приходят одним пакетом обновлений и обрабатываются одновременно: пока первая ждёт ответа Telegram
+  // на удаление сообщения, вторая уже проверяется — и тоже не должна уйти агенту
+  ann.swallowUntil = 0;
+  waitContent();
+  const first = U.onFileInput(ann, 'x'.repeat(U.INLINE_MAX + 1), { messageId: 93, now });
+  const second = U.onFileInput(ann, 'хвост секрета', { messageId: 94, now });
+  assert.deepEqual(await Promise.all([first, second]), [true, true], 'хвост секрета не превращается в запрос агенту');
+  assert.ok(take().some((c) => c.method === 'deleteMessage' && c.body.message_id === 94));
+
   ann.swallowUntil = 0; // окно после длинного сообщения прошло
   waitContent(Date.now() - U.FILE_WAIT_MS - 1);
   assert.equal(await U.onFileInput(ann, 'SECRET=late', { messageId: 93 }), true, 'истёкшее ожидание содержимого не превращает секрет в запрос агенту');

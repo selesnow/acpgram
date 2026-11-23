@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { APP, DATA_DIR, HOME_DIR, MAIN_PATH } from './app.mjs';
 import { tc } from './cli-i18n.mjs';
-import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, serviceErrorCode, serviceExists, serviceState } from './winsvc.mjs';
+import { decodeOutput, deleteFlagArgs, diagnoseCreate, findOnPath, isGarbled, parseDeleteFlag, parseOemCp, parseTasklistPid, resolveProgram, serviceErrorCode, serviceExists, serviceState } from './winsvc.mjs';
 
 // разбор вывода sc.exe — в winsvc.mjs (не зависит от языка Windows); отсюда экспортируется для совместимости
 export { serviceErrorCode, serviceState } from './winsvc.mjs';
@@ -126,7 +126,7 @@ export function nssmCommands({ name = APP.id, node, main = MAIN_PATH, dir = HOME
 let oemCp = null;
 const oemCodePage = () => {
   if (oemCp == null) {
-    const r = PLATFORM === 'win32' ? spawnSync('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'OEMCP'], { encoding: 'latin1', windowsHide: true }) : null;
+    const r = PLATFORM === 'win32' ? spawnSync(resolveProgram('reg'), ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'OEMCP'], { encoding: 'latin1', windowsHide: true }) : null;
     oemCp = parseOemCp(r?.stdout);
   }
   return oemCp;
@@ -139,7 +139,7 @@ const run = (cmd, args, { dry = false, secretAt = -1, quiet = false, timeout = 3
   const shown = args.map((a, i) => (i === secretAt ? '********' : /\s/.test(a) ? `"${a}"` : a)).join(' ');
   if (!quiet) console.log(`  $ ${cmd} ${shown}`);
   if (dry) return { status: 0, stdout: '', stderr: '' };
-  const r = spawnSync(cmd, args, { windowsHide: true, timeout });
+  const r = spawnSync(resolveProgram(cmd), args, { windowsHide: true, timeout }); // системные программы — по PATH, не из текущей папки
   const text = (b) => decodeOutput(b, PLATFORM === 'win32' ? oemCodePage() : 0).trim();
   return { status: r.status, error: r.error?.code, stdout: text(r.stdout), stderr: text(r.stderr) || r.error?.message || '' };
 };
@@ -154,7 +154,7 @@ export function findNssm({ env = process.env, homeDir = HOME_DIR, extra = WINGET
   return findOnPath('nssm', { exists: existsSync, exts: ['.exe'], pathVar: env.PATH ?? env.Path ?? '', extra });
 }
 
-const isWinAdmin = () => spawnSync('net', ['session'], { windowsHide: true, stdio: 'ignore' }).status === 0;
+const isWinAdmin = () => spawnSync(resolveProgram('net'), ['session'], { windowsHide: true, stdio: 'ignore' }).status === 0;
 
 /** Учётная запись Windows текущего пользователя в формате для служб: «.\user» (локальная) или «DOMAIN\user». */
 export function windowsAccount(env = process.env, username = userInfo().username) {
