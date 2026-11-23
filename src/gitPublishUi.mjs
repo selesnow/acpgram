@@ -91,7 +91,11 @@ async function publish(st, project, lang, edit, h) {
     await pushRepo(project, opts);
     log('git: проект опубликован:', st.userId, project, '→', created.path);
     st.gitPublish = null;
-    const note = first.skipped.length ? `\n${th('git.skipped', lang, { files: first.skipped.join(', ') })}` : '';
+    const note = [
+      ...(first.skipped.length ? [th('git.skipped', lang, { files: first.skipped.join(', ') })] : []),
+      ...(first.tracked.length ? [th('git.tracked', lang, { files: first.tracked.join(', ') })] : []),
+      ...(first.ignoreWarning ? [th('git.ignoreLink', lang)] : []),
+    ].map((s) => `\n${s}`).join('');
     const v = await h.view();
     const open = created.web ? [[{ text: t('git.open', lang), url: created.web }]] : [];
     return await edit({ text: `${th('git.pb.done', lang, { address: hCode(showRemote(created.url)) })}${note}\n\n${v.text}`, markup: { inline_keyboard: [...open, ...v.markup.inline_keyboard] } });

@@ -220,7 +220,7 @@ async function nameTopic(st, title) {
 async function sendLooseFiles(st, files, lang) {
   for (const f of files) {
     try {
-      await sendFile(st.to, f.path, { photo: f.photo, size: f.size });
+      await sendFile(st.to, f.buffer ? { buffer: f.buffer, name: f.name, size: f.size } : f.path, { photo: f.photo, size: f.size });
       log('файл отправлен пользователю отдельно', st.userId, f.path);
     } catch (e) {
       log('отправка файла:', e.message);

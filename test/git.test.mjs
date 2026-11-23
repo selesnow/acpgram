@@ -3,7 +3,7 @@
 // подставляется на локальный репозиторий настройкой git url.<путь>.insteadOf.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -168,7 +168,7 @@ test('git: клонирование, коммит без секретов, от�
   const seed = join(home, 'seed');
   await G.cloneRepo(bare, 'seed', { cwd: home, env });
   writeFileSync(join(seed, 'README.md'), '# app\n');
-  assert.deepEqual(await G.commitAll(seed, 'начало', { env }), { committed: true, skipped: [], tracked: [] });
+  assert.deepEqual(await G.commitAll(seed, 'начало', { env }), { committed: true, skipped: [], tracked: [], ignoreWarning: false });
   await G.pushRepo(seed, { env });
 
   const work = join(home, 'work');
@@ -186,14 +186,14 @@ test('git: клонирование, коммит без секретов, от�
   mkdirSync(join(work, 'conf'));
   writeFileSync(join(work, 'conf', 'id_rsa'), 'key');
   const r = await G.commitAll(work, 'работа "с кавычками" & знаками; $(echo x)', { env });
-  assert.deepEqual(r, { committed: true, skipped: ['.env', 'conf/id_rsa'], tracked: [] });
+  assert.deepEqual(r, { committed: true, skipped: ['.env', 'conf/id_rsa'], tracked: [], ignoreWarning: false });
   assert.deepEqual(readFileSync(join(work, '.gitignore'), 'utf8').split('\n').filter(Boolean), ['/.env', '/conf/id_rsa']);
   assert.equal((await git(work, 'log', '-1', '--format=%s')).trim(), 'работа "с кавычками" & знаками; $(echo x)', 'описание передано как есть, без оболочки');
   assert.deepEqual((await git(work, 'show', '--name-only', '--format=', 'HEAD')).trim().split('\n').sort(), ['.gitignore', 'app.js']);
   assert.deepEqual(await G.unpushedSecrets(work, { env }), []);
   await G.pushRepo(work, { env });
   assert.equal((await G.repoState(work, { env })).ahead, 0);
-  assert.deepEqual(await G.commitAll(work, 'пусто', { env }), { committed: false, skipped: [], tracked: [] }, 'нечего коммитить');
+  assert.deepEqual(await G.commitAll(work, 'пусто', { env }), { committed: false, skipped: [], tracked: [], ignoreWarning: false }, 'нечего коммитить');
 
   // секрет, закоммиченный в обход (так мог сделать агент), виден до отправки
   await git(work, 'add', '-f', '.env');
@@ -202,6 +202,27 @@ test('git: клонирование, коммит без секретов, от�
   writeFileSync(join(work, '.env'), 'TOKEN=2');
   assert.deepEqual((await G.commitAll(work, 'ещё', { env })).tracked, ['.env'], 'изменения секрета, уже лежащего в репозитории, в коммит не идут');
   await git(work, 'reset', '-q', '--hard', 'origin/main');
+
+  // .gitignore-ссылка не перезаписывается: секрет остаётся вне коммита, но сообщение об ignoreWarnings не лжёт
+  const linked = join(home, 'linked');
+  mkdirSync(linked, { recursive: true });
+  await git(linked, 'init', '-q', '-b', 'main');
+  const outsideIgnore = join(home, 'outside.gitignore');
+  writeFileSync(outsideIgnore, 'SAFE\n');
+  try {
+    symlinkSync(outsideIgnore, join(linked, '.gitignore'));
+  } catch (e) {
+    if (e.code !== 'EPERM') throw e;
+  }
+  writeFileSync(join(linked, '.env'), 'TOKEN=3');
+  writeFileSync(join(linked, 'app.js'), 'x');
+  const linkedResult = await G.commitAll(linked, 'ссылка', { env });
+  if (existsSync(join(linked, '.gitignore')) && readFileSync(join(linked, '.gitignore'), 'utf8') === 'SAFE\n') {
+    assert.equal(linkedResult.ignoreWarning, true);
+    assert.deepEqual(linkedResult.skipped, [], 'в .gitignore ничего не записано');
+    assert.deepEqual((await git(linked, 'show', '--name-only', '--format=', 'HEAD')).trim().split('\n').sort(), ['app.js'], 'секрет в коммит не вошёл');
+    assert.equal(readFileSync(outsideIgnore, 'utf8'), 'SAFE\n');
+  }
 
   // получение: новое на сервере → перемотка; разошлись → слияние не делается
   await git(seed, 'pull', '-q', '--ff-only');

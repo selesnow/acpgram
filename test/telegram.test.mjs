@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { TelegramError, callApi } from '../src/telegram.mjs';
+import { TelegramError, callApi, sendBuffer } from '../src/telegram.mjs';
 
 /** Поддельный fetch: отдаёт ответы по очереди и считает вызовы. */
 const fakeFetch = (...replies) => {
@@ -60,6 +60,18 @@ test('callApi: тело запроса собирается заново для 
   const f = fakeFetch({ ok: false, error_code: 429, description: 'x', parameters: { retry_after: 0 } }, { ok: true, result: true });
   await callApi('sendDocument', () => (built++, { body: 'x' }), { fetchImpl: f.impl });
   assert.equal(built, 2);
+});
+
+test('sendBuffer: документ уходит из памяти без обращения к файлу', async () => {
+  const f = fakeFetch({ ok: true, result: { message_id: 1 } });
+  assert.equal((await sendBuffer(42, Buffer.from('diff'), 'change.diff', { fetchImpl: f.impl })).message_id, 1);
+  assert.equal(f.calls.length, 1);
+  assert.match(f.calls[0].url, /sendDocument$/);
+  const form = f.calls[0].init.body;
+  assert.ok(form instanceof FormData);
+  const file = form.get('document');
+  assert.equal(file.name, 'change.diff');
+  assert.equal(await file.text(), 'diff');
 });
 
 test('isNotModified: правка сообщения тем же содержимым — не ошибка', async () => {

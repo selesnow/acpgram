@@ -226,6 +226,7 @@ async function repoAction(st, action, lang, edit, { message = null } = {}) {
       const r = await commitAll(project, message, opts);
       if (r.skipped.length) note += `\n${th('git.skipped', lang, { files: r.skipped.join(', ') })}`;
       if (r.tracked.length) note += `\n${th('git.tracked', lang, { files: r.tracked.join(', ') })}`;
+      if (r.ignoreWarning) note += `\n${th('git.ignoreLink', lang)}`;
       const after = await repoState(project, opts);
       if (!r.committed && !after?.ahead && after?.upstream) return await done(th('git.savedNothing', lang) + note);
     } else await edit({ text: th('git.pushing', lang) });

@@ -76,35 +76,42 @@ export async function downloadFile(file_id) {
 
 /**
  * Запрос с загрузкой файлов (multipart/form-data). fields — параметры метода (объекты передаются JSON),
- * files — {имя поля: {path, name?}}; файл читается с диска потоком, а не целиком в память.
+ * files — {имя поля: {path, name?} | {buffer, name}}; файл с диска читается потоком, buffer — из памяти.
  */
-function tgForm(method, fields, files = {}) {
+function tgForm(method, fields, files = {}, opts = {}) {
   const makeInit = async () => {
     const form = new FormData();
     for (const [k, v] of Object.entries(fields)) if (v != null) form.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
-    for (const [k, f] of Object.entries(files)) form.append(k, await openAsBlob(f.path), f.name ?? basename(f.path));
+    for (const [k, f] of Object.entries(files)) {
+      const blob = f.buffer ? new Blob([f.buffer]) : await openAsBlob(f.path);
+      form.append(k, blob, f.name ?? (f.buffer ? 'file' : basename(f.path)));
+    }
     return { body: form };
   };
-  return callApi(method, makeInit, { timeoutMs: UPLOAD_TIMEOUT_MS });
+  return callApi(method, makeInit, { timeoutMs: UPLOAD_TIMEOUT_MS, ...opts });
 }
 
 /** Отправка файла пользователю отдельным сообщением. */
-const uploadFile = (method, field, to, path) => tgForm(method, dest(to), { [field]: { path } });
+const uploadFile = (method, field, to, file, opts = {}) => tgForm(method, dest(to), { [field]: typeof file === 'string' ? { path: file } : file }, opts);
 
 /** Telegram принимает фото до 10 МБ; больше — только документом. */
 export const PHOTO_MAX = 10 * 1024 * 1024;
 
 /** Файл как документ; картинку (до 10 МБ) — как фото, а если Telegram отверг фото, то документом. */
-export async function sendFile(to, path, { photo = false, size = 0 } = {}) {
+export async function sendFile(to, source, { photo = false, size = 0, ...opts } = {}) {
+  const file = typeof source === 'string' ? { path: source } : source;
   if (photo && size <= PHOTO_MAX) {
     try {
-      return await uploadFile('sendPhoto', 'photo', to, path);
+      return await uploadFile('sendPhoto', 'photo', to, file, opts);
     } catch (e) {
       logError('sendPhoto не прошёл, отправляю документом:', e.message);
     }
   }
-  return uploadFile('sendDocument', 'document', to, path);
+  return uploadFile('sendDocument', 'document', to, file, opts);
 }
+
+/** Отправляет уже проверенный буфер без обращения к диску. */
+export const sendBuffer = (to, buffer, name, opts = {}) => sendFile(to, { buffer, name, size: buffer.length }, { ...opts, size: buffer.length });
 
 /** Экранирует текст для вставки в HTML-теги rich-разметки. */
 export const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { AgentFileError, openVerified, verifyStable } from './agentFiles.mjs';
 import { isWithin } from './projects.mjs';
 
 /** Наибольшая длина одного имени в пути и наибольшая вложенность. */
@@ -124,11 +125,21 @@ export function writeProjectFile(project, dir, parts, data, { replace = false } 
 /** Удаляет файл проекта (только обычный файл, не папку и не ссылку). */
 export function deleteProjectFile(project, path) {
   const { root } = inProject(project, join(path, '..'));
-  const st = lstat(path);
-  if (!st) throw new FileError('missing');
-  if (!st.isFile()) throw new FileError(st.isSymbolicLink() ? 'link' : 'isdir');
-  if (!isWithin(realpathSync.native(path), root)) throw new FileError('outside');
-  unlinkSync(path);
+  let handle;
+  try {
+    handle = openVerified(path, { allowed: (file) => isWithin(file, root), allowEmpty: true, noFollow: true });
+    verifyStable(handle.fd, path);
+    unlinkSync(path);
+  } catch (e) {
+    if (e instanceof AgentFileError) {
+      if (e.code === 'missing') throw new FileError('missing');
+      if (e.code === 'link' || e.code === 'notfile') throw new FileError(e.code === 'link' ? 'link' : 'isdir');
+      throw new FileError('outside');
+    }
+    throw e;
+  } finally {
+    if (handle) closeSync(handle.fd);
+  }
 }
 
 /**

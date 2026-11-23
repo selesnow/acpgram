@@ -5,10 +5,10 @@
 // Поэтому: хуки отключены, общий и системный конфиги не читаются (где это возможно), вход передаётся только через
 // окружение процесса, а при включённой песочнице (AGENT_SANDBOX) git запускается в песочнице того же сотрудника.
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { devNull } from 'node:os';
 import { join } from 'node:path';
 import { checkCommand, killTree } from './acp.mjs';
+import { AgentFileError, updateNoFollow } from './agentFiles.mjs';
 import { agentEnv } from './engines.mjs';
 import { isSecretName } from './files.mjs';
 import { resolveProgram } from './winsvc.mjs';
@@ -215,9 +215,10 @@ export const pushRepo = (cwd, opts = {}) => runGit(['push', '-u', 'origin', 'HEA
 
 /**
  * Коммитит все изменения, кроме файлов с секретами: их из коммита убирает, новые — дописывает в .gitignore.
- * @returns {Promise<{committed: boolean, skipped: string[], tracked: string[]}>} committed — коммит создан (было что
- *   коммитить); skipped — новые файлы с секретами, внесённые в .gitignore; tracked — файлы с секретами, которые уже
- *   были в репозитории: их изменения в коммит не вошли
+ * @returns {Promise<{committed: boolean, skipped: string[], tracked: string[], ignoreWarning: boolean}>} committed —
+ *   коммит создан (было что коммитить); skipped — новые файлы с секретами, внесённые в .gitignore; tracked — файлы
+ *   с секретами, которые уже были в репозитории: их изменения в коммит не вошли; ignoreWarning — .gitignore
+ *   подменён ссылкой или недоступен, правила туда не записаны
  */
 export async function commitAll(cwd, message, opts = {}) {
   await runGit(['add', '-A'], { cwd, ...opts });
@@ -228,19 +229,31 @@ export async function commitAll(cwd, message, opts = {}) {
   const secrets = staged.filter((f) => f.status !== 'D' && isSecretName(`/${f.name}`));
   const skipped = secrets.filter((f) => f.status === 'A').map((f) => f.name);
   const tracked = secrets.filter((f) => f.status !== 'A').map((f) => f.name);
+  const ignored = [];
+  let ignoreWarning = false;
   if (secrets.length) {
     await runGit(['reset', '-q', '--', ...secrets.map((f) => f.name)], { cwd, ...opts });
     if (skipped.length) {
       const top = (await runGit(['rev-parse', '--show-toplevel'], { cwd, ...opts })).trim();
       const file = join(top, '.gitignore');
-      const have = existsSync(file) ? readFileSync(file, 'utf8') : '';
-      const lines = skipped.map((n) => `/${n}`).filter((l) => !have.split(/\r?\n/).includes(l));
-      if (lines.length) appendFileSync(file, `${have && !have.endsWith('\n') ? '\n' : ''}${lines.join('\n')}\n`);
-      await runGit(['add', '--', '.gitignore'], { cwd: top, ...opts });
+      try {
+        let lines = [];
+        const changed = updateNoFollow(file, top, (have) => {
+          lines = skipped.map((n) => `/${n}`).filter((l) => !have.split(/\r?\n/).includes(l));
+          return lines.length ? `${have}${have && !have.endsWith('\n') ? '\n' : ''}${lines.join('\n')}\n` : have;
+        });
+        ignored.push(...lines.map((l) => l.slice(1)));
+        if (changed) await runGit(['add', '--', '.gitignore'], { cwd: top, ...opts });
+      } catch (e) {
+        if (e instanceof AgentFileError && ['link', 'notfile', 'outside', 'changed'].includes(e.code)) {
+          ignoreWarning = true;
+          await runGit(['reset', '-q', '--', '.gitignore'], { cwd: top, ...opts });
+        } else throw e;
+      }
     }
   }
   const left = (await runGit(['diff', '--cached', '--name-only'], { cwd, ...opts })).trim();
-  if (!left) return { committed: false, skipped, tracked };
+  if (!left) return { committed: false, skipped: ignored, tracked, ignoreWarning };
   await runGit(['commit', '-q', '-m', message], { cwd, ...opts });
-  return { committed: true, skipped, tracked };
+  return { committed: true, skipped: ignored, tracked, ignoreWarning };
 }

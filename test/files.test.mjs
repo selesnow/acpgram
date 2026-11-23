@@ -178,7 +178,10 @@ test('resolveSendable: разрешены каталог исходящих и �
   writeFileSync(join(other, 's.txt'), 'secret');
   const ctx = { cwd: project, outbox };
 
-  assert.equal(resolveSendable(join(project, 'a.txt'), ctx).ok, true);
+  const ok = resolveSendable(join(project, 'a.txt'), ctx);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.buffer.toString(), 'data');
+  assert.equal(ok.name, 'a.txt');
   assert.equal(resolveSendable('a.txt', ctx).ok, true, 'относительный путь — от папки проекта');
   assert.equal(resolveSendable(join(outbox, 'o.txt'), ctx).ok, true);
   // секрет, скопированный в каталог исходящих, по имени не отправляется (раньше там не проверялось ничего)

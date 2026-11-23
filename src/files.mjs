@@ -4,6 +4,7 @@
 // Файлы агента — по метке [[send:путь]] в ответе: отправляются только из каталога исходящих и из папки проекта.
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { readStable } from './agentFiles.mjs';
 import { DATA_DIR, ENV_PATH, positiveEnv } from './app.mjs';
 import { isWithin } from './projects.mjs';
 import { PHOTO_MAX, mediaBlock } from './telegram.mjs';
@@ -268,7 +269,7 @@ export const MAX_EMBED_BYTES = 45 * 1024 * 1024;
  * доступный файл — блоком rich-сообщения (фото или документ), недоступный — строкой failText(имя, причина).
  * Файлы сверх maxBytes (суммарно) — в extra: уйдут отдельными сообщениями после ответа.
  * @param {{cwd: string, outbox: string, failText: (name: string, reason: string) => string, onSkip?: (path: string, reason: string) => void, maxBytes?: number}} o
- * @returns {{text: string, media: Object<string, {path: string, name: string, size: number, photo: boolean}>, extra: object[]}}
+ * @returns {{text: string, media: Object<string, {path: string, name: string, size: number, buffer: Buffer, photo: boolean}>, extra: object[]}}
  */
 export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () => {}, maxBytes = MAX_EMBED_BYTES }) {
   const media = {};
@@ -287,7 +288,7 @@ export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () =>
       onSkip(p, r.reason);
       return failText(basename(p), r.reason);
     }
-    const file = { path: r.path, name: basename(r.path), size: r.size, photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)) && r.size <= PHOTO_MAX };
+    const file = { path: r.path, name: r.name, size: r.size, buffer: r.buffer, photo: ['image/jpeg', 'image/png'].includes(imageMimeOf(r.path)) && r.size <= PHOTO_MAX };
     if (r.size > budget) {
       extra.push(file);
       return null;
@@ -351,22 +352,17 @@ export function isSecret(path) {
 /**
  * Проверка файла к отправке пользователю. Разрешено: каталог исходящих пользователя (outbox) и папка проекта (cwd),
  * без секретов, только обычные файлы до MAX_FILE_BYTES. Ссылки и «..» разрешаются до проверки.
- * @returns {{ok: true, path: string, size: number} | {ok: false, reason: 'missing'|'notfile'|'denied'|'empty'|'big'}}
+ * @returns {{ok: true, path: string, name: string, size: number, buffer: Buffer} | {ok: false, reason: 'missing'|'notfile'|'denied'|'changed'|'empty'|'big'}}
  */
 export function resolveSendable(p, { cwd, outbox, maxBytes = MAX_FILE_BYTES }) {
   const abs = isAbsolute(p) ? p : resolve(cwd, p);
-  const file = real(abs);
-  if (!file) return { ok: false, reason: 'missing' };
-  const st = statSync(file);
-  if (!st.isFile()) return { ok: false, reason: 'notfile' };
   const outboxReal = outbox && real(outbox);
   const cwdReal = cwd && real(cwd);
-  const inOutbox = Boolean(outboxReal && isWithin(file, outboxReal));
-  // в каталоге исходящих проверяется только имя внутри него (сам каталог лежит в данных бота): скопированный туда .env или ключ
-  // не отправится; из проекта — ещё и каталог данных бота и его .env
-  const allowed = inOutbox ? !isSecretName(join(sep, relative(outboxReal, file))) : Boolean(cwdReal && isWithin(file, cwdReal) && !isSecret(file));
-  if (!allowed) return { ok: false, reason: 'denied' };
-  if (st.size === 0) return { ok: false, reason: 'empty' };
-  if (st.size > maxBytes) return { ok: false, reason: 'big' };
-  return { ok: true, path: file, size: st.size };
+  const allowed = (file) => {
+    const inOutbox = Boolean(outboxReal && isWithin(file, outboxReal));
+    return inOutbox ? !isSecretName(join(sep, relative(outboxReal, file))) : Boolean(cwdReal && isWithin(file, cwdReal) && !isSecret(file));
+  };
+  const r = readStable(abs, { allowed, maxBytes });
+  if (!r.ok) return r;
+  return { ...r, name: basename(r.path) };
 }

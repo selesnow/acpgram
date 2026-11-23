@@ -2,17 +2,16 @@
 // ожидающие на сервере коммиты) и ветки (список, переключение, новая ветка). Смотреть может любой пользователь —
 // без агента и без запросов к модели; переключать и создавать ветки — тот, кому разрешено менять файлы проекта.
 // Вызывается из gitUi.mjs, который передаёт сюда общие помощники (h): проект, репозиторий, запуск git.
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { log, say } from './ctx.mjs';
-import { isSecretName, outboxDir, safeFileName } from './files.mjs';
+import { isSecretName, safeFileName } from './files.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { GitError, fetchRepo } from './git.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { branchName, changedFiles, commitList, createBranch, discardFiles, fileDiff, listBranches, switchBranch } from './gitInspect.mjs';
 import { errText, t } from './i18n.mjs';
 import { endAgent, userPath } from './state.mjs';
-import { escHtml, sendFile } from './telegram.mjs';
+import { escHtml, sendBuffer } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
 
 /** Действия кнопок, которые обрабатывает этот модуль (gt:<действие>:<аргумент>). */
@@ -84,16 +83,8 @@ async function showDiff(st, project, file, index, opts, lang, edit) {
   const diff = await fileDiff(project, file, opts);
   if (!diff) return edit({ text: `${title}\n\n${th('git.diff.empty', lang)}`, markup: back });
   if (diff.length <= DIFF_INLINE_MAX) return edit({ text: `${title}\n<pre><code class="language-diff">${escHtml(diff)}</code></pre>`, markup: back });
-  // большой diff — файлом через каталог исходящих пользователя; после отправки файл не нужен
-  const dir = outboxDir(st.userId);
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${safeFileName(basename(file.path))}.diff`);
-  writeFileSync(path, diff.length > DIFF_FILE_MAX ? `${diff.slice(0, DIFF_FILE_MAX)}\n… (truncated)\n` : `${diff}\n`);
-  try {
-    await sendFile(st.to, path);
-  } finally {
-    rmSync(path, { force: true });
-  }
+  const content = diff.length > DIFF_FILE_MAX ? `${diff.slice(0, DIFF_FILE_MAX)}\n… (truncated)\n` : `${diff}\n`;
+  await sendBuffer(st.to, Buffer.from(content), `${safeFileName(basename(file.path))}.diff`);
   return edit({ text: th('git.diff.sent', lang, { path: hCode(file.path) }), markup: back });
 }
 
