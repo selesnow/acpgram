@@ -13,11 +13,9 @@ import { cbCtx } from './uiActions.mjs';
 const INVITE_TTL_MS = 24 * 3600_000;
 const REQUEST_COOLDOWN_MS = 3600_000; // повторный запрос доступа от одного человека — не чаще раза в час
 const NOTICE_COOLDOWN_MS = 10 * 60_000; // напоминание «запрос уже отправлен» — не чаще раза в 10 минут
-const STRANGER_REPLY_COOLDOWN_MS = 5 * 60_000; // незнакомцу — не больше одного ответа за любое число попыток
-const ADMIN_NOTICE_COOLDOWN_MS = 3600_000; // все запросы доступа за час складываются в одно уведомление администратору
+const STRANGER_REPLY_COOLDOWN_MS = 5 * 60_000; // незнакомцу — не больше одного ответа за любое число попыток, кроме входа по валидной ссылке
 const lastNotice = new Map();
 const lastStrangerReply = new Map();
-let lastAdminNoticeAt = 0;
 
 /** Чистит кэши времени ответов и уведомлений, чтобы они не росли вместе с числом обращений. */
 export function sweepUnknownUsers(maxAgeMs = 24 * 3600_000) {
@@ -51,13 +49,17 @@ const grantedText = (level, lang, byAdmin) => t(byAdmin ? 'access.grantedByAdmin
 /** Сообщение от человека без доступа: подключение по приглашению или запрос доступа администратору. */
 export async function handleUnknownUser(from, chatId, text) {
   const now = Date.now();
-  if (now - (lastStrangerReply.get(from.id) ?? 0) < STRANGER_REPLY_COOLDOWN_MS) return;
-  lastStrangerReply.set(from.id, now);
+  const cooling = now - (lastStrangerReply.get(from.id) ?? 0) < STRANGER_REPLY_COOLDOWN_MS;
   const lang = langOf(from.id);
   const m = /^\/start(?:@\w+)?\s+(\S+)$/.exec(text || '');
   if (m) {
     const level = db.consumeInvite(m[1], from.id);
-    if (!level) return say(chatId, t('access.inviteBad', lang));
+    if (!level) {
+      if (cooling) return;
+      lastStrangerReply.set(from.id, now);
+      return say(chatId, t('access.inviteBad', lang));
+    }
+    lastStrangerReply.set(from.id, now);
     if (!db.upsertUser({ user_id: from.id, username: from.username, first_name: from.first_name, level, added_by: ADMIN_ID })) {
       log('доступ по приглашению не сохранён (ошибка базы)', from.id);
       return say(chatId, t('access.saveFail', lang));
@@ -67,6 +69,8 @@ export async function handleUnknownUser(from, chatId, text) {
     await say(chatId, grantedText(level, lang, false));
     return say(ADMIN_ID, t('adm.joinedByInvite', adminLang(), { who: who(from), level: levelName(level, adminLang()) }));
   }
+  if (cooling) return;
+  lastStrangerReply.set(from.id, now);
 
   const req = db.getRequest(from.id);
   if (req?.status === 'rejected') return; // отклонённого молча игнорируем
@@ -82,8 +86,6 @@ export async function handleUnknownUser(from, chatId, text) {
   const prev = db.getUser(from.id);
   const al = adminLang();
   await say(chatId, t('access.requestSent', lang));
-  if (Date.now() - lastAdminNoticeAt < ADMIN_NOTICE_COOLDOWN_MS) return;
-  lastAdminNoticeAt = Date.now();
   return say(ADMIN_ID, t('adm.reqNew', al, { who: who(from), id: from.id, note: prev?.status === 'revoked' ? t('adm.reqRevokedBefore', al) : '', msg: (text || '').slice(0, 200) }), {
     reply_markup: {
       inline_keyboard: [

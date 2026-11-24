@@ -92,6 +92,22 @@ test('/invite: администратор выбирает уровень, од�
   assert.equal(ctx.db.getUser(second), null);
 });
 
+test('валидное приглашение работает сразу после сообщения незнакомца', async () => {
+  const invited = userId(7);
+  await admin.handleUnknownUser(from(invited), invited, 'здравствуйте');
+  take();
+
+  const code = 'invite-after-message';
+  ctx.db.createInvite(code, 'normal', ADMIN, new Date(Date.now() + 60_000).toISOString());
+  await admin.handleUnknownUser(from(invited), invited, `/start ${code}`);
+  const calls = take();
+
+  assert.equal(ctx.db.getUser(invited)?.level, 'normal');
+  assert.equal(ctx.db.getUser(invited)?.status, 'active');
+  assert.ok(toUser(calls, invited).includes(ctx.levelName('normal', lang)));
+  assert.ok(toUser(calls, ADMIN).includes(`@user${invited}`));
+});
+
 test('приглашение с истёкшим сроком не даёт доступа', async () => {
   const expired = userId(3);
   ctx.db.createInvite('expired-code', 'full', ADMIN, new Date(Date.now() - 60_000).toISOString());
@@ -121,6 +137,20 @@ test('запрос доступа: сотрудник видит подтвер�
   admin.sweepUnknownUsers(0);
   await admin.handleUnknownUser(from(requester), requester, 'ещё раз');
   assert.equal(toUser(take(), requester), t('access.pending', lang));
+});
+
+test('разные новые запросы доступа приходят администратору в течение часа', async () => {
+  const first = userId(8);
+  const second = userId(9);
+  await admin.handleUnknownUser(from(first), first, 'первый запрос');
+  take();
+
+  await admin.handleUnknownUser(from(second), second, 'второй запрос');
+  const calls = take();
+  const notice = messages(calls).find((c) => c.body.chat_id === ADMIN);
+
+  assert.ok(notice?.body.text.includes('второй запрос'));
+  assert.ok(buttons(calls).some((b) => b.callback_data === `adm:g:${second}:read`));
 });
 
 test('решение администратора: выдача прав по запросу и отклонение с тихим игнорированием дальше', async () => {
