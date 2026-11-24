@@ -59,7 +59,8 @@ jobs:
           fi
 
       - name: Pin npm version
-        run: npm install -g npm@11.10.0
+        run: | # zizmor: ignore[adhoc-packages] версия npm зафиксирована намеренно для воспроизводимой публикации
+          npm install -g npm@11.10.0
 
       - name: Publish to npm
         run: npm publish --ignore-scripts --provenance --access public
