@@ -61,6 +61,15 @@ test('checkCommand: рабочая и несуществующая команд�
   const bad = await checkCommand('no-such-gemini-command-xyz');
   assert.equal(bad.ok, false);
   assert.ok(bad.error);
+
+  const failed = await checkCommand(process.execPath, ['-e', 'process.exit(7)']);
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.errorI18n, { key: 'err.checkExit', vars: { code: 7 } });
+
+  const timeout = await checkCommand(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], 200);
+  assert.equal(timeout.ok, false);
+  assert.equal(timeout.timeout, true);
+  assert.deepEqual(timeout.errorI18n, { key: 'err.checkTimeout', vars: { sec: 0.2 } });
 });
 
 test('AcpAgent: запрос к закрытому агенту сразу отклоняется, а не висит (закрытие сессии во время запуска)', async () => {

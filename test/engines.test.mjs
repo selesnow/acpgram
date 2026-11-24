@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_ENGINE, ENGINES, PROVIDER_KEYS, agentEnv, availableEngines, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin, opencodeConfig, opencodeGoogleKey, parseCatalog, parseOpencodeModels, vendorName,
+  DEFAULT_ENGINE, ENGINES, PROVIDER_KEYS, agentEnv, checkEngines, createAgent, engineCommand, engineMode, getEngine, isAvailable, isRequired, modeAllowed, permissionOptions, resolveEngine, setAvailability, isAuthError, needsLogin, setNeedsLogin, opencodeConfig, opencodeGoogleKey, parseCatalog, parseOpencodeModels, vendorName,
 } from '../src/engines.mjs';
 import { parseTool } from '../src/tools.mjs';
 
@@ -63,7 +63,6 @@ test('доступность: недоступный движок не выби�
     assert.equal(isAvailable('claude'), false);
     assert.equal(isAvailable('agy'), true);
     assert.equal(isAvailable('нет-такого'), false);
-    assert.deepEqual(availableEngines().map((e) => e.id), ['gemini', 'agy']);
     assert.equal(resolveEngine('claude'), ENGINES.gemini);
     assert.equal(resolveEngine('agy'), ENGINES.agy);
     assert.equal(resolveEngine(null), ENGINES.gemini);
@@ -194,8 +193,15 @@ test('checkEngines: слишком старая версия движка — н
   assert.equal(a.ok, false);
   assert.equal(a.tooOld, true);
   assert.match(a.error, /нужна 99\.0\.0\+ — обновите: old update/);
+  assert.deepEqual(a.errorI18n, { key: 'err.engineOld.update', vars: { version: a.version, min: '99.0.0', update: 'old update' } });
   assert.equal(b.ok, true);
   assert.equal(ENGINES.agy.minVersion, '1.5.0');
+  assert.deepEqual(['agy', 'codex', 'opencode'].map((id) => ENGINES[id].installKey), ['install.agy', 'install.codex', 'install.opencode']);
+
+  const noUpdate = { ...old, id: 'old-no-update', update: '' };
+  const [c] = await checkEngines([noUpdate]);
+  assert.equal(c.tooOld, true);
+  assert.deepEqual(c.errorI18n, { key: 'err.engineOld.noUpdate', vars: { version: c.version, min: '99.0.0' } });
 });
 
 test('isAuthError: ошибки входа и ключей API отличаются от прочих', () => {

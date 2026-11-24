@@ -125,6 +125,9 @@ test('запросы входа по коду: выдача кода, ожида
   let polls = 0;
   await assert.rejects(D.waitDeviceLogin(cfg, login, { cancelled: () => ++polls > 2 }), (e) => e.code === 'cancelled');
   await assert.rejects(D.startDeviceLogin(cfg, { fetchImpl: async () => json({ error: 'device_flow_disabled' }) }), (e) => e.code === 'failed' && /device_flow_disabled/.test(e.message));
+  await assert.rejects(D.startDeviceLogin(cfg, { fetchImpl: async () => json({}) }), (e) => e.code === 'failed' && e.i18n?.key === 'err.gitDeviceNoCode');
+  service.polls = [{}];
+  await assert.rejects(D.waitDeviceLogin(cfg, login), (e) => e.code === 'failed' && e.i18n?.key === 'err.gitDeviceUnknown');
 
   // обновление: новая пара токенов; отказ сервиса — вход больше не действует
   service.gitlabGrant = { access_token: 'glo_second', refresh_token: 'glr_second', expires_in: 7200 };

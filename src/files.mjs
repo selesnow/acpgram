@@ -6,6 +6,7 @@ import { realpathSync } from 'node:fs';
 import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { readStable } from './agentFiles.mjs';
+import { SEND_DRAFT, SEND_MARK, extractAgentMarks, markPlaceholder, stripAgentMarks } from './agentMarks.mjs';
 import { DATA_DIR, ENV_PATH, positiveEnv } from './app.mjs';
 import { isWithin } from './projects.mjs';
 import { PHOTO_MAX, mediaBlock } from './telegram.mjs';
@@ -15,19 +16,19 @@ export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 /** Картинки крупнее этого размера уходят агенту только путём к файлу, а не блоком image (лимиты моделей). */
 export const IMAGE_BLOCK_MAX = 5 * 1024 * 1024;
 /** Сколько дней хранятся принятые и исходящие файлы. */
-export const KEEP_DAYS = positiveEnv('FILES_KEEP_DAYS', 7);
+const KEEP_DAYS = positiveEnv('FILES_KEEP_DAYS', 7);
 
 /** Базовый каталог файлов: FILES_DIR из .env, иначе каталог данных бота. */
-export const FILES_BASE = process.env.FILES_DIR?.trim() || DATA_DIR;
-export const uploadsRoot = (base = FILES_BASE) => join(base, 'uploads');
-export const outboxRoot = (base = FILES_BASE) => join(base, 'outbox');
+const FILES_BASE = process.env.FILES_DIR?.trim() || DATA_DIR;
+const uploadsRoot = (base = FILES_BASE) => join(base, 'uploads');
+const outboxRoot = (base = FILES_BASE) => join(base, 'outbox');
 /** Каталог принятых файлов пользователя и каталог файлов для отправки ему. */
 export const uploadsDir = (userId, base = FILES_BASE) => join(uploadsRoot(base), String(userId));
 export const outboxDir = (userId, base = FILES_BASE) => join(outboxRoot(base), String(userId));
 
 const IMAGE_EXT = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
 /** Типы изображений, которые принимают модели. */
-export const IMAGE_MIMES = new Set(Object.values(IMAGE_EXT));
+const IMAGE_MIMES = new Set(Object.values(IMAGE_EXT));
 
 export const isImageMime = (mime) => IMAGE_MIMES.has(String(mime ?? '').toLowerCase());
 /** MIME изображения по расширению файла или null. */
@@ -116,7 +117,7 @@ const UNPACKED_LIST = 50; // сколько файлов распакованн�
 const kb = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 /** Подсказка агенту, как отправлять файлы пользователю. Служебный текст для агента — на английском. */
-export function outboxNote(outbox) {
+function outboxNote(outbox) {
   return (
     `[AcpGram] You can send a file to the user in Telegram: save it (preferably in "${outbox}") and put [[send:<absolute path>]] ` +
     `on its own line in your reply where the file should appear (the image or file is shown right there, inside the message). ` +
@@ -174,8 +175,6 @@ export function buildPromptBlocks({ text, files = [], caps, outbox, quote = null
   if (note.length) blocks.push({ type: 'text', text: note.join('\n') });
   return blocks;
 }
-
-const MARK = /\[\[send:([^\]\r\n]+)\]\]/g;
 
 /** Строчный код: отрезок из n обратных кавычек до следующего отрезка ровно из n кавычек (как в CommonMark). */
 function splitInlineCode(text, out) {
@@ -236,7 +235,7 @@ export function splitCode(text) {
 }
 
 /** Заглушка на месте метки: туда потом встаёт сам файл (блок rich-сообщения). Символы \u0000 в ответе агента не встречаются. */
-export const filePlaceholder = (i) => `\u0000${i}\u0000`;
+export const filePlaceholder = (i) => markPlaceholder('\u0000', i);
 // eslint-disable-next-line no-control-regex -- \u0000 — служебная метка места файла в тексте ответа
 export const FILE_PLACEHOLDER = /\u0000(\d+)\u0000/g;
 
@@ -245,31 +244,27 @@ export const FILE_PLACEHOLDER = /\u0000(\d+)\u0000/g;
  * placeholders: true — на месте первой метки каждого файла остаётся filePlaceholder(номер пути), чтобы файл встал туда же.
  */
 export function extractSendMarks(text, { placeholders = false } = {}) {
-  const src = String(text ?? '');
-  if (!src.includes('[[send:')) return { text: src, paths: [] }; // ответ без меток не трогаем
   const paths = [];
-  const stripped = splitCode(src)
-    .map(({ code, s }) => {
-      if (code || !s.includes('[[send:')) return s;
-      return s
-        .replace(MARK, (_, p) => {
-          const path = p.trim().replace(/^["']|["']$/g, '');
-          if (!path || paths.includes(path)) return '';
-          paths.push(path);
-          return placeholders ? filePlaceholder(paths.length - 1) : '';
-        })
-        .replace(/[ \t]+\n/g, '\n')
-        .replace(/\n{3,}/g, '\n\n');
-    })
-    .join('')
-    .trim();
-  return { text: stripped, paths };
+  return extractAgentMarks(text, {
+    present: (s) => s.includes('[[send:'),
+    mark: SEND_MARK,
+    state: { paths },
+    onMatch: ({ paths: found }, _, p) => {
+      const path = p.trim().replace(/^["']|["']$/g, '');
+      if (!path || found.includes(path)) return '';
+      found.push(path);
+      return placeholders ? markPlaceholder('\u0000', found.length - 1) : '';
+    },
+    tidy: (s) => s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n'),
+    tidyOnlyOnMatch: true,
+    finish: (s) => s.trim(),
+  });
 }
 
 /** Сколько файлов агента отправляем пользователю за один ответ. */
-export const MAX_FILES_PER_TURN = 10;
+const MAX_FILES_PER_TURN = 10;
 /** Файлы внутри ответа загружаются одним запросом вместе с ним; лимит загрузки Bot API — 50 МБ. */
-export const MAX_EMBED_BYTES = 45 * 1024 * 1024;
+const MAX_EMBED_BYTES = 45 * 1024 * 1024;
 
 /**
  * Ставит файлы агента в текст ответа на место меток (заглушки FILE_PLACEHOLDER из extractSendMarks):
@@ -317,14 +312,7 @@ export function attachFiles(text, paths, { cwd, outbox, failText, onSkip = () =>
 
 /** Для черновика: убирает и целые метки, и ещё не дописанные в потоке («[[send:C:\x», «[[se»). Код не трогает. */
 export function stripSendMarks(text) {
-  const parts = splitCode(text);
-  return parts
-    .map(({ code, s }, i) => {
-      if (code) return s;
-      const r = s.replace(/\[\[send:[^\]\r\n]*(?:\]\]?)?/g, '');
-      return i === parts.length - 1 ? r.replace(/\[{1,2}(?:s(?:e(?:n(?:d)?)?)?)?$/, '') : r;
-    })
-    .join('');
+  return stripAgentMarks(text, SEND_DRAFT);
 }
 
 const real = (p) => {

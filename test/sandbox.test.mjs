@@ -91,10 +91,11 @@ test('exposedSecret и agentSandbox: папку, внутри которой с�
   assert.deepEqual(rw, [ws1, join(data, 'homes', '1001'), join(data, 'outbox', '1001')]);
   assert.ok(!sb.args.includes(ws2) && !sb.args.includes(root) && !sb.args.includes(data) && !sb.args.includes(envFile));
 
-  assert.throws(() => boxFor(1001, { root, cwd: ws1 }), (e) => e instanceof S.SandboxError, 'весь корень проектов сотруднику с личной папкой');
-  assert.throws(() => boxFor(1001, { root: base, cwd: ws1, protect: [] }), /нельзя открыть песочнице/, 'папка с .env бота');
-  assert.throws(() => boxFor(1001, { extraRo: [base] }), /нельзя открыть песочнице/, 'SANDBOX_RO_PATHS с секретами');
-  assert.throws(() => boxFor(1001, { command: join(base, 'no-such-engine') }), /команда не найдена/);
+  assert.throws(() => boxFor(1001, { root, cwd: ws1 }), (e) => e instanceof S.SandboxError && e.i18n?.key === 'err.sandboxSecret' && e.i18n.vars.secret === root, 'весь корень проектов сотруднику с личной папкой');
+  assert.throws(() => boxFor(1001, { root: data, cwd: ws1 }), (e) => e instanceof S.SandboxError && e.i18n?.key === 'err.sandboxDataDir' && e.i18n.vars.path === data);
+  assert.throws(() => boxFor(1001, { root: base, cwd: ws1, protect: [] }), (e) => e.i18n?.key === 'err.sandboxSecret', 'папка с .env бота');
+  assert.throws(() => boxFor(1001, { extraRo: [base] }), (e) => e.i18n?.key === 'err.sandboxSecret', 'SANDBOX_RO_PATHS с секретами');
+  assert.throws(() => boxFor(1001, { command: join(base, 'no-such-engine') }), (e) => e instanceof S.SandboxError && e.i18n?.key === 'err.sandboxCommand');
   // без корня (личная установка) на запись — только папка проекта
   const solo = boxFor(1001, { root: null, cwd: join(ws1, 'site'), protect: [] });
   assert.ok(solo.args.includes(join(ws1, 'site')) && !solo.args.includes(ws1));

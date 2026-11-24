@@ -17,7 +17,7 @@ export const GIT_AGENT_AUTH = process.env.GIT_AGENT_AUTH?.trim() === '1';
 const HOSTS_KEY = 'git:hosts';
 
 /** Свои серверы, добавленные администратором: [{kind, url, name}]. */
-export function customHosts() {
+function customHosts() {
   try {
     const list = JSON.parse(db.getSetting(HOSTS_KEY) || '[]');
     return Array.isArray(list) ? list.filter((x) => x && typeof x.url === 'string') : [];

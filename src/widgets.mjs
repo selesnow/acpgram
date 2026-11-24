@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 
 /** Лимиты Telegram на HTML виджета. */
-export const WIDGET_MAX_BYTES = 32768;
+const WIDGET_MAX_BYTES = 32768;
 export const WIDGET_MAX_ZLIB = 4096;
 /** Данные запроса виджета — до 64 байт. */
 const QUERY_MAX = 64;

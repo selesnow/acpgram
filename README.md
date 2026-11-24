@@ -305,6 +305,7 @@ What the sandbox does not do:
 | `AGENT_ENV_HIDE`, `AGENT_ENV_PASS` | no | extra environment variables to hide from the agent or, respectively, to pass through (comma-separated lists) |
 | `SANDBOX_RO_PATHS` | no | extra folders the sandbox can read (separated by `:`), e.g. where an engine is installed if it does not start in the sandbox |
 | `BWRAP_COMMAND` | no | path to `bwrap` if it is not in `PATH` |
+| `NSSM_PATH` | no | full path to `nssm.exe` (Windows only): used to install and restart the service when nssm is not in `PATH`; otherwise the bot looks for the private `bin\nssm.exe` and `PATH` |
 | `GITLAB_URL`, `GITHUB_URL` | no | address of your own GitLab and your own GitHub Enterprise (`https://git.example.com`): they appear in `/git` next to GitHub and GitLab.com. `GITLAB_NAME`, `GITHUB_NAME` are the names on the buttons (the host name by default). Optional: the administrator can also add own servers in the bot itself (`/git` → "Own servers") |
 | `GITHUB_CLIENT_ID`, `GITLAB_CLIENT_ID` | no | identifiers of your own applications for signing in with a link and a code: on GitHub an OAuth App with Device Flow enabled, on GitLab.com an application with Device authorization grant enabled (not confidential); `0` turns that sign-in off for the service. By default the AcpGram applications are used |
 | `GIT_AGENT_AUTH` | no | `1` — the Git sign-in is also given to agents: they pull and push by themselves, but teammates' tokens are visible to them. By default the token stays with the bot |
@@ -314,6 +315,7 @@ What the sandbox does not do:
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
 | `ACPGRAM_LANG` | no | language of the `acpgram` terminal commands: `ru`, `uk` or `en`. Usually not needed: the language comes from the system (for Docker and CI, where the system has none) |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
+| `GOOGLE_API_KEY` | no | alternative Google key for the Google provider models in OpenCode (instead of `GEMINI_API_KEY`); the bot passes it to OpenCode as `GOOGLE_GENERATIVE_AI_API_KEY` |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
 | `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY` | no | provider keys for OpenCode: each adds a group of models to `/model` (OpenRouter gives hundreds of models from different providers with one key). Other OpenCode providers work too with their own variables (`XAI_API_KEY`, `FIREWORKS_API_KEY`, etc.) |
 | `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND`, `OPENCODE_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |

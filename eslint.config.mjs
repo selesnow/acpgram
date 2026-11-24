@@ -13,5 +13,9 @@ export default [
       globals: { ...globals.node },
     },
     linterOptions: { reportUnusedDisableDirectives: 'error' },
+    rules: {
+      'no-unused-vars': ['error', { args: 'all', argsIgnorePattern: '^_' }],
+      complexity: ['warn', { max: 60 }],
+    },
   },
 ];

@@ -50,7 +50,7 @@ export function configEnv(entries, env = {}) {
 }
 
 /** Настройки безопасного запуска: без хуков, без наблюдателя файлов, без помощников входа и внешних транспортов. */
-export const SAFE_CONFIG = [
+const SAFE_CONFIG = [
   ['core.hooksPath', devNull],
   ['core.fsmonitor', 'false'],
   ['credential.helper', ''],
@@ -78,11 +78,12 @@ export function gitEnv({ identity = null, auth = [], base = process.env } = {}) 
 
 /** Команда git завершилась с ошибкой: code — код выхода, stderr — её вывод (без секретов). */
 export class GitError extends Error {
-  constructor(message, { code = null, stderr = '', timeout = false } = {}) {
+  constructor(message, { code = null, stderr = '', timeout = false, i18n = null } = {}) {
     super(message);
     this.code = code;
     this.stderr = stderr;
     this.timeout = timeout;
+    this.i18n = i18n;
   }
 }
 
@@ -136,12 +137,15 @@ export function runGit(args, { cwd, env = gitEnv(), wrap = null, timeoutMs = 120
     });
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (timedOut) return reject(new GitError(`git ${args[0]}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, { timeout: true }));
+      if (timedOut) {
+        const sec = Math.round(timeoutMs / 1000);
+        return reject(new GitError(`git ${args[0]}: нет ответа за ${sec} с`, { timeout: true, i18n: { key: 'err.gitTimeout', vars: { cmd: args[0] ?? '', sec } } }));
+      }
       if (!okCodes.includes(code)) {
         const stderr = clean(err.trim());
         // подсказки git («hint: …») пользователю не нужны — в сообщение идут последние содержательные строки
         const lines = stderr.split(/\r?\n/).filter((l) => l.trim() && !/^hint:/i.test(l));
-        return reject(new GitError(lines.slice(-3).join(' | ') || `git ${args[0]}: код ${code}`, { code, stderr }));
+        return reject(new GitError(lines.slice(-3).join(' | ') || `git ${args[0]}: код ${code}`, { code, stderr, i18n: { key: 'err.gitExit', vars: { cmd: args[0] ?? '', code } } }));
       }
       resolve(clean(out));
     });

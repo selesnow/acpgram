@@ -71,6 +71,9 @@ test('errText: ошибка нижнего слоя показывается н�
   assert.equal(errText(e, 'uk'), 'Gemini CLI завершився (код 1)');
   assert.equal(errText(e, 'ru'), e.message);
   assert.equal(errText(new Error('ACP -32000: boom'), 'en'), 'ACP -32000: boom');
+  const git = Object.assign(new Error('фатально'), { i18n: { key: 'err.gitExit', vars: { cmd: 'status', code: 128 } } });
+  assert.equal(errText(git, 'en'), 'git status: exit code 128');
+  assert.equal(errText(git, 'ru'), 'git status: код 128');
   assert.equal(errText(Object.assign(new Error('x'), { i18n: { key: 'no.such.key' } }), 'en'), 'x', 'неизвестный ключ не роняет показ ошибки');
   const withCause = i18nError('m', 'err.tgNoFilePath', {}, {}, { cause: new Error('c') });
   assert.equal(withCause.cause.message, 'c');

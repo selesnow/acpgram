@@ -2,19 +2,14 @@
 // Кнопка не должна ссылаться на номер в списке: список перерисовывается, и старая кнопка указала бы на другой элемент —
 // для «Отменить изменения» это значило бы потерю не того файла. Поэтому каждому элементу при показе выдаётся ключ,
 // который больше никогда не повторяется: старая кнопка ведёт либо к тому же элементу, либо никуда («кнопка устарела»).
+import { createKeyRegistry } from './keyRegistry.mjs';
 
-let seq = 0;
-/** Сколько ключей помнит диалог; сверх этого старые забываются, их кнопки становятся устаревшими. */
-const KEEP = 600;
+const keys = createKeyRegistry({ scope: 'state', field: 'gitKeys', limit: 600, eviction: 'clear', full: true, keyOf: (n) => n.toString(36) });
 
 /** Запоминает значение за кнопкой и возвращает её ключ (короткая строка для callback_data). */
 export function remember(st, value) {
-  st.gitKeys ??= new Map();
-  if (st.gitKeys.size >= KEEP) st.gitKeys.clear();
-  const key = (++seq).toString(36);
-  st.gitKeys.set(key, value);
-  return key;
+  return keys.add(value, st);
 }
 
 /** Значение за кнопкой по её ключу или null, если кнопка устарела. */
-export const recall = (st, key) => st.gitKeys?.get(String(key)) ?? null;
+export const recall = (st, key) => keys.get(key, st) ?? null;

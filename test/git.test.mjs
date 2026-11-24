@@ -244,9 +244,10 @@ test('git: клонирование, коммит без секретов, от�
   writeFileSync(join(work, 'mine.txt'), '3');
   await G.commitAll(work, 'моё', { env });
   assert.equal(await G.pullRepo(work, { env }), 'diverged');
-  await assert.rejects(G.pushRepo(work, { env }), (e) => e instanceof G.GitError && /rejected|fetch first/.test(`${e.message} ${e.stderr}`));
+  await assert.rejects(G.pushRepo(work, { env }), (e) => e instanceof G.GitError && e.i18n?.key === 'err.gitExit' && /rejected|fetch first/.test(`${e.message} ${e.stderr}`));
   // строки из hide не попадают в текст ошибки
   await assert.rejects(G.runGit(['clone', 'https://sekret-tok@invalid.invalid/x.git'], { cwd: home, env, hide: ['sekret-tok'], timeoutMs: 30_000 }), (e) => !`${e.message}${e.stderr}`.includes('sekret-tok'));
+  await assert.rejects(G.runGit(['-C', home, 'rev-parse', '--verify', 'no-such-ref'], { cwd: home, env }), (e) => e instanceof G.GitError && e.i18n?.key === 'err.gitExit' && e.i18n.vars.cmd === '-C' && Number.isInteger(e.i18n.vars.code));
 });
 
 test('агент: автор коммитов — из аккаунта; вход передаётся агенту только в режиме GIT_AGENT_AUTH', () => {
@@ -528,7 +529,7 @@ test('git: изменения, diff по файлу, коммиты и ветк�
   assert.deepEqual([b.current, b.branches[0].name, b.branches[0].remote], ['моя-задача-1', 'моя-задача-1', false]);
   assert.deepEqual((await I.commitList(w, 'out', { env })).map((c) => c.subject).slice(0, 1), ['моя правка'], 'без ветки на сервере — коммиты самой ветки');
   assert.deepEqual(await I.commitList(w, 'in', { env }), []);
-  await assert.rejects(I.switchBranch(w, { name: '-evil', local: true }, { env }), (e) => e instanceof G.GitError);
+  await assert.rejects(I.switchBranch(w, { name: '-evil', local: true }, { env }), (e) => e instanceof G.GitError && e.i18n?.key === 'err.gitBadBranch');
 });
 
 test('/git: «Изменения» — список файлов, diff в сообщении и файлом, секреты не показываются; «Ветки» — переключение и новая ветка', needGit, async () => {

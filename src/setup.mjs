@@ -62,7 +62,7 @@ const LAYOUT = [
  * Ключи провайдеров для OpenCode (имена переменных — как в справочнике провайдеров OpenCode, models.dev).
  * Каждый ключ добавляет модели своего провайдера — отдельной группой в /model.
  */
-export const OPENCODE_KEYS = [
+const OPENCODE_KEYS = [
   ['GEMINI_API_KEY', 'Google Gemini'],
   ['ANTHROPIC_API_KEY', 'Anthropic Claude'],
   ['OPENAI_API_KEY', 'OpenAI'],
@@ -100,7 +100,7 @@ export function serializeEnv(values, { date = new Date().toISOString().slice(0, 
 }
 
 /** Где лежит копия прежнего .env: в data/ (не попадает в git и в образ Docker). */
-export const envBackupPath = (dataDir = DATA_DIR) => join(dataDir, '.env.bak');
+const envBackupPath = (dataDir = DATA_DIR) => join(dataDir, '.env.bak');
 
 /**
  * Пишет .env; прежний сохраняется в data/.env.bak. Оба файла — только для владельца (0600): mode в writeFileSync
@@ -206,7 +206,7 @@ async function waitForAdmin(token, timeoutMs = 180_000) {
 // ---------- движки ----------
 
 /** Полный путь к команде через PATH (where / command -v), или null. */
-export function resolveCommandPath(cmd) {
+function resolveCommandPath(cmd) {
   if (isAbsolute(cmd)) return existsSync(cmd) ? cmd : null;
   // Windows: поиск по PATH средствами Node — `where` печатает пути в OEM-кодировке (cp866), и в профиле с кириллицей они портятся.
   // Для npm-пакетов нужен .cmd, а не одноимённый скрипт без расширения.
@@ -254,6 +254,233 @@ const ok = (s) => console.log(`  ✅ ${s}`);
 const warn = (s) => console.log(`  ⚠️  ${s}`);
 const step = (n, s) => console.log(`\n[${n}] ${s}`);
 
+export async function migrateLegacySetup(p, env) {
+  // Прежняя установка через install.ps1 / install.sh хранит данные в другом каталоге — предлагаем перенести
+  const legacy = existsSync(ENV_PATH) ? undefined : findLegacyHome();
+  if (!legacy) return;
+  console.log(tc('setup.legacyFound', { dir: legacy }));
+  console.log(tc('setup.legacyNote'));
+  if (await p.yes(tc('setup.legacyAsk'))) {
+    Object.assign(env, readEnvFile(join(legacy, '.env')));
+    ok(tc('setup.legacyRead', { path: join(legacy, '.env') }));
+    try {
+      if (copyLegacyDb(legacy)) ok(tc('setup.legacyDb', { dir: DATA_DIR }));
+    } catch (e) {
+      warn(tc('setup.legacyDbFail', { msg: e.message }));
+    }
+  }
+}
+
+export async function setupToken(p, env) {
+  // 1. токен
+  step(1, tc('setup.s1'));
+  let me;
+  for (;;) {
+    const token = (await p.secret(env.TELEGRAM_BOT_TOKEN ? tc('setup.tokenKeep') : tc('setup.token'))) || env.TELEGRAM_BOT_TOKEN;
+    if (!token) continue;
+    try {
+      me = await api(token, 'getMe');
+      env.TELEGRAM_BOT_TOKEN = token;
+      ok(tc('setup.botOk', { username: me.username, name: me.first_name }));
+      break;
+    } catch (e) {
+      warn(tc('setup.tokenBad', { msg: e.message }));
+    }
+  }
+  return me;
+}
+
+export async function setupAdmin(p, env, me) {
+  // 2. администратор
+  step(2, tc('setup.s2'));
+  let adminId = env.ALLOWED_USER_ID;
+  if (adminId && (await p.yes(tc('setup.adminKeep', { id: adminId })))) ok(tc('setup.adminOk', { id: adminId }));
+  else {
+    adminId = null;
+    console.log(tc('setup.adminWait', { username: me.username }));
+    try {
+      const from = await waitForAdmin(env.TELEGRAM_BOT_TOKEN);
+      if (from && (await p.yes(tc('setup.adminIsYou', { who: from.username ? '@' + from.username : from.first_name, id: from.id })))) adminId = String(from.id);
+    } catch (e) {
+      warn(tc('setup.adminFetchFail', { msg: e.message, hint: /conflict/i.test(e.message) ? tc('setup.conflictHint') : '' }));
+    }
+    while (!/^\d+$/.test(adminId ?? '')) adminId = await p.ask(tc('setup.adminAskId'));
+    env.ALLOWED_USER_ID = adminId;
+    ok(tc('setup.adminOk', { id: adminId }));
+  }
+  return adminId;
+}
+
+export async function setupWorkspaces(p, env) {
+  // личные пространства сотрудников — только внутри корня проектов
+  if (env.PROJECTS_ROOT) {
+    console.log(tc('setup.wsNote'));
+    if (await p.yes(tc('setup.wsAsk'), env.USER_WORKSPACES === '1')) {
+      env.USER_WORKSPACES = '1';
+      ok(tc('setup.wsOn'));
+    } else delete env.USER_WORKSPACES;
+  } else delete env.USER_WORKSPACES;
+}
+
+export async function setupSandbox(p, env) {
+  // песочница агентов сотрудников — только на Linux
+  if (process.platform === 'linux') {
+    const { findCommand, bwrapCommand } = await import('./sandbox.mjs');
+    console.log(tc('setup.sbNote'));
+    if (!findCommand(bwrapCommand(env))) {
+      warn(tc('setup.sbMissing'));
+      delete env.AGENT_SANDBOX;
+    } else if (await p.yes(tc('setup.sbAsk'), env.AGENT_SANDBOX === 'bwrap')) {
+      env.AGENT_SANDBOX = 'bwrap';
+      ok(tc('setup.sbOn'));
+    } else delete env.AGENT_SANDBOX;
+  }
+  if (env.AGENT_SANDBOX === 'bwrap' && env.PROJECTS_ROOT) {
+    console.log(tc('setup.adminSbNote'));
+    if (await p.yes(tc('setup.adminSbAsk'), env.ADMIN_SANDBOX === '1')) {
+      env.ADMIN_SANDBOX = '1';
+      ok(tc('setup.adminSbOn'));
+    } else {
+      delete env.ADMIN_SANDBOX;
+      ok(tc('setup.adminSbOff'));
+    }
+  } else delete env.ADMIN_SANDBOX;
+}
+
+export async function setupRoot(p, env) {
+  // 3. корень проектов
+  step(3, tc('setup.s3'));
+  console.log(tc('setup.rootNote1'));
+  console.log(tc('setup.rootNote2'));
+  for (;;) {
+    const v = await p.ask(tc('setup.rootAsk'), env.PROJECTS_ROOT);
+    if (!v || v === '-') {
+      delete env.PROJECTS_ROOT;
+      ok(tc('setup.rootNone'));
+      break;
+    }
+    const { resolveRoot } = await import('./projects.mjs');
+    try {
+      env.PROJECTS_ROOT = resolveRoot(v);
+      ok(tc('setup.rootOk', { root: env.PROJECTS_ROOT }));
+      break;
+    } catch (e) {
+      warn(e.message);
+    }
+  }
+  await setupWorkspaces(p, env);
+  await setupSandbox(p, env);
+}
+
+export async function setupEngines(p, env) {
+  // 4. движки
+  step(4, tc('setup.s4'));
+  const engines = Object.values(ENGINES);
+  const found = {};
+  for (const e of engines) {
+    const cmd = env[e.envVar] || e.defaultCommand;
+    const full = resolveCommandPath(cmd);
+    if (full) found[e.id] = full;
+  }
+  const checks = await checkEngines(engines.filter((e) => found[e.id]).map((e) => ({ ...e, defaultCommand: found[e.id], envVar: '__SETUP_NONE__' })), 60_000);
+  const available = [];
+  for (const e of engines) {
+    const c = checks.find((r) => r.engine.id === e.id);
+    if (c?.ok || c?.timeout) {
+      available.push(e.id);
+      // полный путь: под службой PATH пользователя может быть недоступен
+      env[e.envVar] = found[e.id];
+      ok(tc('setup.engineOk', { label: e.label, version: c.version ?? '', path: found[e.id] }));
+    } else if (c?.tooOld) {
+      // запускается, но слишком старый (у Antigravity до 1.5 нет `agy acp`) — бот его не предложит
+      env[e.envVar] = found[e.id];
+      warn(tc('setup.engineOld', { label: e.label, error: c.errorI18n ? tc(c.errorI18n.key, c.errorI18n.vars) : c.error }));
+    } else console.log(tc('setup.engineMissing', { label: e.label, install: e.installKey ? tc(e.installKey) : e.install }));
+  }
+  // ни одного движка: предлагаем поставить OpenCode — бот заработает сразу, без ключей (бесплатные модели)
+  if (!available.length && (await p.yes(tc('setup.opencodeOffer')))) {
+    console.log(tc('setup.opencodeInstalling'));
+    const full = installOpencode();
+    const [c] = full ? await checkEngines([{ ...ENGINES.opencode, defaultCommand: full, envVar: '__SETUP_NONE__' }], 60_000) : [];
+    if (c?.ok || c?.timeout) {
+      available.push('opencode');
+      env.OPENCODE_COMMAND = full;
+      ok(tc('setup.engineOk', { label: ENGINES.opencode.label, version: c.version ?? '', path: full }));
+    } else warn(tc('setup.opencodeFail', { install: ENGINES.opencode.installKey ? tc(ENGINES.opencode.installKey) : ENGINES.opencode.install }));
+  }
+  if (!available.length) warn(tc('setup.noEngine'));
+  else {
+    const def = suggestDefaultEngine(available, env.DEFAULT_ENGINE);
+    let choice = available.length === 1 ? available[0] : await p.ask(tc('setup.engineAsk', { list: available.join(' / ') }), def);
+    if (!available.includes(choice)) choice = def;
+    env.DEFAULT_ENGINE = choice;
+    ok(tc('setup.engineDefault', { label: ENGINES[choice].label }));
+  }
+  return available;
+}
+
+export async function setupApiKeys(p, env, available) {
+  // 5. ключи API
+  step(5, tc('setup.s5'));
+  const askKey = async (name, hint) => {
+    const v = await p.secret(`  ${name}${hint}${env[name] ? tc('setup.keySet') : process.env[name] ? tc('setup.keyEnv') : ''}`);
+    if (v) env[name] = v;
+    // Ключ есть только в переменных окружения пользователя: служба (Windows) их не видит, даже работая от этого
+    // пользователя, — предлагаем сохранить в .env.
+    else if (!env[name] && process.env[name] && (await p.yes(tc('setup.keySave', { name })))) env[name] = process.env[name];
+  };
+  if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
+  if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', tc('setup.keyClaude'));
+  if (available.includes('codex')) await askKey('OPENAI_API_KEY', tc('setup.keyCodex'));
+  // OpenCode работает с моделями тех провайдеров, чьи ключи есть в окружении: ключи — сейчас или позже в .env
+  if (available.includes('opencode')) {
+    console.log(tc('setup.opencodeNote'));
+    const keys = opencodeKeysToAsk(available);
+    if (await p.yes(tc('setup.opencodeKeysAsk'), false)) for (const [name, label] of keys) await askKey(name, ` — ${label}`);
+    else console.log(tc('setup.opencodeKeysLater', { path: ENV_PATH, list: keys.map(([name]) => name).join(', ') }));
+  }
+  if (available.includes('agy')) console.log(tc('setup.agyNote'));
+}
+
+export async function saveEnvAndDb(env) {
+  // 6. запись
+  step(6, tc('setup.s6'));
+  const hadEnv = existsSync(ENV_PATH);
+  try {
+    writeEnvFile(env);
+  } catch (e) {
+    warn(tc('setup.saveFail', { msg: e.message }));
+    return false;
+  }
+  ok(tc('setup.envOk', { path: ENV_PATH, prev: hadEnv ? tc('setup.envPrev', { backup: envBackupPath() }) : '' }));
+  mkdirSync(DATA_DIR, { recursive: true });
+  const { openDb } = await import('./db.mjs');
+  openDb(join(DATA_DIR, 'bot.db')).close();
+  ok(tc('setup.dbOk'));
+  return true;
+}
+
+export async function sendTestMessage(env, adminId) {
+  try {
+    await api(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: adminId, text: tc('setup.testText', { label: APP.label }) });
+    ok(tc('setup.testOk'));
+  } catch (e) {
+    warn(tc('setup.testFail', { msg: e.message }));
+  }
+}
+
+export async function startSetupService(p, fromStart, install = null) {
+  // 7. служба
+  step(7, tc('setup.s7'));
+  if (await p.yes(tc('setup.serviceAsk'), !fromStart)) {
+    const runInstall = install ?? (await import('./service.mjs')).installService;
+    const r = await runInstall({ prompt: p });
+    if (r.ok) return { ok: true, service: true };
+    warn(r.installed ? tc('setup.serviceStartFail') : tc('setup.serviceFail'));
+  } else console.log(tc('setup.manual'));
+  return { ok: true, service: false };
+}
+
 /**
  * Интерактивная настройка. Возвращает {ok, service}: ok — .env создан; service — бот зарегистрирован и запущен как служба.
  * @param {{fromStart?: boolean}} [o] fromStart — вызвана из npm start (после настройки бот запустится в этом окне)
@@ -265,202 +492,15 @@ export async function runSetup({ fromStart = false } = {}) {
     console.log(tc('setup.title', { label: APP.label, hint: existsSync(ENV_PATH) ? tc('setup.titleHint') : '' }));
     if (fromStart) console.log(tc('setup.fromStart'));
 
-    // Прежняя установка через install.ps1 / install.sh хранит данные в другом каталоге — предлагаем перенести
-    const legacy = existsSync(ENV_PATH) ? undefined : findLegacyHome();
-    if (legacy) {
-      console.log(tc('setup.legacyFound', { dir: legacy }));
-      console.log(tc('setup.legacyNote'));
-      if (await p.yes(tc('setup.legacyAsk'))) {
-        Object.assign(env, readEnvFile(join(legacy, '.env')));
-        ok(tc('setup.legacyRead', { path: join(legacy, '.env') }));
-        try {
-          if (copyLegacyDb(legacy)) ok(tc('setup.legacyDb', { dir: DATA_DIR }));
-        } catch (e) {
-          warn(tc('setup.legacyDbFail', { msg: e.message }));
-        }
-      }
-    }
-
-    // 1. токен
-    step(1, tc('setup.s1'));
-    let me;
-    for (;;) {
-      const token = (await p.secret(env.TELEGRAM_BOT_TOKEN ? tc('setup.tokenKeep') : tc('setup.token'))) || env.TELEGRAM_BOT_TOKEN;
-      if (!token) continue;
-      try {
-        me = await api(token, 'getMe');
-        env.TELEGRAM_BOT_TOKEN = token;
-        ok(tc('setup.botOk', { username: me.username, name: me.first_name }));
-        break;
-      } catch (e) {
-        warn(tc('setup.tokenBad', { msg: e.message }));
-      }
-    }
-
-    // 2. администратор
-    step(2, tc('setup.s2'));
-    let adminId = env.ALLOWED_USER_ID;
-    if (adminId && (await p.yes(tc('setup.adminKeep', { id: adminId })))) ok(tc('setup.adminOk', { id: adminId }));
-    else {
-      adminId = null;
-      console.log(tc('setup.adminWait', { username: me.username }));
-      try {
-        const from = await waitForAdmin(env.TELEGRAM_BOT_TOKEN);
-        if (from && (await p.yes(tc('setup.adminIsYou', { who: from.username ? '@' + from.username : from.first_name, id: from.id })))) adminId = String(from.id);
-      } catch (e) {
-        warn(tc('setup.adminFetchFail', { msg: e.message, hint: /conflict/i.test(e.message) ? tc('setup.conflictHint') : '' }));
-      }
-      while (!/^\d+$/.test(adminId ?? '')) adminId = await p.ask(tc('setup.adminAskId'));
-      env.ALLOWED_USER_ID = adminId;
-      ok(tc('setup.adminOk', { id: adminId }));
-    }
-
-    // 3. корень проектов
-    step(3, tc('setup.s3'));
-    console.log(tc('setup.rootNote1'));
-    console.log(tc('setup.rootNote2'));
-    for (;;) {
-      const v = await p.ask(tc('setup.rootAsk'), env.PROJECTS_ROOT);
-      if (!v || v === '-') {
-        delete env.PROJECTS_ROOT;
-        ok(tc('setup.rootNone'));
-        break;
-      }
-      const { resolveRoot } = await import('./projects.mjs');
-      try {
-        env.PROJECTS_ROOT = resolveRoot(v);
-        ok(tc('setup.rootOk', { root: env.PROJECTS_ROOT }));
-        break;
-      } catch (e) {
-        warn(e.message);
-      }
-    }
-    // личные пространства сотрудников — только внутри корня проектов
-    if (env.PROJECTS_ROOT) {
-      console.log(tc('setup.wsNote'));
-      if (await p.yes(tc('setup.wsAsk'), env.USER_WORKSPACES === '1')) {
-        env.USER_WORKSPACES = '1';
-        ok(tc('setup.wsOn'));
-      } else delete env.USER_WORKSPACES;
-    } else delete env.USER_WORKSPACES;
-    // песочница агентов сотрудников — только на Linux
-    if (process.platform === 'linux') {
-      const { findCommand, bwrapCommand } = await import('./sandbox.mjs');
-      console.log(tc('setup.sbNote'));
-      if (!findCommand(bwrapCommand(env))) {
-        warn(tc('setup.sbMissing'));
-        delete env.AGENT_SANDBOX;
-      } else if (await p.yes(tc('setup.sbAsk'), env.AGENT_SANDBOX === 'bwrap')) {
-        env.AGENT_SANDBOX = 'bwrap';
-        ok(tc('setup.sbOn'));
-      } else delete env.AGENT_SANDBOX;
-    }
-    if (env.AGENT_SANDBOX === 'bwrap' && env.PROJECTS_ROOT) {
-      console.log(tc('setup.adminSbNote'));
-      if (await p.yes(tc('setup.adminSbAsk'), env.ADMIN_SANDBOX === '1')) {
-        env.ADMIN_SANDBOX = '1';
-        ok(tc('setup.adminSbOn'));
-      } else {
-        delete env.ADMIN_SANDBOX;
-        ok(tc('setup.adminSbOff'));
-      }
-    } else delete env.ADMIN_SANDBOX;
-
-    // 4. движки
-    step(4, tc('setup.s4'));
-    const engines = Object.values(ENGINES);
-    const found = {};
-    for (const e of engines) {
-      const cmd = env[e.envVar] || e.defaultCommand;
-      const full = resolveCommandPath(cmd);
-      if (full) found[e.id] = full;
-    }
-    const checks = await checkEngines(engines.filter((e) => found[e.id]).map((e) => ({ ...e, defaultCommand: found[e.id], envVar: '__SETUP_NONE__' })), 60_000);
-    const available = [];
-    for (const e of engines) {
-      const c = checks.find((r) => r.engine.id === e.id);
-      if (c?.ok || c?.timeout) {
-        available.push(e.id);
-        // полный путь: под службой PATH пользователя может быть недоступен
-        env[e.envVar] = found[e.id];
-        ok(tc('setup.engineOk', { label: e.label, version: c.version ?? '', path: found[e.id] }));
-      } else if (c?.tooOld) {
-        // запускается, но слишком старый (у Antigravity до 1.5 нет `agy acp`) — бот его не предложит
-        env[e.envVar] = found[e.id];
-        warn(tc('setup.engineOld', { label: e.label, error: c.error }));
-      } else console.log(tc('setup.engineMissing', { label: e.label, install: e.install }));
-    }
-    // ни одного движка: предлагаем поставить OpenCode — бот заработает сразу, без ключей (бесплатные модели)
-    if (!available.length && (await p.yes(tc('setup.opencodeOffer')))) {
-      console.log(tc('setup.opencodeInstalling'));
-      const full = installOpencode();
-      const [c] = full ? await checkEngines([{ ...ENGINES.opencode, defaultCommand: full, envVar: '__SETUP_NONE__' }], 60_000) : [];
-      if (c?.ok || c?.timeout) {
-        available.push('opencode');
-        env.OPENCODE_COMMAND = full;
-        ok(tc('setup.engineOk', { label: ENGINES.opencode.label, version: c.version ?? '', path: full }));
-      } else warn(tc('setup.opencodeFail', { install: ENGINES.opencode.install }));
-    }
-    if (!available.length) warn(tc('setup.noEngine'));
-    else {
-      const def = suggestDefaultEngine(available, env.DEFAULT_ENGINE);
-      let choice = available.length === 1 ? available[0] : await p.ask(tc('setup.engineAsk', { list: available.join(' / ') }), def);
-      if (!available.includes(choice)) choice = def;
-      env.DEFAULT_ENGINE = choice;
-      ok(tc('setup.engineDefault', { label: ENGINES[choice].label }));
-    }
-
-    // 5. ключи API
-    step(5, tc('setup.s5'));
-    const askKey = async (name, hint) => {
-      const v = await p.secret(`  ${name}${hint}${env[name] ? tc('setup.keySet') : process.env[name] ? tc('setup.keyEnv') : ''}`);
-      if (v) env[name] = v;
-      // Ключ есть только в переменных окружения пользователя: служба (Windows) их не видит, даже работая от этого
-      // пользователя, — предлагаем сохранить в .env.
-      else if (!env[name] && process.env[name] && (await p.yes(tc('setup.keySave', { name })))) env[name] = process.env[name];
-    };
-    if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
-    if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', tc('setup.keyClaude'));
-    if (available.includes('codex')) await askKey('OPENAI_API_KEY', tc('setup.keyCodex'));
-    // OpenCode работает с моделями тех провайдеров, чьи ключи есть в окружении: ключи — сейчас или позже в .env
-    if (available.includes('opencode')) {
-      console.log(tc('setup.opencodeNote'));
-      const keys = opencodeKeysToAsk(available);
-      if (await p.yes(tc('setup.opencodeKeysAsk'), false)) for (const [name, label] of keys) await askKey(name, ` — ${label}`);
-      else console.log(tc('setup.opencodeKeysLater', { path: ENV_PATH, list: keys.map(([name]) => name).join(', ') }));
-    }
-    if (available.includes('agy')) console.log(tc('setup.agyNote'));
-
-    // 6. запись
-    step(6, tc('setup.s6'));
-    const hadEnv = existsSync(ENV_PATH);
-    try {
-      writeEnvFile(env);
-    } catch (e) {
-      warn(tc('setup.saveFail', { msg: e.message }));
-      return { ok: false, service: false };
-    }
-    ok(tc('setup.envOk', { path: ENV_PATH, prev: hadEnv ? tc('setup.envPrev', { backup: envBackupPath() }) : '' }));
-    mkdirSync(DATA_DIR, { recursive: true });
-    const { openDb } = await import('./db.mjs');
-    openDb(join(DATA_DIR, 'bot.db')).close();
-    ok(tc('setup.dbOk'));
-    try {
-      await api(env.TELEGRAM_BOT_TOKEN, 'sendMessage', { chat_id: adminId, text: tc('setup.testText', { label: APP.label }) });
-      ok(tc('setup.testOk'));
-    } catch (e) {
-      warn(tc('setup.testFail', { msg: e.message }));
-    }
-
-    // 7. служба
-    step(7, tc('setup.s7'));
-    if (await p.yes(tc('setup.serviceAsk'), !fromStart)) {
-      const { installService } = await import('./service.mjs');
-      const r = await installService({ prompt: p });
-      if (r.ok) return { ok: true, service: true };
-      warn(r.installed ? tc('setup.serviceStartFail') : tc('setup.serviceFail'));
-    } else console.log(tc('setup.manual'));
-    return { ok: true, service: false };
+    await migrateLegacySetup(p, env);
+    const me = await setupToken(p, env);
+    const adminId = await setupAdmin(p, env, me);
+    await setupRoot(p, env);
+    const available = await setupEngines(p, env);
+    await setupApiKeys(p, env, available);
+    if (!(await saveEnvAndDb(env))) return { ok: false, service: false };
+    await sendTestMessage(env, adminId);
+    return await startSetupService(p, fromStart);
   } finally {
     p.close();
   }

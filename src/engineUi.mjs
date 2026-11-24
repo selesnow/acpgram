@@ -9,7 +9,7 @@ import { engineMenu, hBold, hRaw, th } from './ui.mjs';
 const HTML = { parse_mode: 'HTML' };
 
 /** Поиск движка по id или названию: «claude», «Claude Code», «agy», «antigravity», «codex», «opencode». */
-export const findEngine = (q) => {
+const findEngine = (q) => {
   const s = q.trim().toLowerCase();
   return Object.values(ENGINES).find((e) => [e.id, e.short.toLowerCase(), e.label.toLowerCase()].includes(s)) ?? null;
 };
@@ -18,7 +18,7 @@ export const findEngine = (q) => {
  * Переключает движок пользователя. Текущая сессия закрывается: процесс агента работает в одном движке.
  * @returns {string} текст ответа пользователю (HTML)
  */
-export function switchEngine(st, id) {
+function switchEngine(st, id) {
   const lang = langOf(st.userId);
   const e = ENGINES[id];
   if (!e) return th('eng.unknown', lang);

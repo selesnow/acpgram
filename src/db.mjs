@@ -8,6 +8,36 @@ import { logError } from './log.mjs';
 const now = () => new Date().toISOString();
 const cut = (s, n) => (s == null ? null : String(s).slice(0, n));
 
+export const SCHEMA_VERSION = 30;
+
+const SCHEMA_COLUMNS = {
+  sessions: ['id', 'acp_session_id', 'user_id', 'chat_id', 'mode', 'cwd', 'engine', 'started_at', 'ended_at', 'end_reason'],
+  settings: ['key', 'value'],
+  requests: [
+    'id', 'session_id', 'user_text', 'started_at', 'finished_at', 'duration_ms', 'stop_reason', 'answer', 'error',
+    'model', 'effort', 'input_tokens', 'output_tokens', 'cached_tokens', 'thought_tokens', 'total_tokens', 'cost_usd',
+  ],
+  tool_calls: [
+    'id', 'request_id', 'tool_call_id', 'tool', 'kind', 'title', 'description', 'status', 'output', 'started_at', 'finished_at',
+  ],
+  permissions: [
+    'id', 'request_id', 'tool_call_id', 'title', 'options', 'chosen_option', 'outcome', 'asked_at', 'answered_at',
+  ],
+  users: ['user_id', 'username', 'first_name', 'level', 'added_by', 'added_at', 'status', 'revoked_at', 'engines', 'models'],
+  invites: ['code', 'level', 'created_by', 'created_at', 'expires_at', 'used_by', 'used_at'],
+  access_requests: ['user_id', 'username', 'first_name', 'requested_at', 'status', 'decided_at'],
+  topics: ['user_id', 'thread_id', 'name', 'named', 'project', 'engine', 'acp_session_id', 'hidden', 'created_at', 'updated_at'],
+  git_accounts: ['user_id', 'host', 'login', 'name', 'email', 'token', 'expires_at', 'added_at', 'refresh_token', 'access_until'],
+};
+
+const verifySchema = (db) => {
+  for (const [table, columns] of Object.entries(SCHEMA_COLUMNS)) {
+    const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+    const missing = columns.filter((name) => !have.has(name));
+    if (missing.length) throw new Error(`[db] ${table}: ${missing.join(', ')}`);
+  }
+};
+
 const securePath = (path, mode) => {
   if (process.platform === 'win32' || !existsSync(path)) return;
   try {
@@ -40,6 +70,7 @@ export function openDb(path = 'data/bot.db') {
       chat_id        INTEGER NOT NULL,
       mode           TEXT,
       cwd            TEXT,
+      engine         TEXT,
       started_at     TEXT NOT NULL,
       ended_at       TEXT,
       end_reason     TEXT
@@ -59,7 +90,15 @@ export function openDb(path = 'data/bot.db') {
       duration_ms INTEGER,
       stop_reason TEXT,
       answer      TEXT,
-      error       TEXT
+      error       TEXT,
+      model       TEXT,
+      effort      TEXT,
+      input_tokens   INTEGER,
+      output_tokens  INTEGER,
+      cached_tokens  INTEGER,
+      thought_tokens INTEGER,
+      total_tokens   INTEGER,
+      cost_usd       REAL
     );
 
     CREATE TABLE IF NOT EXISTS tool_calls (
@@ -98,7 +137,9 @@ export function openDb(path = 'data/bot.db') {
       added_by   INTEGER,
       added_at   TEXT NOT NULL,
       status     TEXT NOT NULL DEFAULT 'active',
-      revoked_at TEXT
+      revoked_at TEXT,
+      engines    TEXT,
+      models     TEXT
     );
 
     -- одноразовые ссылки-приглашения
@@ -131,6 +172,7 @@ export function openDb(path = 'data/bot.db') {
       project        TEXT,
       engine         TEXT,
       acp_session_id TEXT,                       -- сессия агента темы: возобновляется, когда пользователь возвращается
+      hidden         INTEGER NOT NULL DEFAULT 0,
       created_at     TEXT NOT NULL,
       updated_at     TEXT NOT NULL,
       PRIMARY KEY (user_id, thread_id)
@@ -146,6 +188,8 @@ export function openDb(path = 'data/bot.db') {
       token      TEXT NOT NULL,
       expires_at TEXT,                     -- когда истекает токен (если сервис сообщил)
       added_at   TEXT NOT NULL,
+      refresh_token TEXT,
+      access_until  TEXT,
       PRIMARY KEY (user_id, host)
     );
 
@@ -191,6 +235,9 @@ export function openDb(path = 'data/bot.db') {
     ['refresh_token', 'TEXT'], // токен обновления (есть только у входа по коду)
     ['access_until', 'TEXT'], // до какого времени действует текущий токен (у бессрочного — пусто)
   ]);
+
+  verifySchema(db);
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
   const q = {
     getUser: db.prepare('SELECT * FROM users WHERE user_id = ?'),

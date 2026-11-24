@@ -7,8 +7,9 @@ import { test } from 'node:test';
 import { parseEnv } from 'node:util';
 import { resolveHomeDir } from '../src/app.mjs';
 import { homedir } from 'node:os';
-import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, serializeEnv, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
-import { LOGON_FAILURE, findNssm, launchdPlist, nssmCommands, serviceErrorCode, serviceState, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
+import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, serializeEnv, setupApiKeys, setupWorkspaces, startSetupService, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
+import { LOGON_FAILURE, findNssm, launchdPlist, nssmCommands, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
+import { serviceErrorCode, serviceState } from '../src/winsvc.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
 import { setCliLang } from '../src/cli-i18n.mjs';
 
@@ -293,4 +294,31 @@ test('positiveEnv: мусор, ноль и отрицательное в пер�
   assert.equal(positiveEnv('X', 30, { X: '0.5' }), 0.5);
   for (const bad of ['abc', '', '0', '-2', 'NaN', 'Infinity', undefined]) assert.equal(positiveEnv('X', 3, { X: bad }), 3, String(bad));
   assert.equal(positiveEnv('X', 3, {}), 3);
+});
+
+test('setupWorkspaces: личные пространства только внутри корня проектов', async () => {
+  const yes = (v) => ({ yes: async () => v });
+  const withRoot = { PROJECTS_ROOT: '/projects' };
+  await setupWorkspaces(yes(true), withRoot);
+  assert.equal(withRoot.USER_WORKSPACES, '1');
+  const withoutRoot = { USER_WORKSPACES: '1' };
+  await setupWorkspaces(yes(true), withoutRoot);
+  assert.equal(Object.hasOwn(withoutRoot, 'USER_WORKSPACES'), false);
+});
+
+test('setupApiKeys: ключ запрошенного движка сохраняется в env', async () => {
+  const env = {};
+  let asked = 0;
+  await setupApiKeys({ secret: async () => (asked++, 'secret') }, env, ['gemini']);
+  assert.equal(env.GEMINI_API_KEY, 'secret');
+  assert.equal(asked, 1);
+});
+
+test('startSetupService: отказ, успешная и неудачная регистрация службы сохраняют результат мастера', async () => {
+  const no = { yes: async () => false };
+  assert.deepEqual(await startSetupService(no, false), { ok: true, service: false });
+
+  const yes = { yes: async () => true };
+  assert.deepEqual(await startSetupService(yes, false, async () => ({ ok: true })), { ok: true, service: true });
+  assert.deepEqual(await startSetupService(yes, false, async () => ({ ok: false, installed: true })), { ok: true, service: false });
 });

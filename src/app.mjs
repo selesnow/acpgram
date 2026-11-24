@@ -15,7 +15,7 @@ export const APP = {
 };
 
 /** Папка пакета приложения (где лежат src/, package.json) — не зависит от текущей папки запуска. */
-export const APP_DIR = fileURLToPath(new URL('../', import.meta.url)).replace(/[\\/]$/, '');
+const APP_DIR = fileURLToPath(new URL('../', import.meta.url)).replace(/[\\/]$/, '');
 export const MAIN_PATH = fileURLToPath(new URL('./main.mjs', import.meta.url));
 
 /**

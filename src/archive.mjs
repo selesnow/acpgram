@@ -9,8 +9,8 @@ import { safeFileName } from './files.mjs';
 import { isWithin } from './projects.mjs';
 
 /** Не больше стольких файлов в архиве и стольких байт суммарно после распаковки. */
-export const MAX_ARCHIVE_FILES = 500;
-export const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+const MAX_ARCHIVE_FILES = 500;
+const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 
 /** reason: 'limit' (слишком много или слишком большой), 'corrupt' (повреждён), 'unsupported' (zip64 и т. п.). */
 export class ArchiveError extends Error {

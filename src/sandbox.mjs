@@ -17,6 +17,7 @@ import { PROVIDER_KEYS } from './engines.mjs';
 import { DATA_DIR, ENV_PATH } from './app.mjs';
 import { outboxDir, uploadsDir } from './files.mjs';
 import { isWithin } from './projects.mjs';
+import { logError } from './log.mjs';
 
 /**
  * Режим песочницы из AGENT_SANDBOX: 'bwrap' или null (выключена). Неизвестное значение и не Linux — ошибка: бот не
@@ -35,7 +36,7 @@ export const SANDBOX = (() => {
   try {
     return sandboxMode();
   } catch (e) {
-    console.error(e.message);
+    logError(e.message);
     process.exit(1);
   }
 })();
@@ -44,13 +45,13 @@ export const SANDBOX = (() => {
 export const bwrapCommand = (env = process.env) => env.BWRAP_COMMAND?.trim() || 'bwrap';
 
 /** Системные папки, которые песочница видит на чтение (каких нет — пропускаются). */
-export const SYSTEM_DIRS = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc'];
+const SYSTEM_DIRS = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc'];
 
 /** Список путей из переменной окружения (разделитель — как в PATH). */
 export const pathList = (value) => String(value ?? '').split(delimiter).map((s) => s.trim()).filter(Boolean);
 
 /** Домашняя папка сотрудника в песочнице: настройки, вход и история сессий движков — у каждого свои. */
-export const sandboxHome = (userId, base = DATA_DIR) => join(base, 'homes', String(userId));
+const sandboxHome = (userId, base = DATA_DIR) => join(base, 'homes', String(userId));
 
 /** Полный путь к команде: абсолютный как есть, иначе поиск исполняемого файла по PATH. Не нашлась — null. */
 export function findCommand(cmd, pathEnv = process.env.PATH) {
@@ -96,6 +97,11 @@ export const exposedSecret = (path, secrets) => secrets.find((s) => s && isWithi
 /** Папку нельзя открыть песочнице: внутри неё секреты бота или чужие данные. */
 export class SandboxError extends Error {
   code = 'SANDBOX';
+
+  constructor(message, i18n = null) {
+    super(message);
+    this.i18n = i18n;
+  }
 }
 
 /**
@@ -169,10 +175,10 @@ function nodeBinds() {
  * Что песочнице нельзя открывать ни при каких настройках: папка, внутри которой лежит .env или каталог данных бота.
  * Свои каталоги сотрудника (домашняя папка, загрузки, исходящие) лежат внутри каталога данных — это не утечка.
  */
-export const botSecrets = () => [ENV_PATH, DATA_DIR];
+const botSecrets = () => [ENV_PATH, DATA_DIR];
 
 /** Файлы, которых изнутри песочницы не должно быть видно (проверка при старте). */
-export const botSecretFiles = () => [ENV_PATH, join(DATA_DIR, 'bot.db')];
+const botSecretFiles = () => [ENV_PATH, join(DATA_DIR, 'bot.db')];
 
 /** Каталоги служебного «пользователя» для проверок при старте. */
 const checkDirs = (base = DATA_DIR) => {
@@ -206,23 +212,23 @@ export function agentSandbox({
   bwrap = bwrapCommand(),
 }) {
   const inner = findCommand(command);
-  if (!inner) throw new SandboxError(`команда не найдена: ${command}`);
+  if (!inner) throw new SandboxError(`команда не найдена: ${command}`, { key: 'err.sandboxCommand', vars: { command } });
   for (const p of [root ?? cwd, ...extraRo]) {
-    if (p && isWithin(p, DATA_DIR)) throw new SandboxError(`папка ${p} лежит в данных бота`);
+    if (p && isWithin(p, DATA_DIR)) throw new SandboxError(`папка ${p} лежит в данных бота`, { key: 'err.sandboxDataDir', vars: { path: p } });
   }
   const rw = [root ?? cwd, home, outbox];
   const ro = [uploads, ...commandBinds(inner), ...nodeBinds(), ...extraRo, resolvConf()].filter(Boolean);
   // свои каталоги сотрудника лежат внутри данных бота — это не утечка; опасна только папка, внутри которой лежит секрет
   for (const p of [...rw, ...ro]) {
     const secret = exposedSecret(p, [...secrets, ...protect]);
-    if (secret) throw new SandboxError(`папку ${p} нельзя открыть песочнице: внутри неё ${secret}`);
+    if (secret) throw new SandboxError(`папку ${p} нельзя открыть песочнице: внутри неё ${secret}`, { key: 'err.sandboxSecret', vars: { path: p, secret } });
   }
   for (const d of [home, uploads, outbox]) mkdirSync(d, { recursive: true });
   return { command: bwrap, args: [...bwrapArgs({ cwd, rw, ro }), '--', inner], env: (base) => sandboxEnv(base, { home }) };
 }
 
 /** Подсказка по тексту ошибки bwrap: чаще всего запрещены пространства имён пользователя. */
-export const sandboxHint = (error) =>
+const sandboxHint = (error) =>
   /namespace|uid map|Operation not permitted|Permission denied/i.test(String(error ?? ''))
     ? 'Системе запрещены непривилегированные пространства имён пользователя. Ubuntu 24.04+: sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (или профиль AppArmor для bwrap); в Docker песочница не поддерживается'
     : 'Установите пакет bubblewrap (apt install bubblewrap, dnf install bubblewrap) или укажите путь в BWRAP_COMMAND';

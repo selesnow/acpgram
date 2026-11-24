@@ -8,6 +8,7 @@ import { mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANG, t } from './i18n.mjs';
+import { logError } from './log.mjs';
 
 /**
  * Корень проектов (PROJECTS_ROOT, необязательная): реальный путь к существующей папке или null, если не задан.
@@ -46,13 +47,10 @@ export const ROOT = (() => {
   try {
     return resolveRoot();
   } catch (e) {
-    console.error(e.message);
+    logError(e.message);
     process.exit(1);
   }
 })();
-
-/** Папка по умолчанию для нового пользователя: корень проектов, а без него — домашняя папка. */
-export const DEFAULT_DIR = ROOT ?? HOME;
 
 /**
  * Личные пространства (USER_WORKSPACES=1): корень каждого сотрудника — его папка внутри корня проектов.
@@ -61,7 +59,7 @@ export const DEFAULT_DIR = ROOT ?? HOME;
 export const USER_WORKSPACES = (() => {
   if (process.env.USER_WORKSPACES?.trim() !== '1') return false;
   if (!ROOT) {
-    console.error('USER_WORKSPACES=1: задайте PROJECTS_ROOT — в этой папке создаются личные папки сотрудников');
+    logError('USER_WORKSPACES=1: задайте PROJECTS_ROOT — в этой папке создаются личные папки сотрудников');
     process.exit(1);
   }
   return true;

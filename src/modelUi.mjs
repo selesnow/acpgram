@@ -6,8 +6,8 @@ import { langOf, log, say } from './ctx.mjs';
 import { engineVersion } from './engines.mjs';
 import { t } from './i18n.mjs';
 import { engineOf } from './state.mjs';
-import { tg } from './telegram.mjs';
 import { modelChosen, modelGroupMenu, modelMenu, modelSearchMenu } from './ui.mjs';
+import { cbCtx } from './uiActions.mjs';
 import { sendWidgetMessage } from './widgetHost.mjs';
 import { findByRef, modelWidget, widgetFits } from './widgets.mjs';
 
@@ -124,7 +124,7 @@ export function applyChoice(st, engine, kind, ref) {
 export async function onModelCallback(st, cb) {
   const m = /^mdl:([a-z]+):([megs]):(.+)$/.exec(cb.data || '');
   const lang = langOf(st.userId);
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
+  const { ack, edit } = cbCtx(st, cb, { label: 'model menu:' });
   const engine = engineOf(st);
   if (!m || m[1] !== engine.id) return ack(t('model.engineChanged', lang));
   const catalog = getCatalog(engine.id);
@@ -136,7 +136,7 @@ export async function onModelCallback(st, cb) {
     const [group, sub, page] = m[2] === 'g' ? [parts[0], null, parts[1]] : parts;
     const sel = effectiveSelection(st.userId, engine);
     const v = group === '~' ? view(st, engine, catalog) : modelGroupMenu({ engine, models: allowedModels(st.userId, engine.id), group, sub, page: Number(page) || 0, model: sel.model, lang });
-    return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, reply_markup: v.markup }).catch((e) => log('model menu:', e.message));
+    return edit(v);
   }
   const kind = m[2] === 'm' ? 'model' : 'effort';
   const r = applyChoice(st, engine, kind, m[3]);
@@ -145,5 +145,6 @@ export async function onModelCallback(st, cb) {
   // как в /engine: меню заменяется итогом выбора, кнопки убираются
   const sel = effectiveSelection(st.userId, engine);
   const text = modelChosen({ engine, models: allowedModels(st.userId, engine.id), efforts: engine.effortConfig ? catalog.efforts : [], model: sel.model, effort: sel.effort, lang });
-  return tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(st.to, text));
+  const { edit: finish } = cbCtx(st, cb, { fallback: (text) => say(st.to, text) });
+  return finish(text);
 }

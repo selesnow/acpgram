@@ -1,38 +1,36 @@
 // Команда /git: аккаунты GitHub и GitLab пользователя (вход по токену доступа), клонирование репозитория кнопками,
 // состояние репозитория проекта, «Получить», «Отправить», «Сохранить и отправить».
 // Токен вводится сообщением, которое не передаётся агенту и удаляется из чата; команды git с входом выполняет бот.
-import { lstatSync, realpathSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { db, langOf, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
-import { cloneRepo, commitAll, fetchRepo, gitAvailable, pullRepo, pushRepo, repoState, unpushedSecrets } from './git.mjs';
-import { DeviceError, deviceLogin, startDeviceLogin, waitDeviceLogin } from './gitDevice.mjs';
-import { recall, remember } from './gitKeys.mjs';
-import { acquireGitLock, failText, gitNetOpts, gitOpts, projectOf, releaseGitLock, repoOf } from './gitCtx.mjs';
-import { accountsOf, addCustomHost, findHost, hostFor, hosts as allHosts, refreshAccounts, removeCustomHost, renameCustomHost } from './gitAccess.mjs';
+import { fetchRepo, gitAvailable } from './git.mjs';
+import { accountsOf, findHost, hosts as allHosts, refreshAccounts } from './gitAccess.mjs';
+import { onAccountCallback, onTokenInput } from './gitAccountsUi.mjs';
+import { cleanFailedClone, onCloneCallback, onSearchInput } from './gitCloneUi.mjs';
+import { acquireGitLock, failText, gitNetOpts, projectOf, releaseGitLock, repoOf } from './gitCtx.mjs';
+import { showRemote } from './gitHosts.mjs';
+import { onHostCallback, onHostInput } from './gitHostsUi.mjs';
 import { PUBLISH_ACTIONS, PUBLISH_INPUTS, canPublish, onPublishCallback, onPublishInput } from './gitPublishUi.mjs';
 import { REPO_ACTIONS, onBranchInput, onRepoCallback } from './gitRepoUi.mjs';
-import { HostError, customHost, fetchProfile, listRepos, missingScopes, probeHost, repoFolder, showRemote } from './gitHosts.mjs';
-import { LOCALES, t } from './i18n.mjs';
-import { folderName, insideRoot, isPersonalRoot, navStart } from './projects.mjs';
-import { canCreateProject, selectProject } from './projectsUi.mjs';
-import { errorRootOf, isAdmin, rootOf, userPath } from './state.mjs';
+import { onMessageInput, onRepoActionCallback } from './gitRepoAction.mjs';
+import { t } from './i18n.mjs';
+import { canCreateProject } from './projectsUi.mjs';
+import { clearPendingInput, isPendingExpired, pendingKindMatches } from './pendingInput.mjs';
+import { errorRootOf, isAdmin, userPath } from './state.mjs';
 import { dest, tg } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
+import { cbCtx } from './uiActions.mjs';
 
 const HTML = { parse_mode: 'HTML', link_preview_options: { is_disabled: true } };
 /** Сколько бот ждёт токен, описание изменений или строку поиска. */
-export const GIT_WAIT_MS = 10 * 60_000;
-
-const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] });
-const dateOf = (iso, lang) => (iso ? new Date(iso).toLocaleDateString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—');
+export { GIT_WAIT_MS } from './pendingInput.mjs';
 
 /**
  * Экран /git: состояние репозитория проекта, аккаунты, кнопки. Текст — HTML.
  * sync — сначала свериться с сервером (git fetch), чтобы «новых на сервере» было настоящим числом: при открытии экрана
  * и по кнопке «Обновить». Пока агент выполняет запрос или идёт другая операция git, сверка пропускается.
  */
-export async function gitView(st, lang = langOf(st.userId), { sync = false } = {}) {
+async function gitView(st, lang = langOf(st.userId), { sync = false } = {}) {
   const project = projectOf(st);
   const hosts = allHosts();
   const accounts = accountsOf(st.userId);
@@ -84,20 +82,6 @@ export async function gitView(st, lang = langOf(st.userId), { sync = false } = {
   return { text: lines.join('\n\n'), markup: { inline_keyboard: rows } };
 }
 
-const KIND_LABEL = { gitlab: 'GitLab', github: 'GitHub Enterprise' };
-
-/** Экран администратора «Свои серверы»: список, добавление GitLab или GitHub Enterprise, название, удаление. */
-function hostsView(lang, note = '') {
-  const own = allHosts().filter((h) => h.custom);
-  const list = own.length
-    ? own.map((h) => th('git.hosts.line', lang, { label: h.label, url: h.web, kind: KIND_LABEL[h.kind] }) + (h.fromEnv ? th('git.hosts.env', lang) : '')).join('\n')
-    : `<i>${th('git.hosts.none', lang)}</i>`;
-  const rows = own.filter((h) => !h.fromEnv).map((h) => [{ text: `✏️ ${h.label}`, callback_data: `gt:hn:${h.id}` }, { text: `🗑 ${t('git.hosts.remove', lang)}`, callback_data: `gt:hd:${h.id}` }]);
-  rows.push([{ text: t('git.hosts.addGitlab', lang), callback_data: 'gt:ha:gitlab' }, { text: t('git.hosts.addGithub', lang), callback_data: 'gt:ha:github' }]);
-  rows.push([{ text: t('btn.back', lang), callback_data: 'gt:v' }]);
-  return { text: `${note ? `${note}\n\n` : ''}${th('git.hosts.head', lang)}\n\n${list}`, markup: { inline_keyboard: rows } };
-}
-
 /**
  * Перед любой операцией /git: обновить входы, которым пора (вход по коду с истекающим токеном). Если сервис больше
  * не принимает вход, аккаунт отключён — пользователю об этом сообщение.
@@ -134,192 +118,15 @@ export async function offerGitActions(st, actions) {
   return say(st.to, t(actions.length > 1 ? 'git.offer.both' : `git.offer.${actions[0]}`, lang), { reply_markup: { inline_keyboard: [row] } });
 }
 
-/** Куда клонировать: личное пространство сотрудника, иначе — папка рядом с текущим проектом (или корень). */
-function cloneBase(st) {
-  const root = rootOf(st.userId);
-  if (isPersonalRoot(root)) return insideRoot(root, root);
-  return insideRoot(navStart(st.project, root), root) ?? (root ? insideRoot(root, root) : null);
-}
-
-/** Список репозиториев сервиса кнопками (страница, поиск). Выбор — gt:k:<ключ кнопки> (gitKeys). */
-async function reposView(st, host, account, { page = 0, search = '' } = {}, lang) {
-  const { items, more } = await listRepos(host, account.token, { page, search });
-  st.gitRepos = { host: host.id, page, search }; // для перелистывания с тем же поиском
-  const base = cloneBase(st);
-  const rows = items.map((r) => [{ text: [...`${r.private ? '🔒' : '📂'} ${r.name}`].slice(0, 60).join(''), callback_data: `gt:k:${remember(st, { host: host.id, repo: r })}` }]);
-  const nav = [];
-  if (page > 0) nav.push({ text: '◀', callback_data: `gt:r:${host.id}:${page - 1}` });
-  if (more) nav.push({ text: '▶', callback_data: `gt:r:${host.id}:${page + 1}` });
-  if (nav.length) rows.push(nav);
-  rows.push([{ text: t('git.search', lang), callback_data: `gt:s:${host.id}` }, { text: t('btn.back', lang), callback_data: 'gt:v' }]);
-  const head = th('git.repos', lang, { host: host.label, q: search ? ` «${search}»` : '', dir: hCode(base ? userPath(st.userId, base, lang) : '—') });
-  return { text: items.length ? head : `${head}\n\n<i>${th('git.reposNone', lang)}</i>`, markup: { inline_keyboard: rows } };
-}
-
-export function cleanFailedClone(st, target, base) {
-  try {
-    const info = lstatSync(target);
-    const real = realpathSync.native(target);
-    if (!info.isDirectory() || info.isSymbolicLink() || !insideRoot(real, base)) return;
-    rmSync(real, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  } catch (e) {
-    log('git: папка неудачного клона не убрана:', e.message, '| пользователь', st.userId);
-  }
-}
-
-/** Клонирует выбранный репозиторий в пространство пользователя и выбирает его проектом. */
-async function cloneChosen(st, repo, host, account, lang, edit) {
-  const base = cloneBase(st);
-  const name = folderName(repoFolder(repo.url));
-  if (!base || !name) return edit({ text: th('git.cloneBadName', lang) });
-  const target = join(base, name);
-  if (insideRoot(target, rootOf(st.userId))) return edit({ text: th('git.cloneExists', lang, { name: hCode(name), dir: hCode(userPath(st.userId, base, lang)) }) });
-  await edit({ text: th('git.cloning', lang, { name: hCode(repo.name) }) });
-  try {
-    await cloneRepo(repo.url, name, { cwd: base, ...gitNetOpts(st, base, { host, account }) });
-  } catch (e) {
-    log('git: клонирование:', e.message, '| пользователь', st.userId);
-    cleanFailedClone(st, target, base);
-    return edit({ text: failText(e, lang, null, errorRootOf(st.userId)) });
-  }
-  const dir = insideRoot(target, rootOf(st.userId));
-  if (!dir) return edit({ text: th('git.cloneBadName', lang) });
-  log('репозиторий клонирован:', st.userId, repo.name, dir);
-  await edit({ text: th('git.cloned', lang, { name: hCode(repo.name), p: hCode(userPath(st.userId, dir, lang)) }) });
-  return selectProject(st, dir);
-}
-
-/**
- * Операция с репозиторием проекта: 'pull', 'push', 'pushf' (отправить, несмотря на секреты в коммитах) или 'save'
- * (закоммитить всё с описанием message и отправить). Итог пишется в сообщение edit вместе с обновлённым экраном.
- */
-async function repoAction(st, action, lang, edit, { message = null } = {}) {
-  const project = projectOf(st);
-  const lock = acquireGitLock(st, project ?? st.userId);
-  if (!lock) return edit({ text: t('git.busy', lang) });
-  const done = async (text) => {
-    const v = await gitView(st, lang);
-    return edit({ text: `${text}\n\n${v.text}`, markup: v.markup });
-  };
-  try {
-    const repo = project ? await repoOf(st, project) : null;
-    if (!repo?.account) return edit(await gitView(st, lang));
-    const opts = gitOpts(st, project, repo.account);
-    const net = gitNetOpts(st, project, repo);
-    if (action === 'pull') {
-      await edit({ text: th('git.pulling', lang) });
-      const result = await pullRepo(project, net);
-      log('git: получено:', st.userId, project, '|', result);
-      return await done(th(`git.pull.${result}`, lang));
-    }
-    let note = '';
-    if (action === 'save') {
-      await edit({ text: th('git.saving', lang) });
-      const r = await commitAll(project, message, opts);
-      if (r.skipped.length) note += `\n${th('git.skipped', lang, { files: r.skipped.join(', ') })}`;
-      if (r.tracked.length) note += `\n${th('git.tracked', lang, { files: r.tracked.join(', ') })}`;
-      if (r.ignoreWarning) note += `\n${th('git.ignoreLink', lang)}`;
-      const after = await repoState(project, opts);
-      if (!r.committed && !after?.ahead && after?.upstream) return await done(th('git.savedNothing', lang) + note);
-    } else await edit({ text: th('git.pushing', lang) });
-    // секреты в коммитах, которые сделал агент: перед отправкой — предупреждение и явное согласие
-    if (action !== 'pushf') {
-      const secrets = await unpushedSecrets(project, opts);
-      if (secrets.length) {
-        const markup = { inline_keyboard: [[{ text: t('git.pushAnyway', lang), callback_data: 'gt:pushf' }, { text: t('btn.cancel', lang), callback_data: 'gt:v' }]] };
-        return await edit({ text: th('git.secretsWarn', lang, { files: secrets.slice(0, 20).join('\n') }) + note, markup });
-      }
-    }
-    const state = await repoState(project, opts);
-    if (state?.upstream && !state.ahead) return await done(th('git.nothingToPush', lang) + note);
-    try {
-      await pushRepo(project, net);
-    } catch (e) {
-      if (/rejected|non-fast-forward|fetch first/i.test(`${e.message} ${e.stderr ?? ''}`)) return await done(th('git.pushRejected', lang) + note);
-      throw e;
-    }
-    log('git: отправлено:', st.userId, project);
-    return await done(th(action === 'save' ? 'git.saved' : 'git.pushed', lang) + note);
-  } catch (e) {
-    log(`git: ${action}:`, e.message, '| пользователь', st.userId);
-    return await done(failText(e, lang, null, errorRootOf(st.userId)));
-  } finally {
-    releaseGitLock(st, lock);
-  }
-}
-
-/** Сохраняет подключённый аккаунт и сообщает об этом: кто подключён, срок токена, чего не хватает; затем — экран /git. */
-async function finishConnect(st, host, grant, profile, lang, send, key) {
-  // вход по коду с токеном, который истекает и не обновляется, через пару часов перестал бы работать — не подключаем
-  if (grant.expiresIn && !grant.refreshToken) {
-    log('⚠️ git: вход по коду без токена обновления — аккаунт не подключён:', st.userId, host.id, `| срок ${grant.expiresIn} с`);
-    return send({ text: th('git.dv.noRefresh', lang, { host: host.label }) });
-  }
-  const accessUntil = grant.expiresIn ? new Date(Date.now() + grant.expiresIn * 1000).toISOString() : null;
-  // срок, который сервис сообщает о продлеваемом входе, — это срок текущего токена, а не аккаунта: напоминать о нём незачем
-  const expiresAt = grant.refreshToken ? null : profile.expiresAt;
-  if (!db.saveGitAccount(st.userId, { host: host.id, login: profile.login, name: profile.name, email: profile.email, token: grant.token, expiresAt, refreshToken: grant.refreshToken ?? null, accessUntil })) {
-    return send({ text: th('access.saveFail', lang) });
-  }
-  log('аккаунт git подключён:', st.userId, host.id, profile.login, grant.refreshToken ? `| вход обновляемый, срок токена ${grant.expiresIn} с` : '');
-  const lack = missingScopes(host, profile.scopes);
-  const parts = [
-    th(key, lang, { host: host.label, login: profile.login, name: profile.name }),
-    ...(expiresAt ? [th('git.expires', lang, { date: dateOf(expiresAt, lang) })] : []),
-    ...(lack.length ? [th('git.scopesWarn', lang, { scopes: lack.join(', ') })] : []),
-  ];
-  await send({ text: parts.join('\n') });
-  return send(await gitView(st, lang));
-}
-
-/**
- * Вход по ссылке и коду: бот показывает страницу сервиса и код, а сам ждёт подтверждения и подключает аккаунт.
- * Ожидание идёт в фоне (до срока кода); «Отмена» или новый вход прекращают его.
- */
-async function startCodeLogin(st, host, cfg, lang, edit) {
-  let login;
-  try {
-    login = await startDeviceLogin(cfg);
-  } catch (e) {
-    log('git: вход по коду:', e.message, '| пользователь', st.userId);
-    return edit({ text: th('git.dv.fail', lang, { msg: e.message }) });
-  }
-  const attempt = { host: host.id };
-  st.gitDevice = attempt; // новый вход или «Отмена» заменяют запись — прежнее ожидание это видит и прекращается
-  await edit({
-    text: th('git.dv.how', lang, { host: host.label, url: login.url, code: hCode(login.userCode), min: Math.round(login.expiresIn / 60) }),
-    markup: { inline_keyboard: [[{ text: t('git.dv.open', lang, { host: host.label }), url: login.url }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] },
-  });
-  const send = (v) => tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('git:', e.message));
-  // не ждём здесь: обработка нажатия заканчивается сразу, подтверждение придёт позже
-  waitDeviceLogin(cfg, login, { cancelled: () => st.gitDevice !== attempt })
-    .then(async (grant) => {
-      st.gitDevice = null;
-      const profile = await fetchProfile(host, grant.token);
-      await edit({ text: th('git.dv.ok', lang, { host: host.label }) });
-      await finishConnect(st, host, grant, profile, lang, send, 'git.connectedCode');
-    })
-    .catch((e) => {
-      if (st.gitDevice === attempt) st.gitDevice = null;
-      if (e instanceof DeviceError && e.code === 'cancelled') return null;
-      log('git: вход по коду:', e.code ?? '', e.message, '| пользователь', st.userId);
-      const key = e instanceof DeviceError && e.code === 'expired' ? 'git.dv.expired' : e instanceof DeviceError && e.code === 'denied' ? 'git.dv.denied' : 'git.dv.fail';
-      return edit({ text: th(key, lang, { msg: e.message }) });
-    });
-}
-
 /** Кнопки /git (gt:<действие>[:<аргумент>[:<страница>]]). */
 export async function onGitCallback(st, cb) {
   const [, action, arg, pageStr] = (cb.data || '').split(':');
   const lang = langOf(st.userId);
-  const chatId = cb.message?.chat?.id ?? st.chatId;
-  const messageId = cb.message?.message_id;
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
-  const edit = (v) => tg('editMessageText', { chat_id: chatId, message_id: messageId, text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => /not modified/i.test(e.message) || log('git:', e.message));
+  const { ack, edit } = cbCtx(st, cb, { html: true, alert: true, notModified: 'loose', label: 'git:' });
   if (!gitAvailable()) return ack(t('git.none', lang));
   await freshen(st);
   if (action === 'x') {
-    st.pendingInput = null;
+    clearPendingInput(st);
     st.gitDevice = null; // и ожидание входа по коду, если оно шло
     await ack();
     return edit({ text: th('files.cancelled', lang) });
@@ -328,121 +135,25 @@ export async function onGitCallback(st, cb) {
     await ack();
     return edit(await gitView(st, lang, { sync: true }));
   }
+  const view = () => gitView(st, lang);
+  const h = { action, arg, pageStr, lang, ack, edit, view, cloneKeyPrefix: 'gt:k:' };
   // ---- свои серверы: только администратор ----
-  if (['h', 'ha', 'hn', 'hd', 'hD'].includes(action)) {
-    if (!isAdmin(st.userId)) return ack(t('admin.only', lang));
-    if (action === 'h') return (await ack(), edit(hostsView(lang)));
-    if (action === 'ha' && KIND_LABEL[arg]) {
-      await ack();
-      st.pendingInput = { kind: 'gitHostUrl', hostKind: arg, at: Date.now() };
-      return say(st.to, t('git.hosts.urlAsk', lang, { kind: KIND_LABEL[arg] }), { reply_markup: cancelMarkup(lang) });
-    }
-    const own = findHost(arg);
-    if (!own?.custom || own.fromEnv) return ack(t('proj.stale', lang));
-    if (action === 'hn') {
-      await ack();
-      st.pendingInput = { kind: 'gitHostName', host: own.id, at: Date.now() };
-      return say(st.to, t('git.hosts.nameAsk', lang), { reply_markup: cancelMarkup(lang) });
-    }
-    if (action === 'hd') {
-      await ack();
-      return edit({ text: th('git.hosts.deleteAsk', lang, { label: own.label }), markup: { inline_keyboard: [[{ text: t('git.hosts.remove', lang), callback_data: `gt:hD:${own.id}` }, { text: t('btn.cancel', lang), callback_data: 'gt:h' }]] } });
-    }
-    const n = removeCustomHost(own.id);
-    log('свой сервер git убран:', own.web, '| отключено аккаунтов', n);
-    await ack();
-    return edit(hostsView(lang, th('git.hosts.deleted', lang, { label: own.label, n: n ?? 0 })));
-  }
+  if (['h', 'ha', 'hn', 'hd', 'hD'].includes(action)) return onHostCallback(st, h);
   // экраны «Изменения» и «Ветки» — gitRepoUi
-  if (REPO_ACTIONS.includes(action)) return onRepoCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st) });
+  if (REPO_ACTIONS.includes(action)) return onRepoCallback(st, { action, arg, lang, ack, edit, project: projectOf(st) });
   // «Опубликовать проект» и «Запрос на слияние» — gitPublishUi
-  if (PUBLISH_ACTIONS.includes(action)) return onPublishCallback(st, cb, { action, arg, lang, ack, edit, project: projectOf(st), view: () => gitView(st, lang) });
+  if (PUBLISH_ACTIONS.includes(action)) return onPublishCallback(st, { action, arg, lang, ack, edit, project: projectOf(st), view });
   const host = findHost(arg);
   const account = host ? db.getGitAccount(st.userId, host.id) : null;
+  h.host = host;
+  h.account = account;
   try {
     // ---- аккаунты ----
-    if (action === 'c' && host) {
-      await ack();
-      st.pendingInput = { kind: 'gitToken', host: host.id, at: Date.now() };
-      // у сервиса с входом по коду токен не обязателен: кнопка «Войти без токена» (сам токен тоже можно прислать)
-      const byCode = deviceLogin(host);
-      const text = th('git.tokenAsk', lang, { host: host.label, url: host.tokenUrl, scopes: hCode(host.scopes) }) + (byCode ? `\n\n${th('git.dv.or', lang)}` : '');
-      const rows = [...(byCode ? [[{ text: t('git.dv.btn', lang), callback_data: `gt:dv:${host.id}`, style: 'success' }]] : []), [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]];
-      return say(st.to, text, { ...HTML, reply_markup: { inline_keyboard: rows } });
-    }
-    if (action === 'dv' && host) {
-      const cfg = deviceLogin(host);
-      if (!cfg) return ack(t('proj.stale', lang));
-      await ack();
-      st.pendingInput = null; // токен больше не ждём: вход идёт по коду
-      return startCodeLogin(st, host, cfg, lang, edit);
-    }
-    if ((action === 'a' || action === 'd') && account) {
-      await ack();
-      const text = th(action === 'd' ? 'git.disconnectAsk' : 'git.accCard', lang, { host: host.label, login: account.login, name: account.name ?? '', email: hCode(account.email ?? '—'), date: dateOf(account.expires_at, lang) });
-      const rows = action === 'd'
-        ? [[{ text: t('git.disconnect', lang), callback_data: `gt:D:${host.id}` }, { text: t('btn.cancel', lang), callback_data: `gt:a:${host.id}` }]]
-        : [[{ text: t('git.disconnect', lang), callback_data: `gt:d:${host.id}` }], [{ text: t('btn.back', lang), callback_data: 'gt:v' }]];
-      return edit({ text, markup: { inline_keyboard: rows } });
-    }
-    if (action === 'D' && account) {
-      db.deleteGitAccount(st.userId, host.id);
-      log('аккаунт git отключён:', st.userId, host.id);
-      await ack(t('git.disconnected', lang, { host: host.label }));
-      return edit(await gitView(st, lang));
-    }
+    if (['c', 'dv', 'a', 'd', 'D'].includes(action)) return onAccountCallback(st, h);
     // ---- клонирование ----
-    if (action === 'cl') {
-      if (!canCreateProject(st.userId)) return ack(t('files.noRights', lang));
-      const list = accountsOf(st.userId);
-      if (!list.length) return ack(t('git.connectFirst', lang));
-      await ack();
-      if (list.length === 1) return edit(await reposView(st, list[0].host, list[0].account, {}, lang));
-      return edit({ text: th('git.pickHost', lang), markup: { inline_keyboard: [...list.map((x) => [{ text: x.host.label, callback_data: `gt:r:${x.host.id}:0` }]), [{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
-    }
-    if (action === 'r' && account) {
-      await ack();
-      const search = st.gitRepos?.host === host.id ? st.gitRepos.search : '';
-      return edit(await reposView(st, host, account, { page: Number(pageStr) || 0, search }, lang));
-    }
-    if (action === 's' && account) {
-      await ack();
-      st.pendingInput = { kind: 'gitSearch', host: host.id, at: Date.now() };
-      return say(st.to, t('git.searchAsk', lang), { reply_markup: cancelMarkup(lang) });
-    }
-    if (action === 'k') {
-      const chosen = recall(st, arg);
-      const repo = chosen?.repo;
-      const h = findHost(chosen?.host);
-      const acc = h ? db.getGitAccount(st.userId, h.id) : null;
-      if (!repo || !acc || !canCreateProject(st.userId)) return ack(t('proj.stale', lang));
-      if (hostFor(repo.url)?.id !== h.id) return ack(t('proj.stale', lang)); // адрес обязан принадлежать своему сервису
-      const lock = acquireGitLock(st, cloneBase(st) ?? st.userId);
-      if (!lock) return ack(t('git.busy', lang));
-      await ack();
-      try {
-        return await cloneChosen(st, repo, h, acc, lang, edit);
-      } finally {
-        releaseGitLock(st, lock);
-      }
-    }
+    if (['cl', 'r', 's', 'k'].includes(action)) return onCloneCallback(st, h);
     // ---- репозиторий проекта ----
-    if (['pull', 'push', 'pushf', 'save', 'savenow'].includes(action)) {
-      if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
-      if (st.gitBusy) return ack(t('git.busy', lang));
-      if (st.busy) return ack(t('git.agentBusy', lang));
-      await ack();
-      if (action === 'save') {
-        st.pendingInput = { kind: 'gitMessage', at: Date.now() };
-        const markup = { inline_keyboard: [[{ text: t('git.noMessage', lang), callback_data: 'gt:savenow' }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] };
-        return say(st.to, t('git.messageAsk', lang), { reply_markup: markup });
-      }
-      if (action === 'savenow') {
-        st.pendingInput = null;
-        return repoAction(st, 'save', lang, edit, { message: t('git.autoMessage', lang, { date: dateOf(new Date().toISOString(), lang) }) });
-      }
-      return repoAction(st, action, lang, edit);
-    }
+    if (['pull', 'push', 'pushf', 'save', 'savenow'].includes(action)) return onRepoActionCallback(st, h);
     return ack(t('proj.stale', lang));
   } catch (e) {
     log('git:', e.message, '| пользователь', st.userId);
@@ -451,9 +162,6 @@ export async function onGitCallback(st, cb) {
   }
 }
 
-/** Удаляет сообщение пользователя (с токеном): копии в чате остаться не должно. */
-const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_id: st.chatId, message_id: messageId }).catch((e) => log('git: сообщение не удалено:', e.message)) : null);
-
 /**
  * Текст пользователя, пока бот ждёт токен доступа, строку поиска репозитория или описание изменений. true — текст
  * обработан здесь и агенту не передаётся. Токен агенту не уходит никогда: даже если ожидание истекло, сообщение
@@ -461,77 +169,24 @@ const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_i
  */
 export async function onGitInput(st, text, { messageId, now = Date.now() } = {}) {
   const wait = st.pendingInput;
-  if (!['gitToken', 'gitSearch', 'gitMessage', 'gitHostUrl', 'gitHostName', 'gitBranch', ...PUBLISH_INPUTS].includes(wait?.kind)) return false;
+  if (!pendingKindMatches(wait, ['gitToken', 'gitSearch', 'gitMessage', 'gitHostUrl', 'gitHostName', 'gitBranch', ...PUBLISH_INPUTS])) return false;
   const lang = langOf(st.userId);
   await freshen(st);
-  const expired = now - wait.at > GIT_WAIT_MS;
+  const expired = isPendingExpired(wait, now);
   const send = (v) => tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('git:', e.message));
+  const view = () => gitView(st, lang);
 
-  if (wait.kind === 'gitToken') {
-    await dropMessage(st, messageId);
-    const host = findHost(wait.host);
-    if (expired || !host) {
-      st.pendingInput = null;
-      return (await say(st.to, t('git.tokenExpired', lang)), true);
-    }
-    const token = text.trim();
-    if (/\s/.test(token) || token.length < 10) return (await say(st.to, t('git.tokenBad', lang), { reply_markup: cancelMarkup(lang) }), true);
-    let profile;
-    try {
-      profile = await fetchProfile(host, token);
-    } catch (e) {
-      log('git: проверка токена:', e.message, '| пользователь', st.userId);
-      const textFail = e instanceof HostError && ['auth', 'forbidden'].includes(e.code) ? t('git.tokenBad', lang) : t('git.tokenFail', lang, { msg: e.message });
-      return (await say(st.to, textFail, { reply_markup: cancelMarkup(lang) }), true); // ожидание остаётся: можно прислать ещё раз
-    }
-    st.pendingInput = null;
-    await finishConnect(st, host, { token }, profile, lang, send, 'git.connected');
-    return true;
-  }
+  if (wait.kind === 'gitToken') return onTokenInput(st, text, { wait, expired, lang, messageId, send, view });
 
-  st.pendingInput = null;
+  clearPendingInput(st);
   if (expired) return false; // адрес сервера, строка поиска и описание изменений — не секреты: позже это обычный запрос агенту
   if (wait.kind === 'gitBranch') return onBranchInput(st, text, { wait, now, lang, project: projectOf(st) });
-  if (PUBLISH_INPUTS.includes(wait.kind)) return onPublishInput(st, text, { wait, now, lang, send, project: projectOf(st), view: () => gitView(st, lang) });
+  if (pendingKindMatches(wait, PUBLISH_INPUTS)) return onPublishInput(st, text, { wait, now, lang, send, project: projectOf(st), view });
   // свои серверы: адрес нового сервера или новое название — только от администратора
-  if (wait.kind === 'gitHostUrl' || wait.kind === 'gitHostName') {
-    if (!isAdmin(st.userId)) return false;
-    if (wait.kind === 'gitHostName') {
-      renameCustomHost(wait.host, text);
-      return (await send(hostsView(lang)), true);
-    }
-    const again = () => (st.pendingInput = { ...wait, at: now }); // адрес не подошёл — ждём другой
-    const candidate = customHost(wait.hostKind, text);
-    if (!candidate) return (again(), await say(st.to, t('git.hosts.badUrl', lang), { reply_markup: cancelMarkup(lang) }), true);
-    const probe = await probeHost(candidate);
-    if (!probe.ok) {
-      again();
-      return (await say(st.to, t('git.hosts.probeFail', lang, { url: candidate.web, kind: KIND_LABEL[candidate.kind], msg: probe.error }), { reply_markup: cancelMarkup(lang) }), true);
-    }
-    const added = addCustomHost(wait.hostKind, candidate.web);
-    if (added.error) return (await send(hostsView(lang, th('git.hosts.exists', lang))), true);
-    log('свой сервер git добавлен:', added.host.kind, added.host.web, '| администратор', st.userId);
-    return (await send(hostsView(lang, th('git.hosts.added', lang, { label: added.host.label }))), true);
-  }
-  if (wait.kind === 'gitSearch') {
-    const host = findHost(wait.host);
-    const account = host ? db.getGitAccount(st.userId, host.id) : null;
-    if (!account) return false;
-    try {
-      await send(await reposView(st, host, account, { search: text.trim().slice(0, 60) }, lang));
-    } catch (e) {
-      await send({ text: failText(e, lang, null, errorRootOf(st.userId)) });
-    }
-    return true;
-  }
+  if (pendingKindMatches(wait, ['gitHostUrl', 'gitHostName'])) return onHostInput(st, text, { wait, now, lang, send });
+  if (wait.kind === 'gitSearch') return onSearchInput(st, text, { wait, lang, send });
   // описание изменений: первая строка, не длиннее 200 символов
-  const message = [...text.trim().split(/\r?\n/)[0]].slice(0, 200).join('') || t('git.autoMessage', lang, { date: dateOf(new Date().toISOString(), lang) });
-  if (st.gitBusy || st.busy) return (await say(st.to, t(st.busy ? 'git.agentBusy' : 'git.busy', lang)), true);
-  const progress = await tg('sendMessage', { ...dest(st.to), text: th('git.saving', lang), ...HTML }).catch(() => null);
-  const edit = (v) =>
-    progress
-      ? tg('editMessageText', { chat_id: st.chatId, message_id: progress.message_id, text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => /not modified/i.test(e.message) || log('git:', e.message))
-      : send(v);
-  await repoAction(st, 'save', lang, edit, { message });
-  return true;
+  return onMessageInput(st, text, { lang, send, view });
 }
+
+export { cleanFailedClone };

@@ -1,7 +1,7 @@
 // Разбор входящих сообщений: цитата, на которую отвечает пользователь, неподдерживаемые виды сообщений, опечатки в командах.
 
 /** Сколько символов цитаты передаём агенту. */
-export const QUOTE_MAX = 1500;
+const QUOTE_MAX = 1500;
 
 /** Текст RichText (строка, объект с вложенным text или массив таких) без оформления. */
 const plainRich = (x) => (typeof x === 'string' ? x : Array.isArray(x) ? x.map(plainRich).join('') : x && typeof x === 'object' ? plainRich(x.text ?? '') : '');

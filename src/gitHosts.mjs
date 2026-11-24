@@ -11,7 +11,7 @@ const TIMEOUT_MS = 15_000;
  * Адрес своего сервера из текста администратора: «https://git.example.com» или с путём («https://host/gitlab»).
  * Только https; завершающие «/», запрос и якорь отбрасываются. Не подходит — null.
  */
-export function normalizeHostUrl(input) {
+function normalizeHostUrl(input) {
   let u;
   try {
     u = new URL(String(input ?? '').trim());
@@ -181,7 +181,7 @@ export function missingScopes(host, scopes) {
   return has('api') ? [] : ['api'];
 }
 
-export const REPOS_PAGE = 10;
+const REPOS_PAGE = 10;
 
 /**
  * Репозитории пользователя, недавно менявшиеся первыми: {items: [{name, url, private}], more}.

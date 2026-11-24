@@ -14,6 +14,9 @@ import { tc } from './cli-i18n.mjs';
 const version = () => JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version;
 const REPO = 'selesnow/acpgram';
 const NODE_FLAGS = ['--disable-warning=ExperimentalWarning'];
+const UPDATE_MANUAL = process.platform === 'win32'
+  ? `irm https://github.com/${REPO}/releases/latest/download/install.ps1 | iex`
+  : `curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh -o install.sh && bash install.sh`;
 
 /** Справка на языке системы. */
 export const help = () => tc('cli.help', { repo: REPO });
@@ -109,7 +112,7 @@ if (isMain()) {
     if (res.error) {
       console.error(tc('cli.spawnFail', { cmd, msg: res.error.message }));
       if (/EPERM|EACCES/.test(res.error.code ?? '')) console.error(tc('cli.blocked'));
-      if (r.update) console.error(tc('cli.updateManual', { cmd: process.platform === 'win32' ? `irm https://github.com/${REPO}/releases/latest/download/install.ps1 | iex` : `curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh -o install.sh && bash install.sh` }));
+      if (r.update) console.error(tc('cli.updateManual', { cmd: UPDATE_MANUAL }));
     } else if (r.update) {
       const after = version();
       console.log(res.status === 0 ? tc('cli.updated', { before, after, same: before === after ? tc('cli.alreadyLatest') : '' }) : tc('cli.updateFailed', { code: res.status, after }));

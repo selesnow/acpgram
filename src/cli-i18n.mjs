@@ -1,7 +1,7 @@
 // Язык команд acpgram в терминале (справка, мастер настройки, служба, обновление): определяется по системе пользователя —
 // русский, украинский, в любом другом случае английский. Выбора в мастере нет; ACPGRAM_LANG (ru | uk | en) — скрытая
 // подмена для Docker, CI и проверки. Тексты бота в Telegram — отдельно (i18n.mjs, язык Telegram пользователя).
-import { spawnSync } from 'node:child_process';
+import { regQuery as runRegQuery } from './winReg.mjs';
 
 export const CLI_LANGS = ['en', 'ru', 'uk'];
 
@@ -32,7 +32,7 @@ export function parseRegValue(stdout) {
 const REG_EXE = process.env.SystemRoot ? `${process.env.SystemRoot}\\System32\\reg.exe` : 'reg';
 
 const regQuery = (key, name) => {
-  const r = spawnSync(REG_EXE, ['query', key, '/v', name], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+  const r = runRegQuery(['query', key, '/v', name], { exe: REG_EXE, encoding: 'utf8', timeout: 3000 });
   return r.status === 0 ? parseRegValue(r.stdout) : null;
 };
 
@@ -88,6 +88,33 @@ export const setCliLang = (lang) => {
  * что у каждого ключа есть все переводы и одинаковые подстановки.
  */
 export const CLI_MESSAGES = {
+  'err.checkTimeout': { en: 'no reply in {sec} s', ru: 'нет ответа за {sec} с', uk: 'немає відповіді за {sec} с' },
+  'err.checkExit': { en: 'exit code {code}', ru: 'код {code}', uk: 'код виходу {code}' },
+  'err.engineOld.update': {
+    en: 'version {version}, requires {min}+ — update: {update}',
+    ru: 'версия {version}, нужна {min}+ — обновите: {update}',
+    uk: 'версія {version}, потрібна {min}+ — оновіть: {update}',
+  },
+  'err.engineOld.noUpdate': {
+    en: 'version {version}, requires {min}+',
+    ru: 'версия {version}, нужна {min}+',
+    uk: 'версія {version}, потрібна {min}+',
+  },
+  'install.agy': {
+    en: 'Antigravity CLI 1.5+ (with the acp subcommand); sign in once (agy acp --login) or set a Gemini API key (GEMINI_API_KEY and "modelProvider": "gemini" in settings.json)',
+    ru: 'Antigravity CLI 1.5+ (с подкомандой acp); войдите один раз (agy acp --login) или задайте ключ Gemini API (GEMINI_API_KEY и "modelProvider": "gemini" в settings.json)',
+    uk: 'Antigravity CLI 1.5+ (з підкомандою acp); увійдіть один раз (agy acp --login) або задайте ключ Gemini API (GEMINI_API_KEY і "modelProvider": "gemini" у settings.json)',
+  },
+  'install.codex': {
+    en: 'npm i -g @agentclientprotocol/codex-acp (requires Codex CLI installed and signed in: codex login)',
+    ru: 'npm i -g @agentclientprotocol/codex-acp (нужен установленный Codex CLI и вход: codex login)',
+    uk: 'npm i -g @agentclientprotocol/codex-acp (потрібен встановлений Codex CLI та вхід: codex login)',
+  },
+  'install.opencode': {
+    en: 'npm i -g opencode-ai (models: provider API keys in the environment or opencode auth login; free OpenCode Zen models need no key)',
+    ru: 'npm i -g opencode-ai (модели: ключи API провайдеров в окружении или opencode auth login; бесплатные модели OpenCode Zen — без ключа)',
+    uk: 'npm i -g opencode-ai (моделі: ключі API провайдерів у оточенні або opencode auth login; безкоштовні моделі OpenCode Zen — без ключа)',
+  },
   // ---------- acpgram (cli.mjs) ----------
   'cli.help': {
     en: `AcpGram — Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)

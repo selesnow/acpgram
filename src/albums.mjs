@@ -2,7 +2,7 @@
 // Копим сообщения по ключу и отдаём группу целиком, когда новых сообщений нет waitMs миллисекунд.
 
 /** Задержка после последнего сообщения альбома. */
-export const ALBUM_WAIT_MS = 1500;
+const ALBUM_WAIT_MS = 1500;
 
 /**
  * @param {{waitMs?: number, onFlush: (key: string, items: object[]) => void}} o

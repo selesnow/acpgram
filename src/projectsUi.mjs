@@ -3,12 +3,16 @@ import { dirname, join } from 'node:path';
 import { botInfo, db, langOf, log, say, who } from './ctx.mjs';
 import { ROOT, USER_WORKSPACES, canGoUp, createDir, findDirs, folderName, insideRoot, isPersonalRoot, listDirs, navStart, resolveAsPath, samePath, showPath } from './projects.mjs';
 import { gitAvailable } from './git.mjs';
-import { LOCALES, errText, t } from './i18n.mjs';
+import { errText, t } from './i18n.mjs';
+import { clearPendingInput, isPendingExpired, pendingKindMatches, setPendingInput } from './pendingInput.mjs';
 import { endAgent, errorRootOf, isAdmin, recentProjects, rootOf, saveProject, topicsOn } from './state.mjs';
 import { topicLink } from './topics.mjs';
 import { newTopic } from './topicsUi.mjs';
 import { dest, tg } from './telegram.mjs';
 import { hCode, hRaw, th } from './ui.mjs';
+import { pageInfo, pageNav, pagesOf } from './pagination.mjs';
+import { btnText, cancelRow, cbCtx, fmtDate } from './uiActions.mjs';
+import { createKeyRegistry } from './keyRegistry.mjs';
 
 const PAGE = 20;
 const HTML = { parse_mode: 'HTML' };
@@ -32,28 +36,13 @@ export function folderRows(names, labelOf = (n) => n) {
   return rows;
 }
 
-// callback_data в Telegram ограничена 64 байтами, поэтому пути в кнопках заменены числовыми токенами
-let tokSeq = 0;
-const tokByPath = new Map();
-const pathByTok = new Map();
-function tok(p) {
-  let tk = tokByPath.get(p);
-  if (tk === undefined) {
-    if (pathByTok.size > 3000) {
-      tokByPath.clear();
-      pathByTok.clear(); // старые кнопки станут «устаревшими», а не укажут на чужую папку: счётчик не сбрасывается
-    }
-    tk = ++tokSeq;
-    tokByPath.set(p, tk);
-    pathByTok.set(tk, p);
-  }
-  return tk;
-}
+const pathKeys = createKeyRegistry({ scope: 'global', limit: 3000, eviction: 'clear', stable: true });
+const tok = (p) => pathKeys.add(p);
 
 /** Токен пути для кнопок других экранов (/files). Путь из токена обязан проверять тот, кто его использует. */
 export const pathToken = tok;
 /** Путь по токену из кнопки или undefined, если кнопка устарела. */
-export const tokenPath = (tk) => pathByTok.get(Number(tk));
+export const tokenPath = (tk) => pathKeys.get(Number(tk));
 
 /** Путь для показа пользователю диалога: относительно его корня (личное пространство — без пути на сервере). */
 const pathFor = (st, p, lang) => showPath(p, lang, rootOf(st.userId));
@@ -83,20 +72,13 @@ function navKeyboard(st, dir, page = 0, recent = [], lang) {
   const root = rootOf(st.userId);
   const label = (n) => folderLabel(st, dir, n);
   const kids = listDirs(dir);
-  const pages = Math.max(1, Math.ceil(kids.length / PAGE));
-  page = Math.min(Math.max(page, 0), pages - 1);
+  const { page: current, pages } = pageInfo(kids.length, PAGE, page);
   const rows = [
     // обрезка по символам, а не по UTF-16: половинка эмодзи — невалидный UTF-8, Telegram отклонил бы всё сообщение
-    ...recent.map((p) => [{ text: [...`🕘 ${pathFor(st, p, lang)}`].slice(0, 120).join(''), callback_data: `nav:s:${tok(p)}` }]),
-    ...folderRows(kids.slice(page * PAGE, (page + 1) * PAGE), label).map((row) => row.map((n) => ({ text: `📁 ${label(n)}`, callback_data: `nav:o:${tok(join(dir, n))}:0` }))),
+    ...recent.map((p) => [{ text: btnText(`🕘 ${pathFor(st, p, lang)}`, 120), callback_data: `nav:s:${tok(p)}` }]),
+    ...folderRows(kids.slice(current * PAGE, (current + 1) * PAGE), label).map((row) => row.map((n) => ({ text: `📁 ${label(n)}`, callback_data: `nav:o:${tok(join(dir, n))}:0` }))),
   ];
-  if (pages > 1) {
-    const r = [];
-    if (page > 0) r.push({ text: '◀', callback_data: `nav:o:${tok(dir)}:${page - 1}` });
-    r.push({ text: `${page + 1}/${pages}`, callback_data: 'nav:n' });
-    if (page < pages - 1) r.push({ text: '▶', callback_data: `nav:o:${tok(dir)}:${page + 1}` });
-    rows.push(r);
-  }
+  rows.push(...pageNav(current, pages, (p) => `nav:o:${tok(dir)}:${p}`));
   const ctl = [];
   if (canGoUp(dir, root)) ctl.push({ text: t('proj.up', lang), callback_data: `nav:o:${tok(dirname(dir))}:0` });
   ctl.push({ text: t('proj.choose', lang), callback_data: `nav:s:${tok(dir)}`, style: 'success' });
@@ -170,34 +152,33 @@ export async function handleProject(st, arg) {
 
 export async function onNavCallback(st, cb) {
   const [, action, tokStr, pageStr] = cb.data.split(':');
-  const chatId = cb.message?.chat?.id;
-  const messageId = cb.message?.message_id;
   const lang = langOf(st.userId);
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
+  const { ack, edit: editQuiet, messageId } = cbCtx({ chatId: cb.message?.chat?.id }, cb, { html: true, alert: true });
+  const { edit: editNav } = cbCtx({ chatId: cb.message?.chat?.id }, cb, { html: true, label: 'nav:' });
   if (action === 'n') return ack();
   if (action === 'x') {
     // «Отмена» под просьбой прислать название нового проекта
-    st.pendingInput = null;
+    clearPendingInput(st);
     await ack();
-    return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: th('proj.newCancelled', lang), ...HTML, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    return editQuiet({ text: th('proj.newCancelled', lang) });
   }
   // токены путей общие для всех пользователей, поэтому путь из кнопки каждый раз проверяется по корню нажавшего
   const root = rootOf(st.userId);
-  const p = pathByTok.get(Number(tokStr));
+  const p = tokenPath(tokStr);
   if (!p) return ack(t('proj.stale', lang));
   if (action === 'o') {
     const dir = insideRoot(p, root);
     if (!dir) return ack(t('proj.noFolder', lang));
     await ack();
-    return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: navText(st, dir, lang), ...HTML, reply_markup: navKeyboard(st, dir, Number(pageStr) || 0, [], lang) }).catch((e) => log('nav:', e.message));
+    return editNav({ text: navText(st, dir, lang), markup: navKeyboard(st, dir, Number(pageStr) || 0, [], lang) });
   }
   if (action === 'c') {
     const dir = canCreateProject(st.userId) ? insideRoot(p, root) : null;
     if (!dir) return ack(t('proj.noFolder', lang));
     if (st.busy) return ack(t('busy.stop', lang));
     await ack();
-    st.pendingInput = { kind: 'newProject', dir, at: Date.now() };
-    return say(st.to, th('proj.newAsk', lang, { dir: hCode(pathFor(st, dir, lang)) }), { ...HTML, reply_markup: cancelMarkup(lang) });
+    setPendingInput(st, 'newProject', { dir });
+    return say(st.to, th('proj.newAsk', lang, { dir: hCode(pathFor(st, dir, lang)) }), { ...HTML, reply_markup: cancelRow('nav', lang) });
   }
   if (action === 's') {
     if (st.busy) return ack(t('busy.stop', lang));
@@ -209,9 +190,7 @@ export async function onNavCallback(st, cb) {
 // ---- новый проект: кнопка «Новый проект» → бот ждёт название папки следующим сообщением ----
 
 /** Сколько бот ждёт название папки нового проекта; позже текст снова считается запросом агенту. */
-export const NEW_PROJECT_WAIT_MS = 10 * 60_000;
-
-const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'nav:x' }]] });
+export { NEW_PROJECT_WAIT_MS } from './pendingInput.mjs';
 
 /**
  * Текст пользователя, когда бот ждёт название папки нового проекта (st.pendingInput): создаёт папку и выбирает её
@@ -220,17 +199,17 @@ const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lan
  */
 export async function onProjectNameInput(st, text, now = Date.now()) {
   const wait = st.pendingInput;
-  if (wait?.kind !== 'newProject') return false;
-  if (now - wait.at > NEW_PROJECT_WAIT_MS) {
-    st.pendingInput = null;
+  if (!pendingKindMatches(wait, 'newProject')) return false;
+  if (isPendingExpired(wait, now)) {
+    clearPendingInput(st);
     return false;
   }
   const lang = langOf(st.userId);
   if (!folderName(text)) {
-    await say(st.to, th('proj.newBad', lang), { ...HTML, reply_markup: cancelMarkup(lang) });
+    await say(st.to, th('proj.newBad', lang), { ...HTML, reply_markup: cancelRow('nav', lang) });
     return true;
   }
-  st.pendingInput = null;
+  clearPendingInput(st);
   let dir;
   try {
     // право и место проверяются заново: за время ожидания они могли измениться
@@ -253,9 +232,6 @@ export async function onProjectNameInput(st, text, now = Date.now()) {
 
 const TOPICS_PAGE = 10;
 
-/** Дата последней активности темы на кнопке: «12.11». */
-const shortDate = (iso, lang) => new Date(iso).toLocaleDateString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit' });
-
 /**
  * Темы пользователя в проекте: кнопки, открывающие тему (последние по активности, по TOPICS_PAGE на страницу),
  * «➕ Новый диалог в этом проекте» и «🧹 Убрать лишние». cleanup — режим уборки: у тем кнопки «✖» (убрать из списка).
@@ -265,23 +241,17 @@ export function projectTopicsView(st, project, { page = 0, cleanup = false } = {
   const lang = langOf(st.userId);
   const p = tok(project);
   const { items, total } = db.listTopics(st.userId, project, TOPICS_PAGE, page * TOPICS_PAGE);
-  const pages = Math.max(1, Math.ceil(total / TOPICS_PAGE));
+  const pages = pagesOf(total, TOPICS_PAGE);
   const head = th(st.topic ? 'tpl.headTopic' : 'tpl.headGeneral', lang, { p: hCode(pathFor(st, project, lang)) });
   const body = !total ? th('tpl.none', lang) : cleanup ? th('tpl.cleanupHint', lang) : th('tpl.list', lang, { n: total });
-  const label = (x) => [...`${x.name || t('tpl.unnamed', lang)} · ${shortDate(x.updated_at, lang)}`].slice(0, 60).join('');
+  const label = (x) => btnText(`${x.name || t('tpl.unnamed', lang)} · ${fmtDate(x.updated_at, lang, { year: false })}`);
   const rows = items.map((x) => {
     if (cleanup) return [{ text: `✖ ${label(x)}`, callback_data: `tpl:h:${p}:${x.thread_id}:${page}` }];
     const url = topicLink(botInfo.username, x.thread_id);
     return [url ? { text: label(x), url } : { text: label(x), callback_data: 'nav:n' }];
   });
-  if (pages > 1) {
-    const mode = cleanup ? 'c' : 'p';
-    const nav = [];
-    if (page > 0) nav.push({ text: '◀', callback_data: `tpl:${mode}:${p}:${page - 1}` });
-    nav.push({ text: `${page + 1}/${pages}`, callback_data: 'nav:n' });
-    if (page < pages - 1) nav.push({ text: '▶', callback_data: `tpl:${mode}:${p}:${page + 1}` });
-    rows.push(nav);
-  }
+  const mode = cleanup ? 'c' : 'p';
+  rows.push(...pageNav(page, pages, (n) => `tpl:${mode}:${p}:${n}`));
   if (cleanup) rows.push([{ text: t('tpl.done', lang), callback_data: `tpl:p:${p}:0` }]);
   else {
     rows.push([{ text: t('tpl.new', lang), callback_data: `tpl:n:${p}`, style: 'success' }]);
@@ -293,21 +263,23 @@ export function projectTopicsView(st, project, { page = 0, cleanup = false } = {
 /** Показывает темы проекта: новым сообщением или вместо сообщения с выбором проекта (messageId). */
 function showProjectTopics(st, project, { messageId } = {}) {
   const v = projectTopicsView(st, project);
-  return messageId
-    ? tg('editMessageText', { chat_id: st.chatId, message_id: messageId, text: v.text, ...HTML, reply_markup: v.markup }).catch(() => say(st.to, v.text, { ...HTML, reply_markup: v.markup }))
-    : say(st.to, v.text, { ...HTML, reply_markup: v.markup });
+  if (!messageId) return say(st.to, v.text, { ...HTML, reply_markup: v.markup });
+  const { edit } = cbCtx(st, { message: { chat: { id: st.chatId }, message_id: messageId } }, {
+    html: true,
+    fallback: (text, markup, view) => say(st.to, text, { ...HTML, reply_markup: view?.markup ?? markup }),
+  });
+  return edit(v);
 }
 
 /** Кнопки списка тем: tpl:p (страница), tpl:c (уборка), tpl:h (убрать тему из списка), tpl:n (новый диалог в проекте). */
 export async function onTopicListCallback(st, cb) {
   const [, action, tokStr, a3, a4] = (cb.data || '').split(':');
   const lang = langOf(st.userId);
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text } : {}) }).catch(() => {});
+  const { ack, edit } = cbCtx(st, cb, { html: true, label: 'темы проекта:' });
   // путь из кнопки проверяется по корню нажавшего: токены путей общие для всех пользователей
-  const known = pathByTok.get(Number(tokStr));
+  const known = tokenPath(tokStr);
   const project = known ? insideRoot(known, rootOf(st.userId)) : null;
   if (!project) return ack(t('proj.stale', lang));
-  const edit = (v) => tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text: v.text, ...HTML, reply_markup: v.markup }).catch((e) => log('темы проекта:', e.message));
   if (action === 'n') {
     await ack();
     return newTopic(st, { project });

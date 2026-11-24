@@ -1,15 +1,15 @@
 // Telegram-интерфейс к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) через ACP.
 // Доступ: главный администратор (ALLOWED_USER_ID) и сотрудники, которым он выдал доступ. Остальным бот не отвечает,
 // кроме запроса доступа администратору.
-import { rmSync } from 'node:fs';
 import { DEFAULT_ENGINE, agentEnv, checkEngines, isRequired, setAvailability, setSandboxBroken } from './engines.mjs';
 import { SANDBOX, checkInSandbox, probeSandbox } from './sandbox.mjs';
-import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
+import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, DATA_DIR, HISTORY_KEEP_DAYS, IDLE_MINUTES, LEVEL_KEYS, LOGS_KEEP_DAYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang, sweepLangCache } from './ctx.mjs';
 import { adminCommand, handleUnknownUser, onAdminCallback, sweepUnknownUsers, welcomeNote } from './admin.mjs';
-import { LANGS, LANG_CODES, LANG_PICK, LOCALES, errText, normLang, t } from './i18n.mjs';
+import { tc } from './cli-i18n.mjs';
+import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
 import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
 import { handleFiles, onFileInput, onFileUpload, onFilesCallback } from './filesUi.mjs';
@@ -17,467 +17,128 @@ import { checkGit, gitCommand } from './git.mjs';
 import { GIT_AGENT_AUTH, tokenReminders } from './gitAccess.mjs';
 import { handleGit, onGitCallback, onGitInput } from './gitUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
-import { ADMIN_SANDBOX, dropPermissions, errorRootOf, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { ADMIN_SANDBOX, closeSession, dropPermissions, endAgent, engineOf, errorRootOf, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
 import { deleteTopic, isAutoTopicCommand, topicInfoOf } from './topics.mjs';
 import { setSyncKill } from './acp.mjs';
 import { downloadFile, sendRich, tg } from './telegram.mjs';
-import { MAX_FILE_BYTES, IMAGE_BLOCK_MAX, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
+import { IMAGE_BLOCK_MAX, MAX_FILE_BYTES, cleanupFiles, describeAttachment, isImageMime, saveUpload, uploadsDir } from './files.mjs';
 import { archiveKind, extractArchiveAsync } from './archive.mjs';
 import { createAlbumBuffer } from './albums.mjs';
 import { dropQueue, enqueue, onAskCallback, onPermissionCallback, onQueueCallback, runTurn } from './turn.mjs';
 import { nearCommand, quoteOf, unsupportedKind } from './incoming.mjs';
 import { onWidgetQuery } from './widgetsUi.mjs';
 import { DOCS_URL, docsMenuButton, helpMarkup, startView } from './ui.mjs';
+import { fmtDate } from './uiActions.mjs';
 import { positiveEnv } from './app.mjs';
 import { createQueue } from './queue.mjs';
 import { directorySize, fitsUpload, freeBytes } from './quota.mjs';
 import { forceStopAfter } from './forceStop.mjs';
 import { looksLikeSecret } from './pending.mjs';
+import { clearPendingInput } from './pendingInput.mjs';
 import { cleanupLogs, logError } from './log.mjs';
 import { maybeNotifySafety } from './warnings.mjs';
+import { configureBotRouting, handleUpdate, setupCommands, sweepUpdateLimits } from './botRouting.mjs';
 
 const UPLOADS_QUOTA_MB = positiveEnv('UPLOADS_QUOTA_MB', 0);
 const MIN_FREE_MB = positiveEnv('MIN_FREE_MB', 100);
-const UPDATE_LIMIT = 20; // обновлений от одного пользователя в окне ниже: защита от зациклившегося клиента
-const UPDATE_WINDOW_MS = 10_000;
-const updateHits = new Map();
-const receiveQueue = createQueue(1);
-const reservedUploads = new Map();
 
-if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
-  console.error('Нужны TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID (см. .env)');
-  process.exit(1);
-}
-
-/** Есть ли у пользователя доступ: администратор или активный сотрудник. */
-const hasAccess = (id) => isAdmin(id) || db.getUser(id)?.status === 'active';
-
-/** Ограничение частоты обновлений: 20 событий за 10 секунд от одного пользователя. */
-function tooManyUpdates(id) {
-  const now = Date.now();
-  const hits = (updateHits.get(id) ?? []).filter((at) => now - at < UPDATE_WINDOW_MS);
-  if (hits.length >= UPDATE_LIMIT) {
-    updateHits.set(id, hits);
-    return true;
-  }
-  hits.push(now);
-  updateHits.set(id, hits);
-  return false;
-}
-
-/** Чистит историю счётчиков, чтобы она не росла вместе с числом пользователей. */
-function sweepUpdateLimits() {
-  const until = Date.now() - UPDATE_WINDOW_MS;
-  let n = 0;
-  for (const [id, hits] of updateHits) {
-    const fresh = hits.filter((at) => at > until);
-    if (!fresh.length) {
-      updateHits.delete(id);
-      n++;
-    } else updateHits.set(id, fresh);
-  }
-  return n;
-}
-
-/** Модель пользователя для экрана /start: выбранная или «Авто» на его языке. */
-const modelLabel = (st) => {
-  const engine = engineOf(st);
-  const model = effectiveSelection(st.userId, engine).model;
-  return model ? choiceName(engine, 'model', model) : t('auto', langOf(st.userId));
-};
-
-/** Выбор языка: три кнопки (по /language и кнопке на экране /start). По умолчанию язык берётся из настроек Telegram. */
-const sendLangPicker = (chatId) =>
-  say(chatId, LANG_PICK, { reply_markup: { inline_keyboard: [LANG_CODES.map((code) => ({ text: LANGS[code], callback_data: `lang:${code}` }))] } });
-
-/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
-const sendStart = (st) => {
-  const lang = langOf(st.userId);
-  const admin = isAdmin(st.userId);
-  const topics = topicsSupport.enabled ? (topicsOn(st.userId) ? 'on' : 'off') : null; // режим «диалоги», если у бота есть темы
-  return sendRich(st.to, startView({ level: levelLabel(st.userId), project: userPath(st.userId, st.project, lang), engine: engineOf(st).label, model: modelLabel(st), isAdmin: admin, note: admin ? null : welcomeNote(lang), topics, lang })).catch((e) => log('start:', e.message));
-};
-
-function helpCommand(st) {
-  const lang = langOf(st.userId);
-  return say(st.to, t('help.text', lang, { url: DOCS_URL }), { reply_markup: helpMarkup(lang) });
-}
-
-/** Кнопка «⏹ Остановить» под сообщениями «запрос ещё выполняется» — вместо набора /stop. */
-const stopMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.stop', lang), callback_data: 'ui:stop' }]] });
-/** Кнопка «Сессии» — вместо набора /sessions. */
-const sessionsMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.sessions', lang), callback_data: 'ui:sessions' }]] });
-
-/** Кнопки экрана /start и служебных сообщений (ui:<команда>) работают как соответствующие команды. */
-async function onUiCallback(st, cb) {
-  const name = (cb.data || '').slice('ui:'.length);
-  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-  if (COMMANDS.some((c) => c.button && c.name === name)) return handleText(st, `/${name}`);
-}
-
-/** Кнопка выбора языка (lang:<код>): запоминает выбор и заменяет меню итогом. */
-async function onLangCallback(st, cb) {
-  const code = (cb.data || '').slice('lang:'.length);
-  const chatId = cb.message?.chat?.id ?? st.chatId;
-  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-  if (!LANG_CODES.includes(code)) return;
-  setLang(st.userId, code);
-  const text = t('lang.set', code, { name: LANGS[code] });
-  await tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => say(chatId, text));
-}
-
-/** /language [ru|uk|en] — без аргумента показываем выбор языка. */
-function languageCommand(st, arg) {
-  const q = (arg || '').trim().toLowerCase();
-  const code = normLang(q);
-  if (!code || q !== code) return sendLangPicker(st.to);
-  setLang(st.userId, code);
-  return say(st.to, t('lang.set', code, { name: LANGS[code] }));
-}
-
-function stopCommand(st) {
-  const queued = dropQueue(st); // «стоп» отменяет и сообщение, которое ждало своей очереди
-  if (!st.busy) return queued ? undefined : say(st.to, t('stop.none', langOf(st.userId)));
-  st.agent?.cancel();
-  forceStopAfter(st);
-  dropPermissions(st);
-}
-
-function closeCommand(st) {
-  const lang = langOf(st.userId);
-  if (!closeSession(st, 'close')) return say(st.to, t('close.none', lang));
-  return say(st.to, t('close.done', lang, { slot: isAdmin(st.userId) ? '' : t('close.slot', lang) }), { reply_markup: sessionsMarkup(lang) });
-}
-
-function newCommand(st) {
-  const lang = langOf(st.userId);
-  if (topicsOn(st.userId)) return newTopic(st); // режим «диалоги»: новый диалог — новая тема, текущий остаётся как есть
-  if (st.busy) return say(st.to, t('busy.stop', lang), { reply_markup: stopMarkup(lang) });
-  endAgent(st, 'new');
-  return say(st.to, t('new.done', lang, { engine: engineOf(st).label, project: userPath(st.userId, st.project, lang) }));
-}
-
-/**
- * Команды бота — единственный список: по нему работают разбор текста (handleText), меню Telegram (menuFor), кнопки
- * экрана /start (onUiCallback) и перенос команды из темы, созданной Telegram, в General (BOT_COMMANDS).
- *   aliases — другие имена команды; admin — только главному администратору; menu — показывать в меню команд
- *   (функция — по условию); button — есть кнопка ui:<имя> на экране /start; run(st, arg) — выполнение.
- * Порядок — порядок в меню: сначала команды администратора.
- */
-const COMMANDS = [
-  { name: 'active', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/active') },
-  { name: 'users', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/users') },
-  { name: 'invite', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/invite') },
-  { name: 'usage', admin: true, menu: true, button: true, run: (st) => adminCommand(st.to, '/usage') },
-  { name: 'project', menu: true, button: true, run: (st, arg) => handleProject(st, arg) },
-  { name: 'files', menu: true, button: true, run: (st) => handleFiles(st) },
-  { name: 'git', menu: true, button: true, run: (st) => handleGit(st) },
-  { name: 'engine', menu: true, button: true, run: (st, arg) => handleEngine(st, arg) },
-  { name: 'model', menu: true, button: true, run: (st, arg) => handleModel(st, arg) },
-  { name: 'new', menu: true, button: true, run: newCommand },
-  { name: 'sessions', menu: true, button: true, run: (st) => handleSessions(st) },
-  { name: 'stop', menu: true, button: true, run: stopCommand },
-  { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
-  { name: 'topics', menu: () => topicsSupport.enabled, button: true, run: (st) => handleTopics(st) }, // в меню — если у бота включены темы
-  { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
-  { name: 'help', menu: true, run: helpCommand },
-  { name: 'start', menu: true, run: (st) => sendStart(st) },
-];
-
-/** Имена всех команд бота с псевдонимами: только они переносятся из темы, созданной Telegram, в General. */
-const BOT_COMMANDS = new Set(COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
-
-/** Запрос агенту: если диалог занят — в очередь (уйдёт следующим), иначе сразу. */
-const sendToAgent = (st, text, opts = {}) => (st.busy ? enqueue(st, text, opts) : runTurn(st, text, opts));
-
-/**
- * Текст пользователя: команды или запрос к агенту. Неизвестная команда («/что-то») уходит агенту как обычный запрос —
- * у агентов есть свои команды («/compact»); но если она на одну правку отличается от команды бота и агент такой
- * команды не объявлял, это, скорее всего, опечатка: спрашиваем, а не тратим запрос.
- * @param {{quote?: string|null}} [opts] quote — фрагмент прошлого сообщения, на который отвечает пользователь
- */
-async function handleText(st, text, { quote = null, messageId = null } = {}) {
-  const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
-  const name = m?.[1]?.toLowerCase();
-  const command = name ? COMMANDS.find((c) => c.name === name || c.aliases?.includes(name)) : null;
-  const lang = langOf(st.userId);
-  if (command) {
-    st.pendingInput = null; // команда бота отменяет ожидание названия проекта, имени или содержимого файла
-    if (command.admin && !isAdmin(st.userId)) return say(st.to, t('admin.only', lang));
-    return command.run(st, m[2]);
-  }
-  // бот ждёт название папки нового проекта (кнопка «Новый проект» в /project): этот текст — оно, а не запрос агенту
-  if (await onProjectNameInput(st, text)) return;
-  // бот ждёт имя или содержимое файла проекта (/files): содержимое агенту не передаётся и удаляется из чата
-  if (await onFileInput(st, text, { messageId })) return;
-  // бот ждёт токен доступа к GitHub / GitLab, строку поиска репозитория или описание изменений (/git)
-  if (await onGitInput(st, text, { messageId })) return;
-  if (looksLikeSecret(text)) {
-    if (messageId) await tg('deleteMessage', { chat_id: st.chatId, message_id: messageId }).catch(() => {});
-    return say(st.to, t('secret.detected', lang));
-  }
-  if (name && !st.agent?.commands?.has(name)) {
-    const guess = nearCommand(name, COMMANDS.filter((c) => !c.admin || isAdmin(st.userId)).map((c) => c.name));
-    if (guess) {
-      st.rawCommand = text; // «Отправить агенту как есть» (cmd:raw)
-      return say(st.to, t('cmd.typo', lang, { cmd: name, guess }), {
-        reply_markup: { inline_keyboard: [[{ text: `/${guess}`, callback_data: `ui:${guess}` }], [{ text: t('cmd.sendAsIs', lang), callback_data: 'cmd:raw' }]] },
-      });
-    }
-  }
-  return sendToAgent(st, text, { quote });
-}
-
-/** Кнопка «Отправить агенту как есть» под вопросом об опечатке в команде. */
-async function onRawCommandCallback(st, cb) {
-  const text = st.rawCommand;
-  st.rawCommand = null;
-  if (!text) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('cmd.stale', langOf(st.userId)) }).catch(() => {});
-  await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-  await tg('editMessageReplyMarkup', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
-  return sendToAgent(st, text);
-}
-
-const reservedFor = (userId) => reservedUploads.get(String(userId)) ?? 0;
-const reserveUpload = (userId, bytes) => reservedUploads.set(String(userId), reservedFor(userId) + bytes);
-const releaseUpload = (userId, bytes) => reservedUploads.set(String(userId), Math.max(0, reservedFor(userId) - bytes));
-
-function dropReceived(files) {
-  for (const f of files) {
-    try {
-      if (f.unpacked?.dir) rmSync(f.unpacked.dir, { recursive: true, force: true });
-      rmSync(f.path, { force: true });
-    } catch (e) {
-      log('удаление непринятого файла:', e.message);
-    }
-  }
-}
-
-async function receiveFile(st, meta, lang) {
-  if (meta.size > MAX_FILE_BYTES) {
-    await say(st.to, t('file.tooBig', lang));
-    return null;
-  }
-  const dir = uploadsDir(st.userId);
-  if (!fitsUpload({ usedBytes: directorySize(dir), incomingBytes: meta.size, limitMb: UPLOADS_QUOTA_MB, free: freeBytes(dir), minFreeMb: MIN_FREE_MB, reservedBytes: reservedFor(st.userId) })) {
-    await say(st.to, t('file.quota', lang));
-    return null;
-  }
-  reserveUpload(st.userId, meta.size);
-  let data;
-  try {
-    data = await downloadFile(meta.id);
-  } catch (e) {
-    log('скачивание файла:', e.message, '| пользователь', st.userId);
-    await say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }));
-    return null;
-  } finally {
-    releaseUpload(st.userId, meta.size);
-  }
-  if (data.length > MAX_FILE_BYTES) {
-    await say(st.to, t('file.tooBig', lang));
-    return null;
-  }
-  const path = await saveUpload(dir, meta.name, data);
-  log('файл принят', st.userId, path, `${data.length} Б`);
-  const file = { path, name: meta.name, mime: meta.mime, size: data.length };
-  if (isImageMime(meta.mime) && data.length <= IMAGE_BLOCK_MAX) file.data = data;
-  const kind = archiveKind(meta.name);
-  if (kind) {
-    const unpacked = `${path}_unpacked`;
-    try {
-      file.unpacked = { dir: unpacked, ...(await extractArchiveAsync(data, kind, unpacked)) };
-      log('архив распакован', st.userId, unpacked, `${file.unpacked.files.length} файлов, пропущено ${file.unpacked.skipped}`);
-    } catch (e) {
-      log('архив не распакован:', e.reason ?? e.message, '| пользователь', st.userId);
-      await say(st.to, t('file.archiveSkipped', lang, { name: meta.name, why: t(`file.archiveWhy.${e.reason ?? 'corrupt'}`, lang) }));
-    }
-  }
-  return file;
-}
-
-async function processAttachments(st, msgs) {
-  const lang = langOf(st.userId);
-  if (st.receiving) return say(st.to, t('file.receiving', lang));
-  if (st.busy) return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
-  st.receiving = true;
-  try {
-    const files = await receiveQueue.add(async () => {
-      const out = [];
-      for (const msg of msgs) {
-        const meta = describeAttachment(msg);
-        if (!meta) continue;
-        const file = await receiveFile(st, meta, lang);
-        if (file) out.push(file);
-      }
-      return out;
-    });
-    if (!files.length) return;
-    if (st.busy) {
-      dropReceived(files);
-      return say(st.to, t('busy.running', lang), { reply_markup: stopMarkup(lang) });
-    }
-    const caption = msgs.map((m) => m.caption?.trim()).find(Boolean) ?? '';
-    return await runTurn(st, caption, { files });
-  } finally {
-    st.receiving = false;
-  }
-}
-
-// альбом приходит отдельными сообщениями с общим media_group_id: собираем и обрабатываем одним запросом
-const albums = createAlbumBuffer({
-  onFlush: (key, items) => {
-    const { st } = items[0];
-    processAttachments(st, items.map((i) => i.msg).sort((a, b) => a.message_id - b.message_id)).catch((e) => log('альбом:', e.message));
-  },
+configureBotRouting({
+  ADMIN_ID,
+  ADMIN_SANDBOX,
+  DOCS_URL,
+  IMAGE_BLOCK_MAX,
+  LANGS,
+  LANG_CODES,
+  LANG_PICK,
+  MAX_FILE_BYTES,
+  MIN_FREE_MB,
+  UPLOADS_QUOTA_MB,
+  adminCommand,
+  archiveKind,
+  choiceName,
+  clearPendingInput,
+  closeSession,
+  createAlbumBuffer,
+  createQueue,
+  db,
+  deleteTopic,
+  describeAttachment,
+  directorySize,
+  docsMenuButton,
+  downloadFile,
+  dropPermissions,
+  dropQueue,
+  effectiveSelection,
+  endAgent,
+  engineOf,
+  enqueue,
+  errorRootOf,
+  errText,
+  extractArchiveAsync,
+  findState,
+  fitsUpload,
+  forceStopAfter,
+  freeBytes,
+  getState,
+  handleEngine,
+  handleFiles,
+  handleGit,
+  handleModel,
+  handleProject,
+  handleSessions,
+  handleTopics,
+  handleUnknownUser,
+  helpMarkup,
+  isAdmin,
+  isAutoTopicCommand,
+  isImageMime,
+  langOf,
+  levelLabel,
+  log,
+  looksLikeSecret,
+  nearCommand,
+  newTopic,
+  normLang,
+  noteTgLang,
+  onAdminCallback,
+  onAskCallback,
+  onEngineCallback,
+  onFileInput,
+  onFilesCallback,
+  onFileUpload,
+  onGitCallback,
+  onGitInput,
+  onModelCallback,
+  onNavCallback,
+  onPermissionCallback,
+  onProjectNameInput,
+  onQueueCallback,
+  onSessionCallback,
+  onTopicListCallback,
+  onTopicsCallback,
+  onWidgetQuery,
+  quoteOf,
+  runTurn,
+  saveUpload,
+  say,
+  sendRich,
+  setLang,
+  startView,
+  t,
+  tg,
+  topicInfoOf,
+  topicsOn,
+  topicsSupport,
+  unsupportedKind,
+  uploadsDir,
+  userPath,
+  welcomeNote,
 });
 
-function handleAttachment(st, msg) {
-  if (msg.media_group_id) return albums.add(`${st.chatId}:${msg.media_group_id}`, { st, msg });
-  return processAttachments(st, [msg]);
-}
-
-/**
- * Меню команд на языке: по умолчанию — английский; русский и украинский — для клиентов Telegram с таким языком
- * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
- */
-const menuFor = (lang, admin) =>
-  COMMANDS.filter((c) => (typeof c.menu === 'function' ? c.menu() : c.menu) && (admin || !c.admin)).map((c) => ({ command: c.name, description: t(`menu.${c.name}`, lang) }));
-
-async function setupCommands() {
-  await tg('setMyCommands', { scope: { type: 'default' }, commands: menuFor('en', false) });
-  await tg('setMyCommands', { scope: { type: 'chat', chat_id: ADMIN_ID }, commands: menuFor('en', true) });
-  for (const code of LANG_CODES.filter((c) => c !== 'en')) {
-    await tg('setMyCommands', { scope: { type: 'default' }, language_code: code, commands: menuFor(code, false) });
-    await tg('setMyCommands', { scope: { type: 'chat', chat_id: ADMIN_ID }, language_code: code, commands: menuFor(code, true) });
-  }
-  await tg('setChatMenuButton', { menu_button: docsMenuButton() });
-}
-
-async function handleUpdate(u) {
-  const actor = u.message?.from || u.callback_query?.from || u.widget_query?.from || (u.stopped_message_generation ? { id: u.stopped_message_generation.chat?.id ?? '?' } : null);
-  if (actor && tooManyUpdates(actor.id)) return;
-
-  // пользователь нажал «стоп» на черновике
-  if (u.stopped_message_generation) {
-    const sg = u.stopped_message_generation;
-    const st = findState(sg.chat?.id, sg.message_thread_id ?? null); // в личном чате id чата = id пользователя
-    if (st?.busy) {
-      st.agent?.cancel();
-      dropPermissions(st);
-    }
-    return;
-  }
-
-  // запрос от виджета (выбор модели, сессии): доступ проверяется так же, как для сообщений и кнопок
-  if (u.widget_query) {
-    const q = u.widget_query;
-    if (!q.from || q.from.is_bot || (q.chat && q.chat.type !== 'private') || !hasAccess(q.from.id)) return;
-    return onWidgetQuery(q);
-  }
-
-  const msg = u.message;
-  const cb = u.callback_query;
-  const from = msg?.from || cb?.from;
-  if (!from || from.is_bot) return;
-  if (msg && msg.chat.type !== 'private') return; // работаем только в личных чатах
-  if (cb?.message?.chat && cb.message.chat.type !== 'private') return; // и кнопки принимаем только из личного чата
-  // бот работает только в личных чатах, поэтому id чата = id пользователя (на случай кнопки без cb.message)
-  const chatId = msg?.chat.id ?? cb.message?.chat?.id ?? from.id;
-
-  noteTgLang(from.id, from.language_code); // язык по умолчанию — язык Telegram пользователя (в базу — только после проверки доступа)
-  if (!hasAccess(from.id)) {
-    if (cb) return tg('answerCallbackQuery', { callback_query_id: cb.id, text: t('access.denied', langOf(from.id)) }).catch(() => {});
-    if (msg?.text) {
-      log('нет доступа, id =', from.id, from.username);
-      return handleUnknownUser(from, chatId, msg.text);
-    }
-    return;
-  }
-  noteTgLang(from.id, from.language_code, true);
-  if (!isAdmin(from.id)) db.touchUser(from.id, from.username, from.first_name);
-
-  // тема, откуда пришло сообщение или нажата кнопка (темы в личном чате с ботом); null — общий чат
-  const source = msg ?? cb?.message;
-  const threadId = source?.is_topic_message && source.message_thread_id ? source.message_thread_id : null;
-  // команду отправили из общего вида чата, и Telegram сам завёл под неё тему: выполняем её в General, пустую тему удаляем
-  if (msg && threadId && topicsOn(from.id) && isAutoTopicCommand(msg, Boolean(db.getTopic(from.id, threadId)), BOT_COMMANDS)) {
-    if (await dropAutoTopic(from.id, chatId, threadId)) return handleText(getState(from.id, chatId, null), msg.text);
-  }
-  if (msg && threadId && noteTopic(from.id, threadId, msg)) return; // служебное сообщение о теме — запомнили, отвечать не нужно
-
-  if (cb) {
-    const data = cb.data || '';
-    if (data.startsWith('adm:')) return isAdmin(from.id) ? onAdminCallback(cb) : tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-    const st = getState(from.id, chatId, threadId);
-    if (data.startsWith('tpc:')) return onTopicsCallback(st, cb);
-    if (data.startsWith('tpl:')) return onTopicListCallback(st, cb);
-    if (data.startsWith('nav:')) return onNavCallback(st, cb);
-    if (data.startsWith('fl:')) return onFilesCallback(st, cb);
-    if (data.startsWith('gt:')) return onGitCallback(st, cb);
-    if (data.startsWith('perm:')) return onPermissionCallback(st, cb);
-    if (data.startsWith('ask:')) return onAskCallback(st, cb);
-    if (data.startsWith('q:')) return onQueueCallback(st, cb);
-    if (data === 'cmd:raw') return onRawCommandCallback(st, cb);
-    if (data === 'wid:model' || data === 'wid:sessions') {
-      // «Обычное меню» под виджетом: тот же экран сообщением с кнопками
-      await tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(() => {});
-      return data === 'wid:model' ? handleModel(st, '', { classic: true }) : handleSessions(st, { classic: true });
-    }
-    if (data.startsWith('ses:')) return onSessionCallback(st, cb);
-    if (data.startsWith('eng:')) return onEngineCallback(st, cb);
-    if (data.startsWith('mdl:')) return onModelCallback(st, cb);
-    if (data.startsWith('ui:')) return onUiCallback(st, cb);
-    if (data.startsWith('lang:')) return onLangCallback(st, cb);
-    return;
-  }
-  if (msg?.text) return handleText(getState(from.id, chatId, threadId), msg.text, { quote: quoteOf(msg), messageId: msg.message_id });
-  if (msg?.photo || msg?.document) {
-    const st = getState(from.id, chatId, threadId);
-    // нажата «Загрузить файл» в /files: файл кладётся в проект, а не передаётся агенту
-    if (await onFileUpload(st, msg)) return;
-    return handleAttachment(st, msg);
-  }
-  // голосовое, видео, стикер и т. п.: раньше бот на них молчал
-  if (msg && unsupportedKind(msg)) return say(getState(from.id, chatId, threadId).to, t('msg.unsupported', langOf(from.id)));
-}
-
-/**
- * Удаляет тему, которую Telegram создал под команду, отправленную из общего вида чата. Не удалось (нет прав, старый
- * Telegram) — false: команда выполнится в самой теме, как раньше.
- */
-async function dropAutoTopic(userId, chatId, threadId) {
-  try {
-    await deleteTopic(chatId, threadId);
-    db.deleteTopic(userId, threadId);
-    log('тема, созданная Telegram под команду, удалена', threadId, '| команда выполнена в General | пользователь', userId);
-    return true;
-  } catch (e) {
-    log('удаление темы под команду:', e.message, '| пользователь', userId);
-    return false;
-  }
-}
-
-/**
- * Запоминает тему, которую создал или переименовал пользователь (в режиме «диалоги»). Тема без названия
- * (is_name_implicit) получит название от агента по первому ответу; названную пользователем не переименовываем.
- * @returns {boolean} true — это служебное сообщение о теме (создана, переименована), отвечать на него не нужно
- */
-function noteTopic(userId, threadId, msg) {
-  if (!topicsOn(userId)) return false;
-  if (msg.forum_topic_edited) {
-    if (msg.forum_topic_edited.name) db.saveTopic(userId, threadId, { name: msg.forum_topic_edited.name, named: true });
-    return true;
-  }
-  const info = topicInfoOf(msg);
-  if (msg.forum_topic_created) topicsSupport.usersCreate = true; // пользователь создал тему сам — значит, это разрешено
-  if (!db.getTopic(userId, threadId)) {
-    // неизвестная тема без сведений о создании — считаем названной: чужое название не трогаем
-    db.saveTopic(userId, threadId, { name: info?.name ?? null, named: info ? !info.implicit : true });
-    log('тема пользователя', threadId, info?.name ?? '', info?.implicit ? '(без названия)' : '', '| пользователь', userId);
-  }
-  return Boolean(msg.forum_topic_created);
+if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
+  logError('Нужны TELEGRAM_BOT_TOKEN и ALLOWED_USER_ID (см. .env)');
+  process.exit(1);
 }
 
 /**
@@ -488,11 +149,13 @@ function noteTopic(userId, threadId, msg) {
 async function setupSandbox(checks) {
   const probe = probeSandbox();
   if (!probe.ok) {
-    console.error(`AGENT_SANDBOX=${SANDBOX}: песочница не работает — ${probe.error}
-${probe.hint}`);
+    logError([`AGENT_SANDBOX=${SANDBOX}: песочница не работает — ${probe.error}`, probe.hint].join('\n'));
     process.exit(1);
   }
-  log(`песочница агентов включена (bubblewrap): агент видит только папку проектов сотрудника, его файлы и его домашнюю папку; администратор ${ADMIN_SANDBOX ? 'песочнится в папках сотрудников (ADMIN_SANDBOX=1)' : 'работает без песочницы'}`);
+  log([
+    'песочница агентов включена (bubblewrap): агент видит только папку проектов сотрудника, его файлы и его домашнюю папку',
+    ADMIN_SANDBOX ? 'администратор песочнится в папках сотрудников (ADMIN_SANDBOX=1)' : 'администратор работает без песочницы',
+  ].join('; '));
   const usable = checks.filter((r) => r.ok || r.timeout);
   const inside = await Promise.all(usable.map((r) => checkInSandbox(r.command, r.engine.versionArgs, agentEnv(r.engine))));
   const broken = [];
@@ -501,7 +164,7 @@ ${probe.hint}`);
     if (s.ok || s.timeout) return;
     const text = `${r.engine.label} не запускается в песочнице (${r.command}): ${s.error}. Если движок установлен в нестандартном месте, добавьте его папку в SANDBOX_RO_PATHS`;
     if (isRequired(r.engine)) {
-      console.error(text);
+      logError(text);
       process.exit(1);
     }
     log(`⚠️ ${text} — сотрудникам он не предлагается`);
@@ -528,7 +191,7 @@ function notifyInterrupted() {
 
 async function main() {
   if (SANDBOX && !ROOT) {
-    console.error('AGENT_SANDBOX=bwrap: задайте PROJECTS_ROOT — без корня сотрудник может выбрать проектом любую папку сервера');
+    logError('AGENT_SANDBOX=bwrap: задайте PROJECTS_ROOT — без корня сотрудник может выбрать проектом любую папку сервера');
     process.exit(1);
   }
   // все движки проверяем параллельно; без движка по умолчанию (DEFAULT_ENGINE) бот не запускается, остальные — по возможности
@@ -541,7 +204,10 @@ async function main() {
     if (r.ok) log(`${e.label} ${r.version} | ${command}`);
     else if (r.timeout) log(`⚠️ ${e.label} не ответил на ${e.versionArgs.join(' ')}: ${r.error} — продолжаем запуск`);
     else if (isRequired(e)) {
-      console.error(`Не удалось запустить ${e.label} (${command}): ${r.error}\nУстановите: ${e.install} — или укажите полный путь в ${e.envVar} (см. .env.example)`);
+      logError([
+        `Не удалось запустить ${e.label} (${command}): ${r.errorI18n ? tc(r.errorI18n.key, r.errorI18n.vars) : r.error}`,
+        `Установите: ${e.installKey ? tc(e.installKey) : e.install} — или укажите полный путь в ${e.envVar} (см. .env.example)`,
+      ].join('\n'));
       process.exit(1);
     } else log(`ℹ️ ${e.label} недоступен (${command}): ${r.error}. Установка: ${e.install}; путь — ${e.envVar}`);
   }
@@ -604,7 +270,7 @@ async function main() {
     try {
       for (const r of tokenReminders()) {
         const lang = langOf(r.userId);
-        const date = new Date(r.account.expires_at).toLocaleDateString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const date = fmtDate(r.account.expires_at, lang);
         log('git: напоминание о токене:', r.userId, r.host.id, r.stage);
         say(r.userId, t(r.stage === 'expired' ? 'git.exp.expired' : 'git.exp.soon', lang, { host: r.host.label, login: r.account.login, date, days: r.days }), {
           reply_markup: { inline_keyboard: [[{ text: t('start.btn.git', lang), callback_data: 'ui:git' }]] },
@@ -617,7 +283,15 @@ async function main() {
   remind();
   setInterval(remind, 12 * 3600_000).unref();
   const admin = getState(ADMIN_ID, ADMIN_ID);
-  log(`бот @${botInfo.username} запущен | администратор ${ADMIN_ID} | проект админа: ${admin.project} | сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length} | лимит агентов сотрудников: ${MAX_AGENTS} | простой: ${IDLE_MINUTES} мин | уровни: ${LEVEL_KEYS.join('/')}`);
+  log([
+    `бот @${botInfo.username} запущен`,
+    `администратор ${ADMIN_ID}`,
+    `проект админа: ${admin.project}`,
+    `сотрудников: ${db.listUsers().filter((x) => x.status === 'active').length}`,
+    `лимит агентов сотрудников: ${MAX_AGENTS}`,
+    `простой: ${IDLE_MINUTES} мин`,
+    `уровни: ${LEVEL_KEYS.join('/')}`,
+  ].join(' | '));
 
   for (;;) {
     let updates;
@@ -645,9 +319,9 @@ let stopping = false;
 function shutdown() {
   if (stopping) return;
   stopping = true;
-  setSyncKill(); // бот сейчас выйдет: процессы агентов завершаем синхронно, чтобы ни один не остался
-  shutdownAll('shutdown'); // сессии пользователей: процессы агентов вместе с дочерними
-  killProbes(); // и агенты, запущенные за списком моделей
+  setSyncKill();
+  shutdownAll('shutdown');
+  killProbes();
   db.close();
 }
 // SIGBREAK / SIGHUP — так Windows останавливает консольную программу (служба nssm, закрытие окна)
@@ -663,13 +337,13 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
 // завершаются, и процесс выходит (служба поднимет его заново).
 process.on('unhandledRejection', (e) => log('⚠️ необработанное отклонение:', e?.stack ?? e));
 process.on('uncaughtException', (e) => {
-  console.error(new Date().toISOString(), 'необработанное исключение:', e?.stack ?? e);
+  logError('необработанное исключение:', e?.stack ?? e);
   shutdown();
   process.exit(1);
 });
 
 main().catch((e) => {
-  console.error(e);
+  logError(e);
   shutdown();
   process.exit(1);
 });

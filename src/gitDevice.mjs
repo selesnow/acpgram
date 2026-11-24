@@ -34,9 +34,10 @@ export function deviceLogin(host, env = process.env) {
 
 /** Вход не состоялся: code — 'expired' (код или вход устарел), 'denied' (пользователь отказал), 'cancelled', 'failed'. */
 export class DeviceError extends Error {
-  constructor(code, message = code) {
+  constructor(code, message = code, extra = {}) {
     super(message);
     this.code = code;
+    Object.assign(this, extra);
   }
 }
 
@@ -68,7 +69,10 @@ const grantOf = (d) => ({ token: d.access_token, refreshToken: d.refresh_token |
  */
 export async function startDeviceLogin(cfg, { fetchImpl = fetch } = {}) {
   const d = await post(cfg.codeUrl, { client_id: cfg.clientId, scope: cfg.scope }, fetchImpl);
-  if (!d.device_code || !d.user_code) throw new DeviceError('failed', d.error_description || d.error || 'сервис не выдал код');
+  if (!d.device_code || !d.user_code) {
+    const msg = d.error_description || d.error || 'сервис не выдал код';
+    throw new DeviceError('failed', msg, msg === 'сервис не выдал код' ? { i18n: { key: 'err.gitDeviceNoCode' } } : {});
+  }
   return { deviceCode: d.device_code, userCode: d.user_code, url: d.verification_uri_complete || d.verification_uri, interval: Number(d.interval) || 5, expiresIn: Number(d.expires_in) || 900 };
 }
 
@@ -77,14 +81,15 @@ export async function startDeviceLogin(cfg, { fetchImpl = fetch } = {}) {
  * @returns {Promise<{token: string, refreshToken: string|null, expiresIn: number|null} | {pending: true, slowDown: boolean}>}
  *   бросает DeviceError, если вход не состоится
  */
-export async function pollDeviceLogin(cfg, deviceCode, { fetchImpl = fetch } = {}) {
+async function pollDeviceLogin(cfg, deviceCode, { fetchImpl = fetch } = {}) {
   const d = await post(cfg.tokenUrl, { client_id: cfg.clientId, device_code: deviceCode, grant_type: GRANT }, fetchImpl);
   if (d.access_token) return grantOf(d);
   if (d.error === 'authorization_pending') return { pending: true, slowDown: false };
   if (d.error === 'slow_down') return { pending: true, slowDown: true };
   if (d.error === 'expired_token') throw new DeviceError('expired');
   if (d.error === 'access_denied') throw new DeviceError('denied');
-  throw new DeviceError('failed', d.error_description || d.error || 'неизвестный ответ сервиса');
+  const msg = d.error_description || d.error || 'неизвестный ответ сервиса';
+  throw new DeviceError('failed', msg, msg === 'неизвестный ответ сервиса' ? { i18n: { key: 'err.gitDeviceUnknown' } } : {});
 }
 
 /** Пауза между опросами; в тестах подменяется, чтобы не ждать. */
@@ -117,5 +122,6 @@ export async function refreshLogin(cfg, refreshToken, { fetchImpl = fetch } = {}
   const d = await post(cfg.tokenUrl, { client_id: cfg.clientId, refresh_token: refreshToken, grant_type: 'refresh_token' }, fetchImpl);
   if (d.access_token) return grantOf(d);
   if (d.error === 'invalid_grant' || d.error === 'invalid_token') throw new DeviceError('expired', d.error_description || d.error);
-  throw new DeviceError('failed', d.error_description || d.error || 'неизвестный ответ сервиса');
+  const msg = d.error_description || d.error || 'неизвестный ответ сервиса';
+  throw new DeviceError('failed', msg, msg === 'неизвестный ответ сервиса' ? { i18n: { key: 'err.gitDeviceUnknown' } } : {});
 }

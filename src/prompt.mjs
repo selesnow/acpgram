@@ -104,7 +104,7 @@ export function prompter() {
 }
 
 /** Ввод закончился раньше, чем мастер получил ответы. */
-export class InputClosedError extends Error {
+class InputClosedError extends Error {
   constructor() {
     super(tc('prompt.inputClosed'));
   }

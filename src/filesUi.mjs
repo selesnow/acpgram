@@ -4,18 +4,22 @@
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { db, langOf, log, say } from './ctx.mjs';
 import { MAX_FILE_BYTES, describeAttachment, safeFileName } from './files.mjs';
-import { LOCALES, errText, t } from './i18n.mjs';
+import { errText, t } from './i18n.mjs';
+import { clearPendingInput, isPendingExpired, pendingKindMatches, setPendingInput } from './pendingInput.mjs';
 import { FileError, deleteProjectFile, fmtSize, listProjectDir, projectFileInfo, relPath, resolveTarget, writeProjectFile } from './projectFiles.mjs';
 import { insideRoot, isPersonalRoot, samePath } from './projects.mjs';
 import { folderRows, pathToken, tokenPath } from './projectsUi.mjs';
 import { errorRootOf, isAdmin, rootOf, userPath } from './state.mjs';
 import { dest, downloadFile, tg } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
+import { pageInfo, pageNav } from './pagination.mjs';
+import { btnText, cancelRow, cbCtx, dropMessage, fmtDate } from './uiActions.mjs';
+import { createKeyRegistry } from './keyRegistry.mjs';
 
 const PAGE = 20;
 const HTML = { parse_mode: 'HTML' };
 /** Сколько бот ждёт имя файла или сам файл; позже сообщения снова уходят агенту. */
-export const FILE_WAIT_MS = 10 * 60_000;
+export { FILE_WAIT_MS } from './pendingInput.mjs';
 /** Содержимое файла одним сообщением: длиннее Telegram делит текст на части, и вторая ушла бы агенту. */
 export const INLINE_MAX = 3500;
 /** Сколько после слишком длинного содержимого бот не передаёт текст агенту (части разбитого сообщения). */
@@ -35,32 +39,20 @@ const projectOf = (st) => insideRoot(st.project, rootOf(st.userId));
 /** Путь внутри проекта для показа: «config/.env»; сама папка проекта — «/». */
 const relShow = (project, path) => relative(project, path).split(sep).join('/') || '/';
 
-const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'fl:x' }]] });
-
 /** Текст причины отказа (FileError.code) на языке пользователя. */
 const whyText = (e, lang, userId) => (e instanceof FileError ? t(`files.err.${e.code}`, lang) : errText(e, lang, errorRootOf(userId)));
 
-/** Удаляет сообщение пользователя с содержимым или файлом: в чате не должно оставаться копии секрета. */
-const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_id: st.chatId, message_id: messageId }).catch((e) => log('files: сообщение не удалено:', e.message)) : null);
-
 /** Экран папки проекта: папки, файлы с размером, «Вверх», «Создать файл» и «Загрузить файл». Текст — HTML. */
-export async function filesView(st, project, dir, page = 0, lang = langOf(st.userId)) {
+async function filesView(st, project, dir, page = 0, lang = langOf(st.userId)) {
   const { dirs, files } = await listProjectDir(project, dir, { hideConfig: !canManageFiles(st.userId) });
   const entries = [...dirs.map((name) => ({ name, dir: true })), ...files];
-  const pages = Math.max(1, Math.ceil(entries.length / PAGE));
-  page = Math.min(Math.max(page, 0), pages - 1);
-  const shown = entries.slice(page * PAGE, (page + 1) * PAGE);
+  const { page: current, pages } = pageInfo(entries.length, PAGE, page);
+  const shown = entries.slice(current * PAGE, (current + 1) * PAGE);
   const rows = [
     ...folderRows(shown.filter((e) => e.dir).map((e) => e.name)).map((row) => row.map((n) => ({ text: `📁 ${n}`, callback_data: `fl:o:${pathToken(join(dir, n))}:0` }))),
-    ...shown.filter((e) => !e.dir).map((f) => [{ text: [...`📄 ${f.name} · ${fmtSize(f.size)}`].slice(0, 60).join(''), callback_data: `fl:f:${pathToken(join(dir, f.name))}` }]),
+    ...shown.filter((e) => !e.dir).map((f) => [{ text: btnText(`📄 ${f.name} · ${fmtSize(f.size)}`), callback_data: `fl:f:${pathToken(join(dir, f.name))}` }]),
   ];
-  if (pages > 1) {
-    const nav = [];
-    if (page > 0) nav.push({ text: '◀', callback_data: `fl:o:${pathToken(dir)}:${page - 1}` });
-    nav.push({ text: `${page + 1}/${pages}`, callback_data: 'nav:n' });
-    if (page < pages - 1) nav.push({ text: '▶', callback_data: `fl:o:${pathToken(dir)}:${page + 1}` });
-    rows.push(nav);
-  }
+  rows.push(...pageNav(current, pages, (p) => `fl:o:${pathToken(dir)}:${p}`));
   if (!samePath(dir, project)) rows.push([{ text: t('proj.up', lang), callback_data: `fl:o:${pathToken(dirname(dir))}:0` }]);
   if (canManageFiles(st.userId)) {
     rows.push([
@@ -86,7 +78,7 @@ export async function handleFiles(st) {
 function fileCard(st, project, path, lang, { confirm = false } = {}) {
   const info = projectFileInfo(project, path);
   if (!info) return null;
-  const when = new Date(info.mtime).toLocaleString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const when = fmtDate(info.mtime, lang, { time: true });
   const tk = pathToken(path);
   const back = { text: t('files.back', lang), callback_data: `fl:o:${pathToken(dirname(path))}:0` };
   const rows = confirm
@@ -96,14 +88,11 @@ function fileCard(st, project, path, lang, { confirm = false } = {}) {
   return { text, markup: { inline_keyboard: rows } };
 }
 
-let replaceSeq = 0;
+const replaceKeys = createKeyRegistry({ scope: 'state', field: 'replaces', limit: 20, eviction: 'clear' });
 
 /** Спрашивает, заменить ли существующий файл; что именно писать — запоминается до ответа (st.replaces). */
 function askReplace(st, project, job, lang) {
-  st.replaces ??= new Map();
-  if (st.replaces.size > 20) st.replaces.clear();
-  const id = ++replaceSeq;
-  st.replaces.set(id, job);
+  const id = replaceKeys.add(job, st);
   const path = join(job.dir, ...job.parts);
   return say(st.to, th('files.existsAsk', lang, { path: hCode(relShow(project, path)) }), {
     ...HTML,
@@ -113,8 +102,8 @@ function askReplace(st, project, job, lang) {
 
 /** Просит прислать содержимое файла следующим сообщением. */
 function askContent(st, project, { dir, parts, replace = false }, lang) {
-  st.pendingInput = { kind: 'fileContent', dir, parts, replace, at: Date.now() };
-  return say(st.to, th('files.contentAsk', lang, { path: hCode(relShow(project, join(dir, ...parts))) }), { ...HTML, reply_markup: cancelMarkup(lang) });
+  setPendingInput(st, 'fileContent', { dir, parts, replace });
+  return say(st.to, th('files.contentAsk', lang, { path: hCode(relShow(project, join(dir, ...parts))) }), { ...HTML, reply_markup: cancelRow('fl', lang) });
 }
 
 /** Скачивает присланный файл и кладёт его в проект. */
@@ -130,7 +119,7 @@ async function saveUpload(st, project, { dir, parts, meta, messageId }, lang, { 
   try {
     const r = writeProjectFile(project, dir, parts, data, { replace });
     log('файл загружен в проект:', st.userId, r.path, `${r.size} Б`);
-    await dropMessage(st, messageId);
+    await dropMessage(st, messageId, 'files: сообщение не удалено:');
     return say(st.to, th('files.saved', lang, { path: hCode(relShow(project, r.path)), size: fmtSize(r.size) }), HTML);
   } catch (e) {
     log('files: запись:', e.message, '| пользователь', st.userId);
@@ -142,14 +131,11 @@ async function saveUpload(st, project, { dir, parts, meta, messageId }, lang, { 
 export async function onFilesCallback(st, cb) {
   const [, action, arg, pageStr] = (cb.data || '').split(':');
   const lang = langOf(st.userId);
-  const chatId = cb.message?.chat?.id ?? st.chatId;
-  const messageId = cb.message?.message_id;
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
-  const edit = (v) => tg('editMessageText', { chat_id: chatId, message_id: messageId, text: v.text, ...HTML, reply_markup: v.markup ?? { inline_keyboard: [] } }).catch((e) => log('files:', e.message));
+  const { ack, edit } = cbCtx(st, cb, { html: true, alert: true, label: 'files:' });
 
   if (action === 'x') {
-    st.pendingInput = null;
-    st.replaces?.clear();
+    clearPendingInput(st);
+    replaceKeys.clear(st);
     await ack();
     return edit({ text: th('files.cancelled', lang) });
   }
@@ -158,9 +144,9 @@ export async function onFilesCallback(st, cb) {
   const manage = canManageFiles(st.userId);
 
   if (action === 'r') {
-    const job = st.replaces?.get(Number(arg));
+    const job = replaceKeys.get(arg, st);
     if (!job || !manage) return ack(t('proj.stale', lang));
-    st.replaces.delete(Number(arg));
+    replaceKeys.drop(arg, st);
     await ack();
     await edit({ text: th('files.replacing', lang, { path: hCode(relShow(project, join(job.dir, ...job.parts))) }) });
     return job.meta ? saveUpload(st, project, job, lang, { replace: true }) : askContent(st, project, { ...job, replace: true }, lang);
@@ -191,8 +177,8 @@ export async function onFilesCallback(st, cb) {
     if (action === 'n' || action === 'u') {
       await listProjectDir(project, path, { hideConfig: !canManageFiles(st.userId) }); // папка должна быть внутри проекта
       await ack();
-      st.pendingInput = { kind: action === 'n' ? 'fileName' : 'fileUpload', dir: path, at: Date.now() };
-      return say(st.to, th(action === 'n' ? 'files.nameAsk' : 'files.uploadAsk', lang, { dir: hCode(relShow(project, path)) }), { ...HTML, reply_markup: cancelMarkup(lang) });
+      setPendingInput(st, action === 'n' ? 'fileName' : 'fileUpload', { dir: path });
+      return say(st.to, th(action === 'n' ? 'files.nameAsk' : 'files.uploadAsk', lang, { dir: hCode(relShow(project, path)) }), { ...HTML, reply_markup: cancelRow('fl', lang) });
     }
   } catch (e) {
     if (!(e instanceof FileError)) log('files:', e.message, '| пользователь', st.userId);
@@ -209,21 +195,21 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
   const lang = langOf(st.userId);
   // хвост слишком длинного содержимого, разбитого Telegram на несколько сообщений: агенту не передаём
   if (st.swallowUntil && now < st.swallowUntil) {
-    await dropMessage(st, messageId);
+    await dropMessage(st, messageId, 'files: сообщение не удалено:');
     return true;
   }
   const wait = st.pendingInput;
-  if (wait?.kind !== 'fileName' && wait?.kind !== 'fileContent') return false;
-  const expired = now - wait.at > FILE_WAIT_MS;
+  if (!pendingKindMatches(wait, ['fileName', 'fileContent'])) return false;
+  const expired = isPendingExpired(wait, now);
   const project = projectOf(st);
 
   if (wait.kind === 'fileContent') {
     // это может быть секрет: что бы ни случилось, агенту текст не уходит, а сообщение удаляется
-    st.pendingInput = null;
+    clearPendingInput(st);
     // до первого await: вторая часть разбитого Telegram сообщения обрабатывается параллельно и иначе ушла бы агенту
     const tooLong = [...text].length > INLINE_MAX;
     if (tooLong) st.swallowUntil = now + SWALLOW_MS;
-    await dropMessage(st, messageId);
+    await dropMessage(st, messageId, 'files: сообщение не удалено:');
     if (expired || !project || !canManageFiles(st.userId)) return (await say(st.to, t('files.contentExpired', lang)), true);
     if (tooLong) {
       const markup = { inline_keyboard: [[{ text: t('files.upload', lang), callback_data: `fl:u:${pathToken(wait.dir)}` }]] };
@@ -242,22 +228,22 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
 
   // имя файла
   if (expired) {
-    st.pendingInput = null;
+    clearPendingInput(st);
     return false;
   }
   if (!project || !canManageFiles(st.userId)) {
-    st.pendingInput = null;
+    clearPendingInput(st);
     return (await say(st.to, t('state.projectGone', lang)), true);
   }
   const parts = relPath(text, { hideConfig: !canManageFiles(st.userId) });
-  if (!parts) return (await say(st.to, t('files.nameBad', lang), { reply_markup: cancelMarkup(lang) }), true);
+  if (!parts) return (await say(st.to, t('files.nameBad', lang), { reply_markup: cancelRow('fl', lang) }), true);
   let target;
   try {
     target = resolveTarget(project, wait.dir, parts);
   } catch (e) {
-    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), { ...HTML, reply_markup: cancelMarkup(lang) }), true);
+    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), { ...HTML, reply_markup: cancelRow('fl', lang) }), true);
   }
-  st.pendingInput = null;
+  clearPendingInput(st);
   if (target.exists) await askReplace(st, project, { dir: wait.dir, parts }, lang);
   else await askContent(st, project, { dir: wait.dir, parts }, lang);
   return true;
@@ -269,11 +255,11 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
  */
 export async function onFileUpload(st, msg, now = Date.now()) {
   const wait = st.pendingInput;
-  const waiting = wait?.kind === 'fileUpload' && now - wait.at <= FILE_WAIT_MS;
+  const waiting = pendingKindMatches(wait, 'fileUpload') && !isPendingExpired(wait, now);
   const album = msg.media_group_id && st.uploadGroup?.id === msg.media_group_id && now < st.uploadGroup.until;
   if (!waiting && !album) return false;
   const dir = waiting ? wait.dir : st.uploadGroup.dir;
-  if (waiting) st.pendingInput = null;
+  if (waiting) clearPendingInput(st);
   if (msg.media_group_id) st.uploadGroup = { id: msg.media_group_id, dir, until: now + ALBUM_MS };
   const lang = langOf(st.userId);
   const project = projectOf(st);

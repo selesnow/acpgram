@@ -76,7 +76,7 @@ export { log }; // журнал — log.mjs (им же пользуются acp,
 mkdirSync(DATA_DIR, { recursive: true });
 protectWindowsPath(DATA_DIR, { directory: true });
 export const DEBUG = process.env.ACPGRAM_DEBUG === '1';
-export const DEBUG_MAX_BYTES = 5 * 1024 * 1024;
+const DEBUG_MAX_BYTES = 5 * 1024 * 1024;
 export const HISTORY_KEEP_DAYS = positiveEnv('HISTORY_KEEP_DAYS', 0);
 export const LOGS_KEEP_DAYS = positiveEnv('LOGS_KEEP', 0);
 export const createDebugLog = (path, maxBytes = DEBUG_MAX_BYTES) => {

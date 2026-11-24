@@ -42,7 +42,7 @@ export const failText = (e, lang, host = null, root = null) => {
   const mask = (s) => (root ? maskErrorPaths(s, root, lang) : s);
   if (e instanceof GitConfigError) return th('git.unsafeConfig', lang, { keys: e.keys.join(', ') });
   if (e instanceof HostError && e.code === 'forbidden') return th('git.needApi', lang, { host: host?.label ?? 'Git', msg: mask(e.message) });
-  const msg = e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang, root);
+  const msg = e?.i18n ? errText(e, lang, root) : e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang, root);
   return th('git.opFail', lang, { msg: mask(msg) });
 };
 
@@ -65,6 +65,18 @@ export function releaseGitLock(st, lock) {
   if (!lock) return;
   if (gitLocks.get(lock.key) === lock.token) gitLocks.delete(lock.key);
   st.gitBusy = false;
+}
+
+export const GIT_BUSY = Symbol('git.busy');
+
+export async function withGitLock(st, fn, cwd = st.project) {
+  const lock = acquireGitLock(st, cwd);
+  if (!lock) return GIT_BUSY;
+  try {
+    return await fn();
+  } finally {
+    releaseGitLock(st, lock);
+  }
 }
 
 export const isGitLocked = (cwd) => gitLocks.has(lockKey(cwd));

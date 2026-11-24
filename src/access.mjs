@@ -246,7 +246,7 @@ const choiceKey = (userId, engineId, kind) => `${kind}:${userId}:${engineId}`;
 export const saveChoice = (userId, engineId, kind, value) => db.setSetting(choiceKey(userId, engineId, kind), value ?? null);
 
 /** Сколько недавних моделей показывать кнопками «🕘» на экране /model. */
-export const RECENT_MODELS = 4;
+const RECENT_MODELS = 4;
 const recentKey = (userId, engineId) => `recentModels:${userId}:${engineId}`;
 
 /** Недавно выбранные модели пользователя в движке (свежие первыми). Модели, ставшие недоступными, отсеивает экран /model. */

@@ -4,6 +4,7 @@ import { langOf, log } from './ctx.mjs';
 import { t } from './i18n.mjs';
 import { dest, tg } from './telegram.mjs';
 import { widgetFits } from './widgets.mjs';
+import { createKeyRegistry } from './keyRegistry.mjs';
 
 /**
  * Виджеты включаются явно: WIDGETS=1 в .env. По умолчанию — обычные меню с кнопками: с 13.11.2026 Telegram не даёт
@@ -22,11 +23,11 @@ let pausedUntil = 0;
 /** Отказ «виджеты этому боту не разрешены» (а не ошибка конкретного виджета). */
 export const isNotAllowed = (err) => /WIDGET_NOT_ALLOWED/i.test(String(err?.message ?? err ?? ''));
 
-const KEEP = 500; // сколько сообщений с виджетами помнит бот
-const sent = new Map(); // «чат:сообщение» → {threadId, kind, engine?}
+const sent = createKeyRegistry({ scope: 'global', limit: 500, eviction: 'oldest' });
+const widgetKey = (chatId, messageId) => `${chatId}:${messageId}`;
 
 /** Что известно о сообщении с виджетом, или null (бот перезапускался — тему уже не узнать). */
-export const widgetInfo = (chatId, messageId) => sent.get(`${chatId}:${messageId}`) ?? null;
+export const widgetInfo = (chatId, messageId) => sent.get(widgetKey(chatId, messageId)) ?? null;
 
 /**
  * Отправляет виджет в диалог. Возвращает false, если виджеты выключены, не разрешены боту, виджет не помещается
@@ -47,8 +48,7 @@ export async function sendWidgetMessage(st, { html, caption, kind, engine = null
       allow_queries: true,
       reply_markup: { inline_keyboard: [[{ text: t('wid.classic', langOf(st.userId)), callback_data: `wid:${kind}` }]] },
     });
-    sent.set(`${st.chatId}:${msg.message_id}`, { threadId: st.threadId ?? null, kind, engine });
-    while (sent.size > KEEP) sent.delete(sent.keys().next().value);
+    sent.put(widgetKey(st.chatId, msg.message_id), { threadId: st.threadId ?? null, kind, engine });
     return true;
   } catch (e) {
     if (isNotAllowed(e)) {

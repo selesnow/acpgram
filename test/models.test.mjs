@@ -83,12 +83,12 @@ test('autoValue и selectionRequest: как вернуть «Авто» и ка�
   assert.deepEqual(selectionRequest(ENGINES.agy, 's1', 'effort', 'high'), ['session/set_config_option', { sessionId: 's1', configId: 'thought_level', value: 'high' }]);
 });
 
-test('parseUsage: токены, реальная модель и стоимость', () => {
+test('parseUsage: токены и реальная модель', () => {
   const claude = parseUsage(
     { stopReason: 'end_turn', usage: { inputTokens: 2, outputTokens: 5, cachedReadTokens: 25697, cachedWriteTokens: 11121, totalTokens: 36825 }, _meta: { quota: { model_usage: [{ model: 'claude-haiku-5-5' }] } } },
     { sessionUpdate: 'usage_update', used: 36825, size: 1000000, cost: { amount: 0.006374, currency: 'USD' }, _meta: { '_claude/model': 'claude-haiku-5-5' } },
   );
-  assert.deepEqual(claude, { model: 'claude-haiku-5-5', input: 2, output: 5, cachedRead: 25697, thought: null, total: 36825, costTotal: 0.006374 });
+  assert.deepEqual(claude, { model: 'claude-haiku-5-5', input: 2, output: 5, cachedRead: 25697, thought: null, total: 36825 });
 
   // у Claude Code в model_usage могут быть субагенты — основная модель берётся из _claude/model
   const sub = parseUsage({ _meta: { quota: { model_usage: [{ model: 'claude-haiku-5-5' }, { model: 'claude-opus-5-5' }] } } }, { _meta: { '_claude/model': 'claude-opus-5-5' } });
@@ -98,13 +98,12 @@ test('parseUsage: токены, реальная модель и стоимос�
   const gemini = parseUsage({ usage: { inputTokens: 36561, outputTokens: 1, thoughtTokens: 166, totalTokens: 36562 }, _meta: { quota: { model_usage: [{ model: 'gemini-3.8-flash' }] } } }, { used: 36562, size: 1048576 });
   assert.equal(gemini.model, 'gemini-3.8-flash');
   assert.equal(gemini.thought, 166);
-  assert.equal(gemini.costTotal, null);
 
   // Antigravity: только токены, модель берётся из выбора
   const agy = parseUsage({ usage: { inputTokens: 16807, outputTokens: 77, totalTokens: 16884 } }, null);
   assert.equal(agy.model, null);
   assert.equal(agy.total, 16884);
-  assert.deepEqual(parseUsage(undefined, undefined), { model: null, input: null, output: null, cachedRead: null, thought: null, total: null, costTotal: null });
+  assert.deepEqual(parseUsage(undefined, undefined), { model: null, input: null, output: null, cachedRead: null, thought: null, total: null });
 });
 
 test('подвал ответа: движок, модель, уровень рассуждений, токены, стоимость', () => {

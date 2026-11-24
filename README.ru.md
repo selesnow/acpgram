@@ -323,6 +323,7 @@ npm start            # первый запуск без .env сам открое
 | `AGENT_ENV_HIDE`, `AGENT_ENV_PASS` | нет | дополнительные переменные окружения, которые соответственно скрыть от агента или, наоборот, передать ему (списки через запятую) |
 | `SANDBOX_RO_PATHS` | нет | дополнительные папки, которые песочница видит на чтение (через `:`), — например, место установки движка, если он не запускается в песочнице |
 | `BWRAP_COMMAND` | нет | путь к `bwrap`, если его нет в `PATH` |
+| `NSSM_PATH` | нет | полный путь к `nssm.exe` (только Windows): нужен для установки и перезапуска службы, если nssm не в `PATH`; иначе бот ищет приватный `bin\nssm.exe` и `PATH` |
 | `GITLAB_URL`, `GITHUB_URL` | нет | адрес своего GitLab и своего GitHub Enterprise (`https://git.example.com`): появляются в `/git` рядом с GitHub и GitLab.com. `GITLAB_NAME`, `GITHUB_NAME` — названия в кнопках (по умолчанию — имя сервера). Не обязательны: администратор добавляет свои серверы и в самом боте (`/git` → «Свои серверы») |
 | `GITHUB_CLIENT_ID`, `GITLAB_CLIENT_ID` | нет | идентификаторы своих приложений для входа по ссылке и коду: GitHub — OAuth App с включённым Device Flow, GitLab.com — приложение с включённым Device authorization grant (не конфиденциальное); `0` — выключить такой вход для сервиса. По умолчанию — приложения AcpGram |
 | `GIT_AGENT_AUTH` | нет | `1` — вход в Git передаётся и агентам: они сами получают и отправляют изменения, но токены сотрудников им видны. По умолчанию токен только у бота |
@@ -331,6 +332,7 @@ npm start            # первый запуск без .env сам открое
 | `DEFAULT_LANG` | нет | язык бота, если язык Telegram пользователя не `ru`, `uk` или `en`: `en` (по умолчанию), `ru` или `uk`. Пользователь может сменить язык командой `/language` |
 | `ACPGRAM_LANG` | нет | язык команд `acpgram` в терминале: `ru`, `uk` или `en`. Обычно не нужен: язык берётся из системы (для Docker и CI, где у системы нет языка) |
 | `GEMINI_API_KEY` | нет | ключ Gemini API; передаётся процессу Gemini через окружение бота. Не нужен, если Gemini CLI уже авторизован |
+| `GOOGLE_API_KEY` | нет | альтернативный ключ Google для моделей провайдера Google в OpenCode (вместо `GEMINI_API_KEY`); бот передаёт его процессу OpenCode как `GOOGLE_GENERATIVE_AI_API_KEY` |
 | `ANTHROPIC_API_KEY` | нет | ключ Anthropic API для Claude Code (оплата по API, а не по подписке). Не нужен, если Claude Code авторизован подпиской |
 | `GEMINI_COMMAND` | нет | полный путь к Gemini CLI. По умолчанию `gemini.cmd` на Windows и `gemini` на Linux / macOS. Под службой (nssm, systemd) глобальные пакеты npm пользователя часто не в `PATH` |
 | `CLAUDE_COMMAND` | нет | команда ACP-моста Claude Code (по умолчанию `claude-agent-acp`, пакет `@agentclientprotocol/claude-agent-acp`) |

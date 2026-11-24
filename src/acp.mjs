@@ -67,7 +67,7 @@ export function checkCommand(command, args = ['--version'], timeoutMs = 60_000, 
     }
     const timer = setTimeout(() => {
       killTree(proc, 0);
-      resolve({ ok: false, timeout: true, error: `нет ответа за ${timeoutMs / 1000} с` });
+      resolve({ ok: false, timeout: true, error: `нет ответа за ${timeoutMs / 1000} с`, errorI18n: { key: 'err.checkTimeout', vars: { sec: timeoutMs / 1000 } } });
     }, timeoutMs);
     proc.stdout.on('data', (d) => (out += d));
     proc.stderr.on('data', (d) => (err += d));
@@ -79,7 +79,7 @@ export function checkCommand(command, args = ['--version'], timeoutMs = 60_000, 
     // (и проверка минимальной версии движка пропустила бы старый), так изредка случалось на Linux
     proc.on('close', (code) => {
       clearTimeout(timer);
-      resolve(code === 0 ? { ok: true, version: out.trim() } : { ok: false, error: (err || out).trim().split(/\r?\n/).slice(-3).join(' | ') || `код ${code}` });
+      resolve(code === 0 ? { ok: true, version: out.trim() } : { ok: false, error: (err || out).trim().split(/\r?\n/).slice(-3).join(' | ') || `код ${code}`, errorI18n: { key: 'err.checkExit', vars: { code } } });
     });
   });
 }

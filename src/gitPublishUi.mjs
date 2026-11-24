@@ -8,25 +8,26 @@ import { db, log, say } from './ctx.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { commitAll, pushRepo, repoState } from './git.mjs';
 import { accountsOf, findHost, hostFor } from './gitAccess.mjs';
-import { acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf } from './gitCtx.mjs';
+import { GIT_BUSY, failText, gitNetOpts, gitOpts, repoOf, withGitLock } from './gitCtx.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { createRepo, listNamespaces, openMergeRequest, repoInfo, repoSlug, visibilities } from './gitApi.mjs';
 import { HostError, showRemote } from './gitHosts.mjs';
 import { ensureRepo, hasCommits, isRepoRoot, lastSubject, setRemote } from './gitInspect.mjs';
 import { t } from './i18n.mjs';
+import { clearPendingInput, pendingKindsOf, renewPendingInput, setPendingInput } from './pendingInput.mjs';
 import { errorRootOf, userPath } from './state.mjs';
 import { hCode, th } from './ui.mjs';
+import { btnText, cancelRow } from './uiActions.mjs';
 
 /** Действия кнопок этого модуля (gt:<действие>:<аргумент>). */
 export const PUBLISH_ACTIONS = ['pb', 'pbh', 'pbn', 'pbs', 'pbv', 'pbname', 'pbgo', 'mr', 'mrgo'];
 /** Ожидания текста, которые обрабатывает этот модуль. */
-export const PUBLISH_INPUTS = ['gitNsSearch', 'gitRepoName', 'gitMrTitle'];
+export const PUBLISH_INPUTS = pendingKindsOf('publish');
 
 const HTML = { parse_mode: 'HTML', link_preview_options: { is_disabled: true } };
 const NS_MAX = 30;
 const VIS_MARK = { private: '🔒', internal: '🏢', public: '🌍' };
 const backRow = (lang) => [{ text: t('btn.back', lang), callback_data: 'gt:v' }];
-const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] });
 
 /** Можно ли публиковать проект: это ещё не репозиторий с адресом сервера (свой репозиторий без origin — тоже можно). */
 export async function canPublish(st, project) {
@@ -46,7 +47,7 @@ const accountOf = (st, pub) => {
 async function namespacesView(st, lang, search = '') {
   const { host, account } = accountOf(st, st.gitPublish);
   const list = (await listNamespaces(host, account.token, account.login, { search })).slice(0, NS_MAX);
-  const rows = list.map((n) => [{ text: [...(n.kind === 'user' ? `👤 ${n.path} — ${t('git.pb.personal', lang)}` : `👥 ${n.path}`)].slice(0, 60).join(''), callback_data: `gt:pbn:${remember(st, { host: host.id, namespace: n })}` }]);
+  const rows = list.map((n) => [{ text: btnText(n.kind === 'user' ? `👤 ${n.path} — ${t('git.pb.personal', lang)}` : `👥 ${n.path}`), callback_data: `gt:pbn:${remember(st, { host: host.id, namespace: n })}` }]);
   rows.push([{ text: t('git.pb.search', lang), callback_data: 'gt:pbs' }, ...backRow(lang)]);
   const head = th('git.pb.where', lang, { host: host.label, q: search ? ` «${search}»` : '' });
   return { text: list.length ? head : `${head}\n\n<i>${th('git.pb.noPlaces', lang)}</i>`, markup: { inline_keyboard: rows } };
@@ -72,36 +73,35 @@ async function publish(st, project, lang, edit, view) {
   const { host, account } = accountOf(st, pub);
   const opts = gitOpts(st, project, account);
   const net = gitNetOpts(st, project, { host, account });
-  const lock = acquireGitLock(st, project);
-  if (!lock) return edit({ text: t('git.busy', lang), markup: { inline_keyboard: [backRow(lang)] } });
-  try {
-    await edit({ text: th('git.pb.working', lang) });
-    // сначала локальная часть: если публиковать нечего, репозиторий на сервере не создаётся
-    await ensureRepo(project, opts);
-    const first = await commitAll(project, t('git.pb.firstCommit', lang), opts);
-    if (!(await hasCommits(project, opts))) return await edit({ text: th('git.pb.empty', lang), markup: { inline_keyboard: [backRow(lang)] } });
-    const created = await createRepo(host, account.token, { name: pub.name, slug: pub.slug, namespace: pub.namespace, visibility: pub.visibility });
-    log('git: репозиторий создан:', st.userId, host.id, created.path);
-    // адрес из ответа сервиса уходит в настройки репозитория: чужой адрес (или не адрес вовсе) не принимаем
-    if (hostFor(created.url)?.id !== host.id) throw new HostError('http', `${host.label}: unexpected repository address`);
-    await setRemote(project, created.url, opts);
-    await pushRepo(project, net);
-    log('git: проект опубликован:', st.userId, project, '→', created.path);
-    st.gitPublish = null;
-    const note = [
-      ...(first.skipped.length ? [th('git.skipped', lang, { files: first.skipped.join(', ') })] : []),
-      ...(first.tracked.length ? [th('git.tracked', lang, { files: first.tracked.join(', ') })] : []),
-      ...(first.ignoreWarning ? [th('git.ignoreLink', lang)] : []),
-    ].map((s) => `\n${s}`).join('');
-    const v = await view();
-    const open = created.web ? [[{ text: t('git.open', lang), url: created.web }]] : [];
-    return await edit({ text: `${th('git.pb.done', lang, { address: hCode(showRemote(created.url)) })}${note}\n\n${v.text}`, markup: { inline_keyboard: [...open, ...v.markup.inline_keyboard] } });
-  } catch (e) {
-    log('git: публикация:', e.message, '| пользователь', st.userId);
-    return await edit({ text: failText(e, lang, host, errorRootOf(st.userId)), markup: { inline_keyboard: [backRow(lang)] } });
-  } finally {
-    releaseGitLock(st, lock);
-  }
+  const result = await withGitLock(st, async () => {
+    try {
+      await edit({ text: th('git.pb.working', lang) });
+      // сначала локальная часть: если публиковать нечего, репозиторий на сервере не создаётся
+      await ensureRepo(project, opts);
+      const first = await commitAll(project, t('git.pb.firstCommit', lang), opts);
+      if (!(await hasCommits(project, opts))) return await edit({ text: th('git.pb.empty', lang), markup: { inline_keyboard: [backRow(lang)] } });
+      const created = await createRepo(host, account.token, { name: pub.name, slug: pub.slug, namespace: pub.namespace, visibility: pub.visibility });
+      log('git: репозиторий создан:', st.userId, host.id, created.path);
+      // адрес из ответа сервиса уходит в настройки репозитория: чужой адрес (или не адрес вовсе) не принимаем
+      if (hostFor(created.url)?.id !== host.id) throw new HostError('http', `${host.label}: unexpected repository address`);
+      await setRemote(project, created.url, opts);
+      await pushRepo(project, net);
+      log('git: проект опубликован:', st.userId, project, '→', created.path);
+      st.gitPublish = null;
+      const note = [
+        ...(first.skipped.length ? [th('git.skipped', lang, { files: first.skipped.join(', ') })] : []),
+        ...(first.tracked.length ? [th('git.tracked', lang, { files: first.tracked.join(', ') })] : []),
+        ...(first.ignoreWarning ? [th('git.ignoreLink', lang)] : []),
+      ].map((s) => `\n${s}`).join('');
+      const v = await view();
+      const open = created.web ? [[{ text: t('git.open', lang), url: created.web }]] : [];
+      return await edit({ text: `${th('git.pb.done', lang, { address: hCode(showRemote(created.url)) })}${note}\n\n${v.text}`, markup: { inline_keyboard: [...open, ...v.markup.inline_keyboard] } });
+    } catch (e) {
+      log('git: публикация:', e.message, '| пользователь', st.userId);
+      return await edit({ text: failText(e, lang, host, errorRootOf(st.userId)), markup: { inline_keyboard: [backRow(lang)] } });
+    }
+  }, project);
+  return result === GIT_BUSY ? edit({ text: t('git.busy', lang), markup: { inline_keyboard: [backRow(lang)] } }) : result;
 }
 
 /** Создаёт запрос на слияние текущей ветки в основную (или находит уже открытый) и даёт ссылку. */
@@ -122,7 +122,7 @@ async function mergeRequest(st, project, title, lang, edit) {
 }
 
 /** Кнопки «Опубликовать проект» (pb…) и «Запрос на слияние» (mr…). */
-export async function onPublishCallback(st, cb, h) {
+export async function onPublishCallback(st, h) {
   const { action, arg, lang, ack, edit, project, view } = h;
   if (!project) return ack(t('state.projectGone', lang));
   if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
@@ -140,12 +140,12 @@ export async function onPublishCallback(st, cb, h) {
       if (!s.upstream || s.ahead) return edit({ text: th('git.mr.pushFirst', lang, { branch: hCode(s.branch) }), markup: { inline_keyboard: [[{ text: t('git.push', lang), callback_data: 'gt:push' }], backRow(lang)] } });
       const suggested = (await lastSubject(project, gitOpts(st, project, repo.account))) || s.branch;
       st.gitMr = { branch: s.branch, target: info.defaultBranch, suggested };
-      st.pendingInput = { kind: 'gitMrTitle', at: Date.now() };
-      const markup = { inline_keyboard: [[{ text: [...`«${suggested}»`].slice(0, 60).join(''), callback_data: 'gt:mrgo' }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] };
+      setPendingInput(st, 'gitMrTitle');
+      const markup = { inline_keyboard: [[{ text: btnText(`«${suggested}»`), callback_data: 'gt:mrgo' }], [{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] };
       return edit({ text: th('git.mr.ask', lang, { branch: hCode(s.branch), target: hCode(info.defaultBranch) }), markup });
     }
     if (action === 'mrgo') {
-      st.pendingInput = null;
+      clearPendingInput(st);
       await ack();
       return await mergeRequest(st, project, st.gitMr?.suggested ?? '', lang, edit);
     }
@@ -169,8 +169,8 @@ export async function onPublishCallback(st, cb, h) {
     if (!accountOf(st, pub)) return ack(t('proj.stale', lang));
     if (action === 'pbs') {
       await ack();
-      st.pendingInput = { kind: 'gitNsSearch', at: Date.now() };
-      return say(st.to, t('git.pb.searchAsk', lang), { reply_markup: cancelMarkup(lang) });
+      setPendingInput(st, 'gitNsSearch');
+      return say(st.to, t('git.pb.searchAsk', lang), { reply_markup: cancelRow('gt', lang) });
     }
     if (action === 'pbn') {
       const chosen = recall(st, arg);
@@ -191,8 +191,8 @@ export async function onPublishCallback(st, cb, h) {
     }
     if (action === 'pbname') {
       await ack();
-      st.pendingInput = { kind: 'gitRepoName', at: Date.now() };
-      return say(st.to, t('git.pb.nameAsk', lang), { reply_markup: cancelMarkup(lang) });
+      setPendingInput(st, 'gitRepoName');
+      return say(st.to, t('git.pb.nameAsk', lang), { reply_markup: cancelRow('gt', lang) });
     }
     if (action === 'pbgo') {
       if (!pub.slug) return ack(t('git.pb.nameBad', lang));
@@ -228,8 +228,8 @@ export async function onPublishInput(st, text, h) {
     // название репозитория
     const slug = repoSlug(text);
     if (!slug) {
-      st.pendingInput = { ...wait, at: h.now }; // название не подошло — ждём другое
-      return (await say(st.to, t('git.pb.nameBad', lang), { reply_markup: cancelMarkup(lang) }), true);
+      renewPendingInput(st, wait, h.now); // название не подошло — ждём другое
+      return (await say(st.to, t('git.pb.nameBad', lang), { reply_markup: cancelRow('gt', lang) }), true);
     }
     Object.assign(pub, { name: text.trim().slice(0, 100), slug });
     if (!pub.namespace) return (await send(await namespacesView(st, lang)), true);

@@ -7,7 +7,7 @@ import { assertPlainConfig, GitError, runGit } from './git.mjs';
 import { samePath } from './projects.mjs';
 
 /** Сколько изменённых файлов показывать (в большом несобранном проекте их могут быть тысячи). */
-export const CHANGES_MAX = 300;
+const CHANGES_MAX = 300;
 /** Файлы крупнее этого не читаются ради подсчёта строк. */
 const COUNT_MAX_BYTES = 512 * 1024;
 
@@ -157,7 +157,7 @@ export async function branchName(input, { cwd, ...opts }) {
  * Вызывающий отвечает за то, что в рабочей папке нет несохранённых изменений.
  */
 export async function switchBranch(cwd, branch, opts = {}) {
-  if (!branch?.name || branch.name.startsWith('-')) throw new GitError('некорректное название ветки');
+  if (!branch?.name || branch.name.startsWith('-')) throw new GitError('некорректное название ветки', { i18n: { key: 'err.gitBadBranch' } });
   await assertPlainConfig(cwd, opts);
   if (branch.local) return runGit(['switch', '--quiet', branch.name], { cwd, ...opts });
   return runGit(['switch', '--quiet', '--track', `origin/${branch.name}`], { cwd, ...opts });

@@ -7,44 +7,38 @@ import { log, say } from './ctx.mjs';
 import { isSecretName, safeFileName } from './files.mjs';
 import { canManageFiles } from './filesUi.mjs';
 import { fetchRepo } from './git.mjs';
-import { acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf } from './gitCtx.mjs';
+import { GIT_BUSY, acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf, withGitLock } from './gitCtx.mjs';
 import { recall, remember } from './gitKeys.mjs';
 import { branchName, changedFiles, commitList, createBranch, discardFiles, fileDiff, listBranches, switchBranch } from './gitInspect.mjs';
 import { t } from './i18n.mjs';
+import { renewPendingInput, setPendingInput } from './pendingInput.mjs';
 import { endAgent, errorRootOf, userPath } from './state.mjs';
 import { escHtml, sendBuffer } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
+import { pageInfo, pageNav } from './pagination.mjs';
+import { btnText, cancelRow } from './uiActions.mjs';
 
 /** Действия кнопок, которые обрабатывает этот модуль (gt:<действие>:<аргумент>). */
 export const REPO_ACTIONS = ['ch', 'cf', 'cm', 'br', 'bs', 'bn', 'dx', 'dX', 'da', 'dA'];
 
 const PAGE = 10;
 /** Изменения файла длиннее этого приходят файлом: в сообщение Telegram они не помещаются. */
-export const DIFF_INLINE_MAX = 3200;
+const DIFF_INLINE_MAX = 3200;
 const DIFF_FILE_MAX = 1024 * 1024;
 const MARK = { new: '🆕', modified: '✏️', deleted: '🗑', renamed: '🔀', conflict: '⚠️' };
 
 /** Длинный путь на кнопке показывается хвостом: имя файла важнее начала пути. */
 const tail = (s, n) => ([...s].length > n ? `…${[...s].slice(-(n - 1)).join('')}` : s);
 const counts = (f) => [f.added ? `+${f.added}` : '', f.deleted ? `−${f.deleted}` : ''].filter(Boolean).join(' ');
-const pager = (prefix, page, pages) => {
-  const nav = [];
-  if (page > 0) nav.push({ text: '◀', callback_data: `${prefix}:${page - 1}` });
-  nav.push({ text: `${page + 1}/${pages}`, callback_data: 'nav:n' });
-  if (page < pages - 1) nav.push({ text: '▶', callback_data: `${prefix}:${page + 1}` });
-  return nav;
-};
-
 /** Экран «Изменения»: несохранённые изменения рабочей папки кнопками по файлам и переходы к спискам коммитов. */
 async function changesView(st, project, repo, opts, page, lang) {
   const { files, total } = await changedFiles(project, opts);
-  const pages = Math.max(1, Math.ceil(files.length / PAGE));
-  page = Math.min(Math.max(page, 0), pages - 1);
+  const { page: current, pages } = pageInfo(files.length, PAGE, page);
   const sum = (key) => files.reduce((n, f) => n + (f[key] ?? 0), 0);
   const head = th('git.ch.head', lang, { p: hCode(userPath(st.userId, project, lang)), branch: repo.state.branch ?? '—' });
   const body = total ? th('git.ch.sum', lang, { n: total, a: sum('added'), d: sum('deleted') }) + (total > files.length ? `\n<i>${th('git.ch.cut', lang, { n: files.length })}</i>` : '') : th('git.ch.none', lang);
-  const rows = files.slice(page * PAGE, (page + 1) * PAGE).map((f) => [{ text: [...`${MARK[f.kind] ?? '✏️'} ${tail(f.path, 40)} ${counts(f)}`.trim()].slice(0, 60).join(''), callback_data: `gt:cf:${remember(st, { path: f.path })}` }]);
-  if (pages > 1) rows.push(pager('gt:ch', page, pages));
+  const rows = files.slice(current * PAGE, (current + 1) * PAGE).map((f) => [{ text: btnText(`${MARK[f.kind] ?? '✏️'} ${tail(f.path, 40)} ${counts(f)}`.trim()), callback_data: `gt:cf:${remember(st, { path: f.path })}` }]);
+  rows.push(...pageNav(current, pages, (p) => `gt:ch:${p}`));
   const s = repo.state;
   const commits = [];
   if (!s.upstream) commits.push({ text: t('git.ch.local', lang), callback_data: 'gt:cm:o' });
@@ -74,14 +68,13 @@ async function branchesView(st, project, repo, opts, net, page, lang, { sync = f
       }
     }
   }
-  const { current, branches } = await listBranches(project, opts);
-  const pages = Math.max(1, Math.ceil(branches.length / PAGE));
-  page = Math.min(Math.max(page, 0), pages - 1);
-  const rows = branches.slice(page * PAGE, (page + 1) * PAGE).map((b) => [{ text: [...`${b.current ? '✓' : b.local ? '🌿' : '☁️'} ${b.name}`].slice(0, 60).join(''), callback_data: `gt:bs:${remember(st, { branch: b.name })}` }]);
-  if (pages > 1) rows.push(pager('gt:br', page, pages));
+  const { current: currentBranch, branches } = await listBranches(project, opts);
+  const { page: current, pages } = pageInfo(branches.length, PAGE, page);
+  const rows = branches.slice(current * PAGE, (current + 1) * PAGE).map((b) => [{ text: btnText(`${b.current ? '✓' : b.local ? '🌿' : '☁️'} ${b.name}`), callback_data: `gt:bs:${remember(st, { branch: b.name })}` }]);
+  rows.push(...pageNav(current, pages, (p) => `gt:br:${p}`));
   if (canManageFiles(st.userId)) rows.push([{ text: t('git.br.new', lang), callback_data: 'gt:bn' }]);
   rows.push([{ text: t('btn.back', lang), callback_data: 'gt:v' }]);
-  return { text: th('git.br.head', lang, { branch: hCode(current ?? '—') }), markup: { inline_keyboard: rows } };
+  return { text: th('git.br.head', lang, { branch: hCode(currentBranch ?? '—') }), markup: { inline_keyboard: rows } };
 }
 
 /** Изменения одного файла: короткие — в сообщении, длинные — файлом; содержимое файлов с секретами не показывается. */
@@ -111,96 +104,97 @@ async function commitsView(project, opts, which, lang) {
  * Кнопки экранов «Изменения» и «Ветки».
  * @param {object} h {action, arg, lang, ack, edit, project}
  */
-export async function onRepoCallback(st, cb, h) {
+export async function onRepoCallback(st, h) {
   const { action, arg, lang, ack, edit, project } = h;
   if (!project) return ack(t('state.projectGone', lang));
   const mutating = ['dX', 'dA', 'bs'].includes(action);
-  const lock = mutating ? acquireGitLock(st, project) : null;
-  if (mutating && !lock) return ack(t('git.busy', lang));
-  try {
-    const repo = await repoOf(st, project);
-    if (!repo) return (await ack(), edit({ text: th('git.noRepo', lang), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } }));
-    const opts = gitOpts(st, project, repo.account);
-    const net = repo.account ? gitNetOpts(st, project, repo) : null;
-    if (action === 'ch') return (await ack(), edit(await changesView(st, project, repo, opts, Number(arg) || 0, lang)));
-    if (action === 'cm') return (await ack(), edit(await commitsView(project, opts, arg, lang)));
-    if (action === 'cf') {
-      // кнопка помнит путь файла; сам файл ищется в свежем списке изменений
-      const path = recall(st, arg)?.path;
-      const file = path ? (await changedFiles(project, opts)).files.find((f) => f.path === path) : null;
-      if (!file) return ack(t('git.diff.gone', lang));
-      await ack();
-      return await showDiff(st, project, file, arg, opts, lang, edit);
-    }
-    if (action === 'br') return (await ack(), edit(await branchesView(st, project, repo, opts, net, Number(arg) || 0, lang, { sync: true })));
-    // ---- переключение и создание ветки меняют проект ----
-    if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
-    if (!mutating && st.gitBusy) return ack(t('git.busy', lang));
-    if (st.busy) return ack(t('git.agentBusy', lang));
-    if (action === 'bn') {
-      await ack();
-      st.pendingInput = { kind: 'gitBranch', at: Date.now() };
-      return say(st.to, th('git.br.nameAsk', lang, { branch: hCode(repo.state.branch ?? '—') }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] } });
-    }
-    // ---- отмена изменений: необратимо, поэтому сначала вопрос, а список файлов берётся заново ----
-    if (['dx', 'dX', 'da', 'dA'].includes(action)) {
-      const fresh = (await changedFiles(project, opts)).files;
-      const run = async (list) => discardFiles(project, list, opts);
-      const show = async (note) => {
-        const v = await changesView(st, project, await repoOf(st, project), opts, 0, lang);
-        return edit({ text: `${note}\n\n${v.text}`, markup: v.markup });
-      };
-      if (action === 'dx' || action === 'dX') {
+  const run = async () => {
+    try {
+      const repo = await repoOf(st, project);
+      if (!repo) return (await ack(), edit({ text: th('git.noRepo', lang), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } }));
+      const opts = gitOpts(st, project, repo.account);
+      const net = repo.account ? gitNetOpts(st, project, repo) : null;
+      if (action === 'ch') return (await ack(), edit(await changesView(st, project, repo, opts, Number(arg) || 0, lang)));
+      if (action === 'cm') return (await ack(), edit(await commitsView(project, opts, arg, lang)));
+      if (action === 'cf') {
+        // кнопка помнит путь файла; сам файл ищется в свежем списке изменений
         const path = recall(st, arg)?.path;
-        const file = path ? fresh.find((f) => f.path === path) : null;
+        const file = path ? (await changedFiles(project, opts)).files.find((f) => f.path === path) : null;
         if (!file) return ack(t('git.diff.gone', lang));
-        if (isSecretFile(file)) return ack(t('git.dx.secret', lang));
         await ack();
-        if (action === 'dx') {
-          const markup = { inline_keyboard: [[{ text: t('git.dx.yes', lang), callback_data: `gt:dX:${arg}` }, { text: t('btn.cancel', lang), callback_data: `gt:cf:${arg}` }]] };
-          return edit({ text: th(file.kind === 'new' ? 'git.dx.askNew' : 'git.dx.ask', lang, { path: hCode(file.path) }), markup });
+        return await showDiff(st, project, file, arg, opts, lang, edit);
+      }
+      if (action === 'br') return (await ack(), edit(await branchesView(st, project, repo, opts, net, Number(arg) || 0, lang, { sync: true })));
+      // ---- переключение и создание ветки меняют проект ----
+      if (!canManageFiles(st.userId)) return ack(t('files.noRights', lang));
+      if (!mutating && st.gitBusy) return ack(t('git.busy', lang));
+      if (st.busy) return ack(t('git.agentBusy', lang));
+      if (action === 'bn') {
+        await ack();
+        setPendingInput(st, 'gitBranch');
+        return say(st.to, th('git.br.nameAsk', lang, { branch: hCode(repo.state.branch ?? '—') }), { parse_mode: 'HTML', reply_markup: cancelRow('gt', lang) });
+      }
+      // ---- отмена изменений: необратимо, поэтому сначала вопрос, а список файлов берётся заново ----
+      if (['dx', 'dX', 'da', 'dA'].includes(action)) {
+        const fresh = (await changedFiles(project, opts)).files;
+        const run = async (list) => discardFiles(project, list, opts);
+        const show = async (note) => {
+          const v = await changesView(st, project, await repoOf(st, project), opts, 0, lang);
+          return edit({ text: `${note}\n\n${v.text}`, markup: v.markup });
+        };
+        if (action === 'dx' || action === 'dX') {
+          const path = recall(st, arg)?.path;
+          const file = path ? fresh.find((f) => f.path === path) : null;
+          if (!file) return ack(t('git.diff.gone', lang));
+          if (isSecretFile(file)) return ack(t('git.dx.secret', lang));
+          await ack();
+          if (action === 'dx') {
+            const markup = { inline_keyboard: [[{ text: t('git.dx.yes', lang), callback_data: `gt:dX:${arg}` }, { text: t('btn.cancel', lang), callback_data: `gt:cf:${arg}` }]] };
+            return edit({ text: th(file.kind === 'new' ? 'git.dx.askNew' : 'git.dx.ask', lang, { path: hCode(file.path) }), markup });
+          }
+          await run([file]);
+          log('git: изменения файла отменены:', st.userId, project, file.path);
+          return show(th('git.dx.done', lang, { path: hCode(file.path) }));
         }
-        await run([file]);
-        log('git: изменения файла отменены:', st.userId, project, file.path);
-        return show(th('git.dx.done', lang, { path: hCode(file.path) }));
+        const list = fresh.filter((f) => !isSecretFile(f));
+        if (!list.length) return ack(t('git.ch.none', lang));
+        await ack();
+        if (action === 'da') {
+          const markup = { inline_keyboard: [[{ text: t('git.da.yes', lang), callback_data: 'gt:dA' }, { text: t('btn.cancel', lang), callback_data: 'gt:ch:0' }]] };
+          const names = list.slice(0, 15).map((f) => `${MARK[f.kind] ?? '✏️'} ${escHtml(f.path)}`).join('\n') + (list.length > 15 ? '\n…' : '');
+          return edit({ text: `${th('git.da.ask', lang, { n: list.length })}\n\n${names}`, markup });
+        }
+        const n = await run(list);
+        log('git: все изменения отменены:', st.userId, project, '| файлов', n);
+        return show(th('git.da.done', lang, { n }));
       }
-      const list = fresh.filter((f) => !isSecretFile(f));
-      if (!list.length) return ack(t('git.ch.none', lang));
-      await ack();
-      if (action === 'da') {
-        const markup = { inline_keyboard: [[{ text: t('git.da.yes', lang), callback_data: 'gt:dA' }, { text: t('btn.cancel', lang), callback_data: 'gt:ch:0' }]] };
-        const names = list.slice(0, 15).map((f) => `${MARK[f.kind] ?? '✏️'} ${escHtml(f.path)}`).join('\n') + (list.length > 15 ? '\n…' : '');
-        return edit({ text: `${th('git.da.ask', lang, { n: list.length })}\n\n${names}`, markup });
+      // кнопка помнит название ветки; сама ветка ищется в свежем списке
+      const name = recall(st, arg)?.branch;
+      const branch = name ? (await listBranches(project, opts)).branches.find((b) => b.name === name) : null;
+      if (!branch) return ack(t('proj.stale', lang));
+      if (branch.current) return ack(t('git.br.same', lang));
+      // несохранённые изменения git либо не даст унести, либо молча перенесёт в другую ветку — сначала их нужно сохранить
+      if (repo.state.changed) {
+        await ack();
+        const markup = { inline_keyboard: [[{ text: t('git.save', lang), callback_data: 'gt:save' }], [{ text: t('btn.back', lang), callback_data: 'gt:br:0' }]] };
+        return edit({ text: th('git.br.dirty', lang, { n: repo.state.changed, name: hCode(branch.name) }), markup });
       }
-      const n = await run(list);
-      log('git: все изменения отменены:', st.userId, project, '| файлов', n);
-      return show(th('git.da.done', lang, { n }));
-    }
-    // кнопка помнит название ветки; сама ветка ищется в свежем списке
-    const name = recall(st, arg)?.branch;
-    const branch = name ? (await listBranches(project, opts)).branches.find((b) => b.name === name) : null;
-    if (!branch) return ack(t('proj.stale', lang));
-    if (branch.current) return ack(t('git.br.same', lang));
-    // несохранённые изменения git либо не даст унести, либо молча перенесёт в другую ветку — сначала их нужно сохранить
-    if (repo.state.changed) {
       await ack();
-      const markup = { inline_keyboard: [[{ text: t('git.save', lang), callback_data: 'gt:save' }], [{ text: t('btn.back', lang), callback_data: 'gt:br:0' }]] };
-      return edit({ text: th('git.br.dirty', lang, { n: repo.state.changed, name: hCode(branch.name) }), markup });
+      await switchBranch(project, branch, net ?? opts);
+      // файлы проекта сменились целиком: сессия агента с прежним представлением о них продолжаться не должна
+      endAgent(st, 'branch');
+      log('git: ветка переключена:', st.userId, project, '→', branch.name);
+      const v = await branchesView(st, project, repo, opts, net, 0, lang);
+      return edit({ text: `${th('git.br.switched', lang, { name: hCode(branch.name) })}\n\n${v.text}`, markup: v.markup });
+    } catch (e) {
+      log(`git: ${action}:`, e.message, '| пользователь', st.userId);
+      await ack();
+      return edit({ text: failText(e, lang, null, errorRootOf(st.userId)), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
     }
-    await ack();
-    await switchBranch(project, branch, net ?? opts);
-    // файлы проекта сменились целиком: сессия агента с прежним представлением о них продолжаться не должна
-    endAgent(st, 'branch');
-    log('git: ветка переключена:', st.userId, project, '→', branch.name);
-    const v = await branchesView(st, project, repo, opts, net, 0, lang);
-    return edit({ text: `${th('git.br.switched', lang, { name: hCode(branch.name) })}\n\n${v.text}`, markup: v.markup });
-  } catch (e) {
-    log(`git: ${action}:`, e.message, '| пользователь', st.userId);
-    await ack();
-    return edit({ text: failText(e, lang, null, errorRootOf(st.userId)), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
-  } finally {
-    releaseGitLock(st, lock);
-  }
+  };
+  if (!mutating) return run();
+  const result = await withGitLock(st, run, project);
+  return result === GIT_BUSY ? ack(t('git.busy', lang)) : result;
 }
 
 /**
@@ -214,27 +208,26 @@ export async function onBranchInput(st, text, h) {
   const html = { parse_mode: 'HTML' };
   if (!project || !canManageFiles(st.userId)) return false;
   if (st.gitBusy || st.busy) return (await say(st.to, t(st.busy ? 'git.agentBusy' : 'git.busy', lang)), true);
-  const lock = acquireGitLock(st, project);
-  if (!lock) return (await say(st.to, t('git.busy', lang), html), true);
-  try {
-    const repo = await repoOf(st, project);
-    if (!repo) return (await say(st.to, th('git.noRepo', lang), html), true);
-    const opts = gitOpts(st, project, repo.account);
-    const net = repo.account ? gitNetOpts(st, project, repo) : null;
-    const name = await branchName(text, { cwd: project, ...opts });
-    if (!name) {
-      st.pendingInput = { ...wait, at: now }; // название не подошло — ждём другое
-      return (await say(st.to, t('git.br.badName', lang), { reply_markup: { inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'gt:x' }]] } }), true);
+  const result = await withGitLock(st, async () => {
+    try {
+      const repo = await repoOf(st, project);
+      if (!repo) return (await say(st.to, th('git.noRepo', lang), html), true);
+      const opts = gitOpts(st, project, repo.account);
+      const net = repo.account ? gitNetOpts(st, project, repo) : null;
+      const name = await branchName(text, { cwd: project, ...opts });
+      if (!name) {
+        renewPendingInput(st, wait, now); // название не подошло — ждём другое
+        return (await say(st.to, t('git.br.badName', lang), { reply_markup: cancelRow('gt', lang) }), true);
+      }
+      await createBranch(project, name, net ?? opts);
+      log('git: ветка создана:', st.userId, project, name);
+      const markup = { inline_keyboard: [[{ text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }, { text: t('btn.back', lang), callback_data: 'gt:v' }]] };
+      await say(st.to, th('git.br.created', lang, { name: hCode(name) }), { ...html, reply_markup: markup });
+    } catch (e) {
+      log('git: новая ветка:', e.message, '| пользователь', st.userId);
+      await say(st.to, failText(e, lang, null, errorRootOf(st.userId)), html);
     }
-    await createBranch(project, name, net ?? opts);
-    log('git: ветка создана:', st.userId, project, name);
-    const markup = { inline_keyboard: [[{ text: t('git.branchesBtn', lang), callback_data: 'gt:br:0' }, { text: t('btn.back', lang), callback_data: 'gt:v' }]] };
-    await say(st.to, th('git.br.created', lang, { name: hCode(name) }), { ...html, reply_markup: markup });
-  } catch (e) {
-    log('git: новая ветка:', e.message, '| пользователь', st.userId);
-    await say(st.to, failText(e, lang, null, errorRootOf(st.userId)), html);
-  } finally {
-    releaseGitLock(st, lock);
-  }
-  return true;
+    return true;
+  }, project);
+  return result === GIT_BUSY ? (await say(st.to, t('git.busy', lang), html), true) : result;
 }

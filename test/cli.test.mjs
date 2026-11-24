@@ -96,6 +96,7 @@ test('acpgram update при установке через npm: подсказк�
     copyFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), join(modDir, 'package.json'));
     copyFileSync(CLI, join(modDir, 'src', 'cli.mjs'));
     copyFileSync(fileURLToPath(new URL('../src/cli-i18n.mjs', import.meta.url)), join(modDir, 'src', 'cli-i18n.mjs'));
+    copyFileSync(fileURLToPath(new URL('../src/winReg.mjs', import.meta.url)), join(modDir, 'src', 'winReg.mjs'));
     for (const [lang, installed] of [['ru', 'AcpGram установлен через npm'], ['en', 'AcpGram is installed via npm'], ['uk', 'AcpGram встановлено через npm']]) {
       const res = spawnSync(process.execPath, [join(modDir, 'src', 'cli.mjs'), 'update'], { encoding: 'utf8', env: { ...process.env, ACPGRAM_LANG: lang } });
       assert.equal(res.status, 0, lang);

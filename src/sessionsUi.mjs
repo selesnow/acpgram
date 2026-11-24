@@ -3,11 +3,12 @@
 import { db, langOf, log, say } from './ctx.mjs';
 import { canUseEngine } from './access.mjs';
 import { ENGINES, getEngine, isAvailable } from './engines.mjs';
-import { LOCALES, errText, t } from './i18n.mjs';
+import { errText, t } from './i18n.mjs';
 import { ClosedError, LimitError, ProjectError, endAgent, engineOf, ensureAgent, errorRootOf, saveEngine, userPath } from './state.mjs';
 import { dest, escHtml, tg } from './telegram.mjs';
 import { drainQueue } from './turn.mjs';
 import { trunc } from './ui.mjs';
+import { cbCtx, fmtDate } from './uiActions.mjs';
 import { sendWidgetMessage } from './widgetHost.mjs';
 import { sessionsWidget, widgetFits } from './widgets.mjs';
 
@@ -15,7 +16,7 @@ const LIST_LIMIT = 10;
 /** В виджете сессии листаются страницами, поэтому их больше, чем кнопок в обычном списке. */
 const WIDGET_LIMIT = 30;
 
-const when = (iso, lang) => new Date(iso).toLocaleString(LOCALES[lang] ?? LOCALES.en, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const when = (iso, lang) => fmtDate(iso, lang, { time: true, year: false });
 const oneLine = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
 /** «12.11, 14:30 · Claude · 5 запр.» — подпись сессии в списке и в виджете. */
@@ -54,7 +55,7 @@ export async function handleSessions(st, { classic = false } = {}) {
  * а кнопки короткие, с номером. Раньше всё это втискивалось в подпись кнопки на 60 символов.
  * @param {{list: {acp_id:string, engine:string, last_at:string, n:number, first_text:string}[], current?: string|null, project: string, lang?: string}} o
  */
-export function sessionsView({ list, current = null, project, lang }) {
+function sessionsView({ list, current = null, project, lang }) {
   const lines = list.map((s, i) => {
     const head = `<b>${i + 1}.</b> ${s.acp_id === current ? '▶️ ' : ''}${escHtml(sessionLabel(s, lang))}`;
     return `${head}\n<i>${escHtml(trunc(oneLine(s.first_text), 120))}</i>`;
@@ -118,9 +119,7 @@ export async function resumeSession(st, item, engine, report) {
 export async function onSessionCallback(st, cb) {
   const id = (cb.data || '').slice('ses:'.length);
   const lang = langOf(st.userId);
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
-  const edit = (text) =>
-    tg('editMessageText', { chat_id: cb.message?.chat?.id, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch((e) => log('sessions edit:', e.message));
+  const { ack, edit } = cbCtx({ chatId: cb.message?.chat?.id }, cb, { alert: true, label: 'sessions edit:' });
 
   if (st.busy) return ack(t('busy.stop', lang));
   const item = db.listSessions(st.userId, st.project, 50).find((s) => s.acp_id === id);

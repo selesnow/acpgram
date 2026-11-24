@@ -18,7 +18,7 @@ export const TIMEOUT_MS = 30_000;
 /** Загрузка файлов (до 45 МБ за запрос) — дольше. */
 const UPLOAD_TIMEOUT_MS = 120_000;
 /** После «слишком много запросов» (429) ждём retry_after и повторяем, если ждать не дольше этого (секунды). */
-export const MAX_RETRY_AFTER_S = 30;
+const MAX_RETRY_AFTER_S = 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -301,7 +301,7 @@ export function sendThinkingDraft(to, draft_id, extra = {}) {
 }
 
 /** Разбивает длинный текст на части не длиннее лимита. */
-export function splitText(text, limit = 4000) {
+function splitText(text, limit = 4000) {
   const parts = [];
   let rest = text;
   while (rest.length > limit) {

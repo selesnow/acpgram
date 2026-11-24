@@ -219,6 +219,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     args: ['acp'],
     versionArgs: ['--version'],
     install: 'Antigravity CLI 1.5+ (с подкомандой acp); войдите один раз (agy acp --login) или задайте ключ Gemini API (GEMINI_API_KEY и "modelProvider": "gemini" в settings.json)',
+    installKey: 'install.agy',
     // подкоманда `agy acp` появилась в 1.5: более старая версия запускается, но работать с ботом не может
     minVersion: '1.5.0',
     update: 'agy update',
@@ -243,6 +244,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     args: [],
     versionArgs: ['--version'],
     install: 'npm i -g @agentclientprotocol/codex-acp (нужен установленный Codex CLI и вход: codex login)',
+    installKey: 'install.codex',
     // «Полный» — доступ ко всему без подтверждений; «workspace-write» — правки в рабочей папке, остальное по запросу
     modes: { read: 'read-only', normal: 'workspace-write', full: 'agent-full-access' },
     modeRank: ['read-only', 'workspace-write', 'agent', 'agent-full-access'],
@@ -264,6 +266,7 @@ export const ENGINES = Object.assign(Object.create(null), {
     args: ['acp'],
     versionArgs: ['--version'],
     install: 'npm i -g opencode-ai (модели: ключи API провайдеров в окружении или opencode auth login; бесплатные модели OpenCode Zen — без ключа)',
+    installKey: 'install.opencode',
     update: 'npm i -g opencode-ai@latest',
     // режимы ACP — build и plan; разница между «Обычным» и «Полным» — в конфиге прав (processEnv)
     modes: { read: 'plan', normal: 'build', full: 'build' },
@@ -340,9 +343,6 @@ export function setNeedsLogin(id, on) {
 
 /** Движок запускается, но не авторизован: выбор не блокируется, пользователю показывается предупреждение. */
 export const needsLogin = (id) => loginNeeded.has(id);
-
-/** Движки, которые можно выбрать в /engine. */
-export const availableEngines = () => Object.values(ENGINES).filter((e) => isAvailable(e.id));
 
 /**
  * Движок, в котором работает пользователь: его выбор, если такой движок есть и доступен, иначе движок по умолчанию.
@@ -465,7 +465,10 @@ export function parseCatalog(engine, res, meta = null) {
 }
 
 /** Значение «Авто» для возврата к настройке агента по умолчанию: auto/default движка или то, что агент выставил сам. */
-export const autoValue = (engine, catalog, kind) => (kind === 'model' ? engine.autoModel ?? catalog?.defaultModel : engine.autoEffort ?? catalog?.defaultEffort) ?? null;
+export function autoValue(engine, catalog, kind) {
+  if (kind === 'model') return engine.autoModel ?? catalog?.defaultModel ?? null;
+  return engine.autoEffort ?? catalog?.defaultEffort ?? null;
+}
 
 /**
  * Запрос ACP для смены модели или уровня рассуждений: [метод, параметры].
@@ -484,7 +487,6 @@ export function actualModelFromUpdate(update) {
 /**
  * Расход запроса из ответа session/prompt и последнего usage_update.
  * Реальная модель: _meta.quota.model_usage (Gemini CLI, Claude Code) или _meta._claude/model.
- * costTotal — стоимость в $ нарастающим итогом за процесс агента (присылает только Claude Code).
  */
 export function parseUsage(res, usageUpdate) {
   const u = res?.usage ?? {};
@@ -492,7 +494,6 @@ export function parseUsage(res, usageUpdate) {
   const usageModels = res?._meta?.quota?.model_usage;
   // у Claude Code в model_usage бывают и модели субагентов — основная модель сессии в _claude/model
   const model = actualModelFromUpdate(usageUpdate) || (Array.isArray(usageModels) && usageModels[0]?.model) || null;
-  const cost = usageUpdate?.cost;
   return {
     model,
     input: num(u.inputTokens),
@@ -500,7 +501,6 @@ export function parseUsage(res, usageUpdate) {
     cachedRead: num(u.cachedReadTokens),
     thought: num(u.thoughtTokens),
     total: num(u.totalTokens),
-    costTotal: cost && (cost.currency ?? 'USD') === 'USD' ? num(cost.amount) : null,
   };
 }
 
@@ -550,7 +550,10 @@ export function checkEngines(engines = Object.values(ENGINES), timeoutMs) {
       const command = engineCommand(engine);
       const r = { engine, command, ...(await checkCommand(command, engine.versionArgs, timeoutMs, agentEnv(engine))) };
       if (r.ok && engine.minVersion && !versionAtLeast(r.version, engine.minVersion)) {
-        return { ...r, ok: false, tooOld: true, error: `версия ${r.version}, нужна ${engine.minVersion}+${engine.update ? ` — обновите: ${engine.update}` : ''}` };
+        const errorI18n = engine.update
+          ? { key: 'err.engineOld.update', vars: { version: r.version, min: engine.minVersion, update: engine.update } }
+          : { key: 'err.engineOld.noUpdate', vars: { version: r.version, min: engine.minVersion } };
+        return { ...r, ok: false, tooOld: true, error: `версия ${r.version}, нужна ${engine.minVersion}+${engine.update ? ` — обновите: ${engine.update}` : ''}`, errorI18n };
       }
       return r;
     }),

@@ -2,7 +2,7 @@
 import { DEFAULT_ENGINE, getEngine } from './engines.mjs';
 
 /** Текст из content[] обновления. */
-export function contentText(u) {
+function contentText(u) {
   return (u.content || [])
     .map((c) => (c?.type === 'content' && c.content?.type === 'text' ? c.content.text : ''))
     .filter(Boolean)
@@ -22,7 +22,7 @@ export function diffOf(u) {
 }
 
 /** Описание действия: для команд — то, что агент сам написал в скобках, иначе весь текст. */
-function describe(kind, text) {
+function describe(text) {
   const t = text.replace(/^\[current working directory [^\]]*\]\s*/i, '').trim();
   const m = /^\((.*)\)$/s.exec(t);
   return (m ? m[1] : t).trim();
@@ -43,7 +43,7 @@ export function parseTool(u, engine = getEngine(DEFAULT_ENGINE)) {
     tool,
     kind: u.kind ?? null,
     title: u.title ?? null,
-    description: own || (isDescription ? describe(u.kind, text) : ''),
+    description: own || (isDescription ? describe(text) : ''),
     output: isDescription || (own && text.trim() === own) ? '' : text,
     status: u.status ?? null,
   };

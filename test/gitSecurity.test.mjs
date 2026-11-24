@@ -121,6 +121,43 @@ test('одна блокировка git на репозиторий между �
   assert.equal(b.gitBusy, false);
 });
 
+test('withGitLock: сериализует операции и возвращает GIT_BUSY без вызова функции', async () => {
+  const a = { userId: 7401, gitBusy: false };
+  const b = { userId: 7402, gitBusy: false };
+  const dir = join(home, 'with-lock');
+  let allowFirst;
+  const gate = new Promise((resolve) => { allowFirst = resolve; });
+  let secondCalls = 0;
+  const first = Ctx.withGitLock(a, async () => {
+    await gate;
+    return 'first';
+  }, dir);
+  const second = Ctx.withGitLock(b, async () => {
+    secondCalls += 1;
+    return 'second';
+  }, dir);
+  assert.equal(await second, Ctx.GIT_BUSY);
+  assert.equal(secondCalls, 0);
+  assert.equal(b.gitBusy, false);
+  allowFirst();
+  assert.equal(await first, 'first');
+  assert.equal(a.gitBusy, false);
+  assert.equal(await Ctx.withGitLock(b, async () => 'ok', dir), 'ok');
+  assert.equal(b.gitBusy, false);
+});
+
+test('withGitLock: освобождает блокировку при ошибке и сохраняет результат', async () => {
+  const st = { userId: 7403, gitBusy: false };
+  const dir = join(home, 'with-lock-error');
+  const error = new Error('сбой операции');
+  await assert.rejects(Ctx.withGitLock(st, async () => { throw error; }, dir), error);
+  assert.equal(st.gitBusy, false);
+  assert.equal(await Ctx.withGitLock(st, async () => 42, dir), 42);
+  assert.equal(st.gitBusy, false);
+  assert.equal(await Ctx.withGitLock(st, async () => undefined, dir), undefined);
+  assert.equal(st.gitBusy, false);
+});
+
 test('после неудачного клона удаляется только созданная папка внутри разрешённого корня', () => {
   const base = join(home, 'clone-base');
   const target = join(base, 'partial');

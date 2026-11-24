@@ -4,6 +4,7 @@ import { botInfo, db, langOf, log, say } from './ctx.mjs';
 import { errText, t } from './i18n.mjs';
 import { engineOf, errorRootOf, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { tg } from './telegram.mjs';
+import { cbCtx } from './uiActions.mjs';
 import { createTopic, topicLink, topicName } from './topics.mjs';
 
 const modeKeyboard = (on, lang) => ({
@@ -25,7 +26,7 @@ const stateText = (st, lang) => {
  * Настройки тем бота из getMe: владелец мог изменить их в @BotFather, пока бот работает (при запуске они читаются
  * один раз). Ошибку запроса не показываем — остаются прежние значения.
  */
-export async function refreshTopicsSupport() {
+async function refreshTopicsSupport() {
   try {
     const me = await tg('getMe');
     topicsSupport.enabled = Boolean(me.has_topics_enabled);
@@ -47,7 +48,7 @@ export async function handleTopics(st) {
 export async function onTopicsCallback(st, cb) {
   const want = cb.data === 'tpc:on';
   const lang = langOf(st.userId);
-  const ack = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, show_alert: true } : {}) }).catch(() => {});
+  const { ack, edit } = cbCtx(st, cb, { alert: true, fallback: (text) => say(st.to, text) });
   if (!topicsSupport.enabled) return ack(t('topics.unsupported', lang));
   if (want === topicsOn(st.userId)) return ack();
   if (statesOf(st.userId).some((s) => s.busy)) return ack(t('topics.busy', lang));
@@ -57,9 +58,7 @@ export async function onTopicsCallback(st, cb) {
   log('режим «диалоги»', want ? 'включён' : 'выключен', '| пользователь', st.userId);
   await ack();
   const text = `${t(want ? 'topics.enabled' : 'topics.disabled', lang)}\n\n${stateText(st, lang)}`;
-  await tg('editMessageText', { chat_id: cb.message?.chat?.id ?? st.chatId, message_id: cb.message?.message_id, text, reply_markup: modeKeyboard(want, lang) }).catch(() =>
-    say(st.to, text),
-  );
+  await edit(text, modeKeyboard(want, lang));
 }
 
 /**

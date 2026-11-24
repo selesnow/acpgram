@@ -254,7 +254,7 @@ test('attachFiles: файлы — блоками на месте меток, н�
   const paths = [join(outbox, 'chart.png'), 'report.csv', join(outbox, 'nope.txt'), join(outbox, 'pic.webp'), join(project, 'big.bin')];
   const text = ['Итог:', filePlaceholder(0), 'Отчёт ниже.', `${filePlaceholder(1)} ${filePlaceholder(2)}`, filePlaceholder(3), filePlaceholder(4), 'Конец.'].join('\n');
   const skipped = [];
-  const r = attachFiles(text, paths, { cwd: project, outbox, failText: (name, why) => `⚠️ ${name}: ${why}`, onSkip: (p, why) => skipped.push(why), maxBytes: 50 });
+  const r = attachFiles(text, paths, { cwd: project, outbox, failText: (name, why) => `⚠️ ${name}: ${why}`, onSkip: (_p, why) => skipped.push(why), maxBytes: 50 });
 
   assert.equal(
     r.text,
@@ -274,7 +274,7 @@ test('attachFiles: не больше 10 файлов за ответ; текст
   assert.deepEqual(attachFiles(code, [], { cwd: tmp, outbox: tmp, failText: () => '' }), { text: code, media: {}, extra: [] });
   const paths = Array.from({ length: 12 }, (_, i) => `/x/${i}.txt`);
   const skipped = [];
-  attachFiles(paths.map((_, i) => filePlaceholder(i)).join('\n'), paths, { cwd: tmp, outbox: tmp, failText: () => '', onSkip: (p, why) => skipped.push(why) });
+  attachFiles(paths.map((_, i) => filePlaceholder(i)).join('\n'), paths, { cwd: tmp, outbox: tmp, failText: () => '', onSkip: (_p, why) => skipped.push(why) });
   assert.deepEqual(skipped.slice(-2), ['limit', 'limit']);
 });
 

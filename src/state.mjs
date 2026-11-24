@@ -8,13 +8,33 @@ import { HOME, ROOT, USER_WORKSPACES, insideRoot, isPersonalRoot, isWithin, push
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
 import { GIT_AGENT_AUTH, agentGitEnv, refreshAccounts } from './gitAccess.mjs';
 
+export const STATE_FIELDS = Object.freeze([
+  'userId', 'chatId', 'topic', 'threadId', 'to',
+  'agent', 'engine', 'project', 'resumeId', 'requestId',
+  'busy', 'lastActive', 'queued', 'receiving', 'rawCommand',
+  'pendingInput', 'stopTimer', 'turnId', 'uploadGroup', 'swallowUntil',
+  'onUpdate', 'perms', 'suppress', 'gitBusy',
+  'asks', 'replaces', 'gitKeys',
+  'gitDevice', 'gitMr', 'gitPublish', 'gitRepos',
+]);
+
+export const AGENT_FIELDS = Object.freeze([
+  'quietStderr', 'quietStderrBlock', 'cwd', 'name', 'command',
+  'args', 'env', 'onPermission', 'onUpdate', 'onExit',
+  'nextId', 'pending', 'sessionId', 'proc', 'closed',
+  'caps', '#finished', 'mode', 'lastUpdateAt', 'engine',
+  'startedAt', 'ready', 'commands', 'lastCostTotal', 'lastModel',
+  'applied', 'costBaseUnknown', 'dbSessionId', 'sessionRules', 'costSoFar',
+  'promptCount',
+]);
+
 const states = new Map(); // userId -> состояние
 
 /**
  * Сколько ждать запуска агента (initialize, создание или загрузка сессии), AGENT_START_TIMEOUT секунд, по умолчанию 120.
  * Без ограничения зависший агент (например, ждёт входа в аккаунт) держал бы пользователя в «агент занят» до /close.
  */
-export const START_TIMEOUT_MS = positiveEnv('AGENT_START_TIMEOUT', 120) * 1000;
+const START_TIMEOUT_MS = positiveEnv('AGENT_START_TIMEOUT', 120) * 1000;
 
 export const ADMIN_SANDBOX = process.env.ADMIN_SANDBOX === '1';
 
@@ -30,7 +50,7 @@ export const rootOf = (userId) => userRoot(userId, { admin: isAdmin(userId) });
 export const errorRootOf = (userId) => (USER_WORKSPACES && !isAdmin(userId) ? rootOf(userId) : null);
 
 /** Папка, с которой начинает пользователь: его корень, а без корня — домашняя папка. */
-export const defaultDirOf = (userId) => rootOf(userId) ?? HOME;
+const defaultDirOf = (userId) => rootOf(userId) ?? HOME;
 
 /** Путь для показа пользователю: относительно его корня, на его языке (личное пространство — без пути на сервере). */
 export const userPath = (userId, p, lang = langOf(userId)) => showPath(p, lang, rootOf(userId));
@@ -97,7 +117,7 @@ export const topicsOn = (userId) => topicsSupport.enabled && db.getSetting(`topi
 export const setTopicsMode = (userId, on) => db.setSetting(`topics:${userId}`, on ? 'on' : 'off');
 
 /** Номер диалога для сообщения из темы threadId: в режиме «диалоги» — сама тема, иначе 0 (один диалог на пользователя). */
-export const topicOf = (userId, threadId) => (threadId && topicsOn(userId) ? threadId : 0);
+const topicOf = (userId, threadId) => (threadId && topicsOn(userId) ? threadId : 0);
 const keyOf = (userId, topic) => `${userId}:${topic}`;
 
 /**
@@ -164,7 +184,7 @@ export const findState = (userId, threadId = null) => states.get(keyOf(userId, t
 /** Все диалоги пользователя (в режиме «диалоги» их может быть несколько). */
 export const statesOf = (userId) => [...states.values()].filter((s) => s.userId === userId);
 
-export const RECENT_LIMIT = 6;
+const RECENT_LIMIT = 6;
 
 const readRecent = (userId) => {
   const list = parseJson(db.getSetting(`recent:${userId}`), []);
@@ -256,8 +276,8 @@ export function activeSessions() {
 const activeUserAgents = () => [...states.values()].filter((s) => !isAdmin(s.userId) && s.agent).length;
 
 /** Сколько агентов одного пользователя работает одновременно (в режиме «диалоги» — в разных темах). */
-export const MAX_AGENTS_PER_USER = positiveEnv('MAX_AGENTS_PER_USER', 2);
-export const ADMIN_MAX_AGENTS = positiveEnv('ADMIN_MAX_AGENTS', 4);
+const MAX_AGENTS_PER_USER = positiveEnv('MAX_AGENTS_PER_USER', 2);
+const ADMIN_MAX_AGENTS = positiveEnv('ADMIN_MAX_AGENTS', 4);
 const capOf = (userId) => (isAdmin(userId) ? ADMIN_MAX_AGENTS : MAX_AGENTS_PER_USER);
 
 /**

@@ -1,7 +1,7 @@
 // Темы в личном чате с ботом (Bot API 9.3+): в режиме «диалоги» каждая тема — отдельный диалог с агентом.
 // Здесь — работа с темами в Telegram и название темы от агента; состояние диалогов — в state.mjs.
-import { splitCode } from './files.mjs';
 import { tg } from './telegram.mjs';
+import { TITLE_HEAD, TITLE_MARK, extractAgentMarks } from './agentMarks.mjs';
 
 /** Название темы в Telegram: 1–128 символов. */
 const NAME_MAX = 128;
@@ -61,30 +61,27 @@ export const TITLE_NOTE =
   '[[title: <short topic title, 2-5 words, in the language of the user\'s message, no emoji>]] — it becomes the topic name ' +
   'and is hidden from the user. Do it only in this reply.';
 
-const TITLE_MARK = /\[\[title:([^\]\r\n]*)\]\][ \t]*\r?\n?/i;
-
 /** Достаёт из ответа агента название темы (метка вне кода) и убирает метку из текста. */
 export function extractTitle(text) {
-  const src = String(text ?? '');
-  if (!/\[\[title:/i.test(src)) return { title: null, text: src };
-  let title = null;
-  const out = splitCode(src)
-    .map(({ code, s }) => {
-      if (code || title != null) return s;
-      return s.replace(TITLE_MARK, (_, t) => {
-        title = cleanTitle(t) || null;
-        return '';
-      });
-    })
-    .join('');
-  return { title, text: out.replace(/^\s+/, '') };
+  const state = { title: null };
+  return extractAgentMarks(text, {
+    present: (s) => /\[\[title:/i.test(s),
+    mark: TITLE_MARK,
+    state,
+    onMatch: (s, full, t) => {
+      if (s.title != null) return full;
+      s.title = cleanTitle(t) || null;
+      return '';
+    },
+    finish: (s) => s.replace(/^\s+/, ''),
+  });
 }
 
 /** Для черновика: убирает метку названия, в том числе ещё не дописанную в начале ответа («[[tit», «[[title: Отч»). */
 export function stripTitle(text) {
   const s = String(text ?? '');
   const head = s.replace(/^\s+/, '');
-  if (/^\[(\[(t(i(t(l(e(:[^\]\r\n]*(\](\])?)?)?)?)?)?)?)?)?$/i.test(head)) return ''; // начало метки ещё пишется
+  if (TITLE_HEAD.test(head)) return ''; // начало метки ещё пишется
   return extractTitle(s).text;
 }
 
