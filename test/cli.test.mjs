@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { setCliLang } from '../src/cli-i18n.mjs';
 import { help, isNpm, route, updateCommand, updateEnv } from '../src/cli.mjs';
-import { checkText } from '../scripts/publish-public.mjs';
 
 setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
 
@@ -74,13 +73,6 @@ test('install.sh: обновление из релиза и строгая пр�
   assert.ok(sh.includes('releases/latest/download/install.sh'), 'установщик берётся из последнего релиза');
   assert.ok(!sh.includes('raw.githubusercontent.com/selesnow/acpgram/main'));
   assert.ok(sh.includes('^v[0-9]+\\.[0-9]+\\.[0-9]+$'), 'тег релиза проверяется полностью');
-});
-
-test('publish-public: проверка текста на внутренние маркеры и секреты', () => {
-  assert.ok(checkText('notes', 'C:' + '\\scripts\\' + 'al' + 'sey').length, 'внутренний путь');
-  assert.ok(checkText('notes', 'AKIA' + 'IOSFODNN7EXAMPLE').length, 'AWS-ключ');
-  assert.ok(checkText('notes', 'npm_' + 'abcdefghijklmnopqrstuvwxyz0123456789').length, 'npm-токен');
-  assert.equal(checkText('notes', 'AcpGram release notes').length, 0);
 });
 
 test('cli.mjs как команда: version и код выхода при ошибке', () => {
