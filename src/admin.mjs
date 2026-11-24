@@ -13,7 +13,25 @@ import { isNotModified, tg } from './telegram.mjs';
 const INVITE_TTL_MS = 24 * 3600_000;
 const REQUEST_COOLDOWN_MS = 3600_000; // повторный запрос доступа от одного человека — не чаще раза в час
 const NOTICE_COOLDOWN_MS = 10 * 60_000; // напоминание «запрос уже отправлен» — не чаще раза в 10 минут
+const STRANGER_REPLY_COOLDOWN_MS = 5 * 60_000; // незнакомцу — не больше одного ответа за любое число попыток
+const ADMIN_NOTICE_COOLDOWN_MS = 3600_000; // все запросы доступа за час складываются в одно уведомление администратору
 const lastNotice = new Map();
+const lastStrangerReply = new Map();
+let lastAdminNoticeAt = 0;
+
+/** Чистит кэши времени ответов и уведомлений, чтобы они не росли вместе с числом обращений. */
+export function sweepUnknownUsers(maxAgeMs = 24 * 3600_000) {
+  const until = Date.now() - maxAgeMs;
+  let n = 0;
+  for (const map of [lastNotice, lastStrangerReply]) {
+    for (const [id, at] of map) {
+      if (at > until) continue;
+      map.delete(id);
+      n++;
+    }
+  }
+  return n;
+}
 
 /** Язык администратора: все его экраны и уведомления ему. */
 const adminLang = () => langOf(ADMIN_ID);
@@ -32,6 +50,9 @@ const grantedText = (level, lang, byAdmin) => t(byAdmin ? 'access.grantedByAdmin
 
 /** Сообщение от человека без доступа: подключение по приглашению или запрос доступа администратору. */
 export async function handleUnknownUser(from, chatId, text) {
+  const now = Date.now();
+  if (now - (lastStrangerReply.get(from.id) ?? 0) < STRANGER_REPLY_COOLDOWN_MS) return;
+  lastStrangerReply.set(from.id, now);
   const lang = langOf(from.id);
   const m = /^\/start(?:@\w+)?\s+(\S+)$/.exec(text || '');
   if (m) {
@@ -61,6 +82,8 @@ export async function handleUnknownUser(from, chatId, text) {
   const prev = db.getUser(from.id);
   const al = adminLang();
   await say(chatId, t('access.requestSent', lang));
+  if (Date.now() - lastAdminNoticeAt < ADMIN_NOTICE_COOLDOWN_MS) return;
+  lastAdminNoticeAt = Date.now();
   return say(ADMIN_ID, t('adm.reqNew', al, { who: who(from), id: from.id, note: prev?.status === 'revoked' ? t('adm.reqRevokedBefore', al) : '', msg: (text || '').slice(0, 200) }), {
     reply_markup: {
       inline_keyboard: [
@@ -160,6 +183,7 @@ export async function onAdminCallback(cb) {
     if (!isLevel(a)) return ack();
     const code = randomBytes(9).toString('base64url');
     db.createInvite(code, a, ADMIN_ID, new Date(Date.now() + INVITE_TTL_MS).toISOString());
+    log('приглашение создано: уровень', a, '| администратор', ADMIN_ID);
     await ack();
     return edit(t('adm.inviteMade', al, { level: levelName(a, al), bot: botInfo.username, code }));
   }
@@ -172,6 +196,7 @@ export async function onAdminCallback(cb) {
     const name = userName({ user_id: id, username: req.username, first_name: req.first_name });
     if (action === 'd') {
       db.setRequestStatus(id, 'rejected');
+      log('доступ отклонён:', id, '| администратор', ADMIN_ID);
       await ack();
       await say(id, t('access.rejectedByAdmin', langOf(id)));
       return edit(t('adm.reqRejected', al, { name }));

@@ -2,7 +2,8 @@
 // Файлы от пользователя сохраняются на диск (агент читает их своими инструментами по пути) — так работает любой
 // движок и любой формат; изображения дополнительно уходят блоком image, если агент это заявил (promptCapabilities).
 // Файлы агента — по метке [[send:путь]] в ответе: отправляются только из каталога исходящих и из папки проекта.
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { readStable } from './agentFiles.mjs';
 import { DATA_DIR, ENV_PATH, positiveEnv } from './app.mjs';
@@ -62,13 +63,13 @@ const pad = (n) => String(n).padStart(2, '0');
 const stamp = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 
 /** Сохраняет файл в `dir` под именем «ГГГГММДД-ЧЧММСС_имя» (существующие файлы не перезаписываются). Возвращает путь. */
-export function saveUpload(dir, name, buffer, date = new Date()) {
-  mkdirSync(dir, { recursive: true });
+export async function saveUpload(dir, name, buffer, date = new Date()) {
+  await mkdir(dir, { recursive: true });
   const safe = safeFileName(name);
   for (let i = 0; ; i++) {
     const path = join(dir, `${stamp(date)}${i ? `-${i}` : ''}_${safe}`);
     try {
-      writeFileSync(path, buffer, { flag: 'wx' });
+      await writeFile(path, buffer, { flag: 'wx' });
       return path;
     } catch (e) {
       if (e.code !== 'EEXIST' || i > 99) throw e;
@@ -77,31 +78,37 @@ export function saveUpload(dir, name, buffer, date = new Date()) {
 }
 
 /** Удаляет файлы старше maxAgeMs в каталогах пользователей внутри `root` (root/<id>/файл). Возвращает число удалённых. */
-export function cleanupOldFiles(root, maxAgeMs, now = Date.now()) {
+export async function cleanupOldFiles(root, maxAgeMs, now = Date.now()) {
   let removed = 0;
-  if (!existsSync(root)) return 0;
-  for (const dir of readdirSync(root, { withFileTypes: true })) {
-    if (!dir.isDirectory()) continue;
+  let dirs;
+  try {
+    dirs = await readdir(root, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  await Promise.all(dirs.map(async (dir) => {
+    if (!dir.isDirectory()) return;
     const full = join(root, dir.name);
-    for (const f of readdirSync(full, { withFileTypes: true })) {
+    const entries = await readdir(full, { withFileTypes: true }).catch(() => []);
+    await Promise.all(entries.map(async (f) => {
       const p = join(full, f.name);
       try {
-        if (now - statSync(p).mtimeMs > maxAgeMs) {
-          rmSync(p, { recursive: true, force: true });
+        if (now - (await stat(p)).mtimeMs > maxAgeMs) {
+          await rm(p, { recursive: true, force: true });
           removed++;
         }
       } catch {
         /* файл исчез или занят — пропускаем */
       }
-    }
-  }
+    }));
+  }));
   return removed;
 }
 
 /** Чистка загрузок и исходящих файлов старше KEEP_DAYS. */
-export function cleanupFiles(base = FILES_BASE) {
+export async function cleanupFiles(base = FILES_BASE) {
   const age = KEEP_DAYS * 24 * 3600_000;
-  return cleanupOldFiles(uploadsRoot(base), age) + cleanupOldFiles(outboxRoot(base), age);
+  return (await cleanupOldFiles(uploadsRoot(base), age)) + (await cleanupOldFiles(outboxRoot(base), age));
 }
 
 const UNPACKED_LIST = 50; // сколько файлов распакованного архива перечислять агенту

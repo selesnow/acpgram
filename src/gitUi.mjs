@@ -16,7 +16,7 @@ import { HostError, customHost, fetchProfile, listRepos, missingScopes, probeHos
 import { LOCALES, t } from './i18n.mjs';
 import { folderName, insideRoot, isPersonalRoot, navStart } from './projects.mjs';
 import { canCreateProject, selectProject } from './projectsUi.mjs';
-import { isAdmin, rootOf, userPath } from './state.mjs';
+import { errorRootOf, isAdmin, rootOf, userPath } from './state.mjs';
 import { dest, tg } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
 
@@ -111,6 +111,7 @@ async function freshen(st) {
 export async function handleGit(st) {
   const lang = langOf(st.userId);
   if (!gitAvailable()) return say(st.to, t('git.none', lang));
+  if (st.gitBusy) return say(st.to, t('git.busy', lang));
   await freshen(st);
   const v = await gitView(st, lang, { sync: true });
   return tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup }).catch((e) => log('git:', e.message));
@@ -179,7 +180,7 @@ async function cloneChosen(st, repo, host, account, lang, edit) {
   } catch (e) {
     log('git: клонирование:', e.message, '| пользователь', st.userId);
     cleanFailedClone(st, target, base);
-    return edit({ text: failText(e, lang) });
+    return edit({ text: failText(e, lang, null, errorRootOf(st.userId)) });
   }
   const dir = insideRoot(target, rootOf(st.userId));
   if (!dir) return edit({ text: th('git.cloneBadName', lang) });
@@ -241,7 +242,7 @@ async function repoAction(st, action, lang, edit, { message = null } = {}) {
     return await done(th(action === 'save' ? 'git.saved' : 'git.pushed', lang) + note);
   } catch (e) {
     log(`git: ${action}:`, e.message, '| пользователь', st.userId);
-    return await done(failText(e, lang));
+    return await done(failText(e, lang, null, errorRootOf(st.userId)));
   } finally {
     releaseGitLock(st, lock);
   }
@@ -446,7 +447,7 @@ export async function onGitCallback(st, cb) {
   } catch (e) {
     log('git:', e.message, '| пользователь', st.userId);
     await ack();
-    return edit({ text: failText(e, lang) });
+    return edit({ text: failText(e, lang, null, errorRootOf(st.userId)) });
   }
 }
 
@@ -519,7 +520,7 @@ export async function onGitInput(st, text, { messageId, now = Date.now() } = {})
     try {
       await send(await reposView(st, host, account, { search: text.trim().slice(0, 60) }, lang));
     } catch (e) {
-      await send({ text: failText(e, lang) });
+      await send({ text: failText(e, lang, null, errorRootOf(st.userId)) });
     }
     return true;
   }

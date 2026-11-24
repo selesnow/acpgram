@@ -3,7 +3,7 @@ import { db } from './ctx.mjs';
 import { accountsOf, hostFor, identityOf } from './gitAccess.mjs';
 import { authConfig, HostError } from './gitHosts.mjs';
 import { gitCommand, gitEnv, GitConfigError, GitError, repoState } from './git.mjs';
-import { errText } from './i18n.mjs';
+import { errText, maskErrorPaths } from './i18n.mjs';
 import { insideRoot, isPersonalRoot, ROOT } from './projects.mjs';
 import { agentSandbox } from './sandbox.mjs';
 import { rootOf, sandboxed } from './state.mjs';
@@ -38,10 +38,12 @@ export async function repoOf(st, project) {
   return { state, host, account };
 }
 
-export const failText = (e, lang, host = null) => {
+export const failText = (e, lang, host = null, root = null) => {
+  const mask = (s) => (root ? maskErrorPaths(s, root, lang) : s);
   if (e instanceof GitConfigError) return th('git.unsafeConfig', lang, { keys: e.keys.join(', ') });
-  if (e instanceof HostError && e.code === 'forbidden') return th('git.needApi', lang, { host: host?.label ?? 'Git', msg: e.message });
-  return th('git.opFail', lang, { msg: e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang) });
+  if (e instanceof HostError && e.code === 'forbidden') return th('git.needApi', lang, { host: host?.label ?? 'Git', msg: mask(e.message) });
+  const msg = e instanceof GitError || e instanceof HostError ? e.message : errText(e, lang, root);
+  return th('git.opFail', lang, { msg: mask(msg) });
 };
 
 const gitLocks = new Map();

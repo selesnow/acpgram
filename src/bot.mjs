@@ -7,8 +7,8 @@ import { SANDBOX, checkInSandbox, probeSandbox } from './sandbox.mjs';
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './access.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
-import { ADMIN_ID, DATA_DIR, HISTORY_KEEP_DAYS, IDLE_MINUTES, LEVEL_KEYS, LOGS_KEEP_DAYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang } from './ctx.mjs';
-import { adminCommand, handleUnknownUser, onAdminCallback, welcomeNote } from './admin.mjs';
+import { ADMIN_ID, DATA_DIR, HISTORY_KEEP_DAYS, IDLE_MINUTES, LEVEL_KEYS, LOGS_KEEP_DAYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang, sweepLangCache } from './ctx.mjs';
+import { adminCommand, handleUnknownUser, onAdminCallback, sweepUnknownUsers, welcomeNote } from './admin.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, LOCALES, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
 import { handleProject, onNavCallback, onProjectNameInput, onTopicListCallback } from './projectsUi.mjs';
@@ -17,7 +17,7 @@ import { checkGit, gitCommand } from './git.mjs';
 import { GIT_AGENT_AUTH, tokenReminders } from './gitAccess.mjs';
 import { handleGit, onGitCallback, onGitInput } from './gitUi.mjs';
 import { handleSessions, onSessionCallback } from './sessionsUi.mjs';
-import { ADMIN_SANDBOX, dropPermissions, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { ADMIN_SANDBOX, dropPermissions, errorRootOf, findState, getState, isAdmin, levelLabel, shutdownAll, startIdleReaper, endAgent, closeSession, engineOf, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { handleTopics, newTopic, onTopicsCallback } from './topicsUi.mjs';
 import { deleteTopic, isAutoTopicCommand, topicInfoOf } from './topics.mjs';
 import { setSyncKill } from './acp.mjs';
@@ -34,11 +34,14 @@ import { createQueue } from './queue.mjs';
 import { directorySize, fitsUpload, freeBytes } from './quota.mjs';
 import { forceStopAfter } from './forceStop.mjs';
 import { looksLikeSecret } from './pending.mjs';
-import { cleanupLogs } from './log.mjs';
+import { cleanupLogs, logError } from './log.mjs';
 import { maybeNotifySafety } from './warnings.mjs';
 
 const UPLOADS_QUOTA_MB = positiveEnv('UPLOADS_QUOTA_MB', 0);
 const MIN_FREE_MB = positiveEnv('MIN_FREE_MB', 100);
+const UPDATE_LIMIT = 20; // обновлений от одного пользователя в окне ниже: защита от зациклившегося клиента
+const UPDATE_WINDOW_MS = 10_000;
+const updateHits = new Map();
 const receiveQueue = createQueue(1);
 const reservedUploads = new Map();
 
@@ -49,6 +52,33 @@ if (!process.env.TELEGRAM_BOT_TOKEN || !ADMIN_ID) {
 
 /** Есть ли у пользователя доступ: администратор или активный сотрудник. */
 const hasAccess = (id) => isAdmin(id) || db.getUser(id)?.status === 'active';
+
+/** Ограничение частоты обновлений: 20 событий за 10 секунд от одного пользователя. */
+function tooManyUpdates(id) {
+  const now = Date.now();
+  const hits = (updateHits.get(id) ?? []).filter((at) => now - at < UPDATE_WINDOW_MS);
+  if (hits.length >= UPDATE_LIMIT) {
+    updateHits.set(id, hits);
+    return true;
+  }
+  hits.push(now);
+  updateHits.set(id, hits);
+  return false;
+}
+
+/** Чистит историю счётчиков, чтобы она не росла вместе с числом пользователей. */
+function sweepUpdateLimits() {
+  const until = Date.now() - UPDATE_WINDOW_MS;
+  let n = 0;
+  for (const [id, hits] of updateHits) {
+    const fresh = hits.filter((at) => at > until);
+    if (!fresh.length) {
+      updateHits.delete(id);
+      n++;
+    } else updateHits.set(id, fresh);
+  }
+  return n;
+}
 
 /** Модель пользователя для экрана /start: выбранная или «Авто» на его языке. */
 const modelLabel = (st) => {
@@ -240,7 +270,7 @@ async function receiveFile(st, meta, lang) {
     data = await downloadFile(meta.id);
   } catch (e) {
     log('скачивание файла:', e.message, '| пользователь', st.userId);
-    await say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang) }));
+    await say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }));
     return null;
   } finally {
     releaseUpload(st.userId, meta.size);
@@ -249,7 +279,7 @@ async function receiveFile(st, meta, lang) {
     await say(st.to, t('file.tooBig', lang));
     return null;
   }
-  const path = saveUpload(dir, meta.name, data);
+  const path = await saveUpload(dir, meta.name, data);
   log('файл принят', st.userId, path, `${data.length} Б`);
   const file = { path, name: meta.name, mime: meta.mime, size: data.length };
   if (isImageMime(meta.mime) && data.length <= IMAGE_BLOCK_MAX) file.data = data;
@@ -326,6 +356,9 @@ async function setupCommands() {
 }
 
 async function handleUpdate(u) {
+  const actor = u.message?.from || u.callback_query?.from || u.widget_query?.from || (u.stopped_message_generation ? { id: u.stopped_message_generation.chat?.id ?? '?' } : null);
+  if (actor && tooManyUpdates(actor.id)) return;
+
   // пользователь нажал «стоп» на черновике
   if (u.stopped_message_generation) {
     const sg = u.stopped_message_generation;
@@ -477,6 +510,22 @@ ${probe.hint}`);
   setSandboxBroken(broken);
 }
 
+/** При старте помечает оборванные перезапуском запросы и сообщает их авторам. */
+function notifyInterrupted() {
+  const rows = db.unfinishedRequests() ?? [];
+  const n = db.interruptRequests('interrupted by bot restart') ?? 0;
+  if (!rows.length) return n;
+  const seen = new Set();
+  for (const r of rows) {
+    const key = `${r.user_id}:${r.chat_id ?? r.user_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    say(r.chat_id ?? r.user_id, t('turn.restarted', langOf(r.user_id))).catch((e) => log('уведомление о перезапуске:', e.message, '| пользователь', r.user_id));
+  }
+  log(`запросов, прерванных перезапуском: ${n}; уведомлено диалогов: ${seen.size}`);
+  return n;
+}
+
 async function main() {
   if (SANDBOX && !ROOT) {
     console.error('AGENT_SANDBOX=bwrap: задайте PROJECTS_ROOT — без корня сотрудник может выбрать проектом любую папку сервера');
@@ -527,15 +576,16 @@ async function main() {
       : 'темы в личном чате выключены — режим «диалоги» недоступен',
   );
   await setupCommands().catch((e) => log('настройка меню:', e.message));
+  notifyInterrupted();
   maybeNotifySafety();
   // пропускаем накопившиеся до запуска обновления
   const old = await tg('getUpdates', { offset: -1, timeout: 0 });
   let offset = old.length ? old[old.length - 1].update_id + 1 : 0;
   startIdleReaper();
   // принятые и исходящие файлы хранятся FILES_KEEP_DAYS дней: чистим при старте и раз в сутки
-  const sweep = () => {
+  const sweep = async () => {
     try {
-      const n = cleanupFiles();
+      const n = await cleanupFiles();
       if (n) log(`удалено старых файлов: ${n}`);
     } catch (e) {
       log('очистка файлов:', e.message);
@@ -544,6 +594,8 @@ async function main() {
     if (h) log(`удалено старых записей истории: ${h}`);
     const l = cleanupLogs(DATA_DIR, LOGS_KEEP_DAYS);
     if (l) log(`удалено старых файлов журнала: ${l}`);
+    const c = sweepUpdateLimits() + sweepUnknownUsers() + sweepLangCache();
+    if (c) log(`удалено старых записей кэша обновлений: ${c}`);
   };
   sweep();
   setInterval(sweep, 24 * 3600_000).unref();
@@ -580,7 +632,11 @@ async function main() {
     for (const u of updates) {
       offset = u.update_id + 1;
       // запросы разных пользователей не блокируют друг друга
-      handleUpdate(u).catch((e) => log('handleUpdate:', e.message));
+      handleUpdate(u).catch((e) => {
+        const from = u.message?.from?.id ?? u.callback_query?.from?.id ?? u.widget_query?.from?.id ?? '?';
+        log('handleUpdate:', e.message, '| обновление', u.update_id, '| пользователь', from);
+        logError('handleUpdate, стек:', e.stack ?? e.message);
+      });
     }
   }
 }

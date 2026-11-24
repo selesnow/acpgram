@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
-import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, normLang, pickLang, plural, t, errText, i18nError } from '../src/i18n.mjs';
+import { DEFAULT_LANG, LANGS, LANG_CODES, MESSAGES, maskErrorPaths, normLang, pickLang, plural, t, errText, i18nError } from '../src/i18n.mjs';
 
 const placeholders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
 
@@ -72,4 +74,16 @@ test('errText: ошибка нижнего слоя показывается н�
   assert.equal(errText(Object.assign(new Error('x'), { i18n: { key: 'no.such.key' } }), 'en'), 'x', 'неизвестный ключ не роняет показ ошибки');
   const withCause = i18nError('m', 'err.tgNoFilePath', {}, {}, { cause: new Error('c') });
   assert.equal(withCause.cause.message, 'c');
+});
+
+test('errText: пути в ошибке сотрудника с личным пространством маскируются', () => {
+  const root = resolve(tmpdir(), 'acpgram-root', '4001');
+  const inside = join(root, 'app', 'a.py');
+  const outside = resolve(tmpdir(), 'Windows', 'system32.dll');
+  const raw = `git: ${inside}: ошибка ${outside}.`;
+  const out = errText(new Error(raw), 'ru', root);
+  assert.ok(!out.includes(root), 'путь на сервере не показан');
+  assert.ok(out.includes(`app${sep}a.py`), 'путь внутри личного пространства показан от его папки');
+  assert.ok(out.includes(t('err.serverPath', 'ru')), 'чужой путь заменён подстановкой');
+  assert.equal(maskErrorPaths(raw, null, 'ru'), raw, 'без корня текст не меняется');
 });

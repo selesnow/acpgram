@@ -33,25 +33,38 @@ export class TelegramError extends Error {
 
 /**
  * Вызов метода Bot API: тайм-аут на запрос и повтор после 429 (не больше retries раз).
- * После тайм-аута не повторяем: сообщение могло уже дойти, повтор продублировал бы его.
+ * С retryTransient — ещё и повтор при сетевой ошибке и 5xx (только для итоговой отправки: черновики и команды
+ * повторять бессмысленно). После тайм-аута не повторяем: сообщение могло уже дойти, повтор продублировал бы его.
  * @param {() => Promise<RequestInit>|RequestInit} makeInit тело запроса (для повтора собирается заново)
- * @param {{timeoutMs?: number, retries?: number, signal?: AbortSignal, fetchImpl?: typeof fetch}} [o]
+ * @param {{timeoutMs?: number, retries?: number, retryTransient?: boolean, signal?: AbortSignal, fetchImpl?: typeof fetch}} [o]
  */
-export async function callApi(method, makeInit, { timeoutMs = TIMEOUT_MS, retries = 2, signal, fetchImpl = fetch } = {}) {
+export async function callApi(method, makeInit, { timeoutMs = TIMEOUT_MS, retries = 2, retryTransient = false, signal, fetchImpl = fetch } = {}) {
+  const backoff = (attempt) => sleep(200 * 2 ** attempt);
   for (let attempt = 0; ; attempt++) {
     const limit = AbortSignal.timeout(timeoutMs);
+    const init = await makeInit();
     let data;
     try {
-      const res = await fetchImpl(`${BASE}/${method}`, { method: 'POST', ...(await makeInit()), signal: signal ? AbortSignal.any([signal, limit]) : limit });
+      const res = await fetchImpl(`${BASE}/${method}`, { method: 'POST', ...init, signal: signal ? AbortSignal.any([signal, limit]) : limit });
       data = await res.json();
     } catch (e) {
       if (limit.aborted && !signal?.aborted) throw i18nError(`Telegram ${method}: нет ответа за ${Math.round(timeoutMs / 1000)} с`, 'err.tgTimeout', { method, sec: Math.round(timeoutMs / 1000) }, {}, { cause: e });
+      if (retryTransient && attempt < retries) {
+        logError(`Telegram ${method}: сеть, повтор ${attempt + 1}/${retries}:`, e.message);
+        await backoff(attempt);
+        continue;
+      }
       throw e;
     }
     if (data.ok) return data.result;
     const err = new TelegramError(method, data);
     if (err.code === 429 && attempt < retries && Number.isFinite(err.retryAfter) && err.retryAfter <= MAX_RETRY_AFTER_S) {
       await sleep(err.retryAfter * 1000 + 250);
+      continue;
+    }
+    if (retryTransient && err.code >= 500 && attempt < retries) {
+      logError(`Telegram ${method}: HTTP ${err.code}, повтор ${attempt + 1}/${retries}`);
+      await backoff(attempt);
       continue;
     }
     throw err;
@@ -220,12 +233,13 @@ export const stripMedia = (md) => md.replace(MEDIA_LINE, '').replace(/\n{3,}/g, 
 const kindIn = (md, id) => new RegExp(`tg://(photo|document)\\?id=${id}\\)`).exec(md)?.[1] ?? 'document';
 
 /** Одно rich-сообщение с файлами; если Telegram отверг фото — повтор, где все фото идут документами. */
-async function sendRichMedia(to, md, ids, media) {
+async function sendRichMedia(to, md, ids, media, opts = {}) {
   const send = (text) =>
     tgForm(
       'sendRichMessage',
       { ...dest(to), rich_message: { markdown: text, media: ids.map((id) => ({ id, media: { type: kindIn(text, id), media: `attach://${id}` } })) } },
       Object.fromEntries(ids.map((id) => [id, media[id]])),
+      opts,
     );
   try {
     return await send(md);
@@ -244,13 +258,14 @@ async function sendRichMedia(to, md, ids, media) {
  * Если Telegram отверг разметку — отправляем обычным текстом.
  * @returns {Promise<object[]>} файлы из media, которые не удалось вставить в сообщение
  */
-export async function sendRich(to, markdown, { media = {} } = {}) {
+export async function sendRich(to, markdown, { media = {}, ...opts } = {}) {
+  const finalOpts = { retryTransient: true, ...opts }; // итоговый ответ повторяем при 5xx/сети; черновики — нет
   const leftover = [];
   for (let part of splitRich(markdown, RICH_LIMIT)) {
     const ids = mediaIdsOf(part).filter((id) => media[id]);
     if (ids.length) {
       try {
-        await sendRichMedia(to, part, ids, media);
+        await sendRichMedia(to, part, ids, media, finalOpts);
         continue;
       } catch (e) {
         logError('rich-сообщение с файлами не прошло, файлы уйдут отдельно:', e.message);
@@ -260,10 +275,13 @@ export async function sendRich(to, markdown, { media = {} } = {}) {
       }
     }
     try {
-      await tg('sendRichMessage', { ...dest(to), rich_message: { markdown: part } });
+      await tg('sendRichMessage', { ...dest(to), rich_message: { markdown: part } }, finalOpts);
     } catch (e) {
+      // обычным текстом отправляем только когда Telegram отверг именно разметку (400): при 5xx/сети сообщение
+      // могло дойти, и повтор в другом виде продублировал бы его в чате
+      if (!(e instanceof TelegramError && e.code === 400)) throw e;
       logError('sendRichMessage не прошёл, отправляю обычным текстом:', e.message);
-      for (const plain of splitText(richToPlain(part), 4000)) await tg('sendMessage', { ...dest(to), text: plain });
+      for (const plain of splitText(richToPlain(part), 4000)) await tg('sendMessage', { ...dest(to), text: plain }, finalOpts);
     }
   }
   return leftover;

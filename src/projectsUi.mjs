@@ -4,7 +4,7 @@ import { botInfo, db, langOf, log, say, who } from './ctx.mjs';
 import { ROOT, USER_WORKSPACES, canGoUp, createDir, findDirs, folderName, insideRoot, isPersonalRoot, listDirs, navStart, resolveAsPath, samePath, showPath } from './projects.mjs';
 import { gitAvailable } from './git.mjs';
 import { LOCALES, errText, t } from './i18n.mjs';
-import { endAgent, isAdmin, recentProjects, rootOf, saveProject, topicsOn } from './state.mjs';
+import { endAgent, errorRootOf, isAdmin, recentProjects, rootOf, saveProject, topicsOn } from './state.mjs';
 import { topicLink } from './topics.mjs';
 import { newTopic } from './topicsUi.mjs';
 import { dest, tg } from './telegram.mjs';
@@ -237,7 +237,7 @@ export async function onProjectNameInput(st, text, now = Date.now()) {
     dir = canCreateProject(st.userId) ? createDir(wait.dir, text, rootOf(st.userId)) : null;
   } catch (e) {
     log('создание папки проекта:', e.message, '| пользователь', st.userId);
-    await say(st.to, th('proj.newFail', lang, { msg: errText(e, lang) }), HTML);
+    await say(st.to, th('proj.newFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }), HTML);
     return true;
   }
   if (!dir) {

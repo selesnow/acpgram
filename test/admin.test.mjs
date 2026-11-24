@@ -23,7 +23,7 @@ const take = () => sent.splice(0);
 const acks = (calls) => calls.filter((c) => c.method === 'answerCallbackQuery').map((c) => c.body.text ?? '');
 
 const ctx = await import('../src/ctx.mjs');
-const { onAdminCallback } = await import('../src/admin.mjs');
+const { handleUnknownUser, onAdminCallback } = await import('../src/admin.mjs');
 const { t } = await import('../src/i18n.mjs');
 
 const ADMIN = ctx.ADMIN_ID;
@@ -72,4 +72,16 @@ test('смена уровня: при ошибке записи в базу ур
   await onAdminCallback(press(`adm:l:${USER}:full`));
   assert.equal(ctx.db.getUser(USER).level, 'full', 'обычная смена уровня работает как раньше');
   take();
+});
+
+test('незнакомец: повторные сообщения за пять минут не отправляются и администратору', async () => {
+  const stranger = ADMIN === 4003 ? 4004 : 4003;
+  const from = { id: stranger, username: 'stranger', first_name: 'Stranger', language_code: 'en' };
+  take();
+  await handleUnknownUser(from, stranger, 'please');
+  const first = take();
+  assert.equal(first.filter((c) => c.method === 'sendMessage' && c.body.chat_id === stranger).length, 1);
+  assert.equal(first.filter((c) => c.method === 'sendMessage' && c.body.chat_id === ADMIN).length, 1);
+  await handleUnknownUser(from, stranger, 'again');
+  assert.deepEqual(take(), []);
 });

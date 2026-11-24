@@ -1,7 +1,7 @@
 // Git: что изменилось и какие есть ветки — для экранов «Изменения» и «Ветки» в /git.
 // Только чтение репозитория, кроме переключения и создания ветки. Команды запускает runGit (git.mjs) — с теми же
 // безопасными настройками и, при включённой песочнице, внутри неё.
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstat, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { assertPlainConfig, GitError, runGit } from './git.mjs';
 import { samePath } from './projects.mjs';
@@ -56,12 +56,12 @@ export function parseNumstat(text) {
 }
 
 /** Число строк нового файла (которого git ещё не знает) или null, если он велик, двоичный или не читается. */
-function countLines(file) {
+async function countLines(file) {
   try {
     // файл лежит в папке, куда пишет агент: ссылку не читаем (она может вести на любой файл сервера)
-    const st = lstatSync(file);
+    const st = await lstat(file);
     if (!st.isFile() || st.size > COUNT_MAX_BYTES) return null;
-    const buf = readFileSync(file);
+    const buf = await readFile(file);
     if (buf.includes(0)) return null;
     if (!buf.length) return 0;
     let n = 0;
@@ -81,11 +81,11 @@ export async function changedFiles(cwd, opts = {}) {
   const all = parseChanges(await runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd, ...opts }));
   // в репозитории без коммитов сравнивать не с чем — тогда без числа строк
   const counts = await runGit(['diff', '--numstat', '-z', 'HEAD'], { cwd, ...opts }).then(parseNumstat, () => new Map());
-  const files = all.slice(0, CHANGES_MAX).map((f) => {
+  const files = await Promise.all(all.slice(0, CHANGES_MAX).map(async (f) => {
     const c = counts.get(f.path);
     if (c) return { ...f, ...c };
-    return { ...f, added: f.kind === 'new' ? countLines(join(top, f.path)) : null, deleted: f.kind === 'new' ? 0 : null };
-  });
+    return { ...f, added: f.kind === 'new' ? await countLines(join(top, f.path)) : null, deleted: f.kind === 'new' ? 0 : null };
+  }));
   return { files, total: all.length };
 }
 

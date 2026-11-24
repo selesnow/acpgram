@@ -6,7 +6,7 @@ import { ModelAccessError, choiceName, getCatalog, syncSelection } from './acces
 import { parseUsage, permissionOptions } from './engines.mjs';
 import { SESSION_OPTION_ID, allowOnceOption, describeRule, permissionKeys, rulesAllow, withSessionOption } from './permRules.mjs';
 import { errText, t } from './i18n.mjs';
-import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensureAgent, modeFor, setPermissionHandler, topicProject, userPath } from './state.mjs';
+import { ClosedError, LimitError, ProjectError, dropPermissions, engineOf, ensureAgent, errorRootOf, modeFor, setPermissionHandler, topicProject, userPath } from './state.mjs';
 import { clipText } from './clip.mjs';
 import { positiveEnv } from './app.mjs';
 import { clearStopTimer, forceStopAfter } from './forceStop.mjs';
@@ -26,6 +26,9 @@ const DRAFT_WAIT_MS = 3000; // сколько итоговый ответ ждё
 const OUTBOX_NOTE_EVERY = 10; // подсказка об отправке файлов — в первом запросе сессии и затем раз в столько запросов
 const HEARTBEAT_MS = 8000; // черновик живёт 30 с — обновляем и без изменений
 const TURN_IDLE_MS = positiveEnv('TURN_IDLE_MINUTES', 0) * 60_000;
+const MAX_ANSWER_CHARS = 1024 * 1024; // ответ длиннее всё равно не поместится в сообщения Telegram — ограничиваем память и черновик
+const MAX_THOUGHT_BUF = 4096; // из заголовка мыслей нужна только последняя строка, лишнее не накапливаем
+const MAX_STEPS = 5000;
 
 // ---- запрос разрешения: inline-кнопки (приходят самому пользователю, чей это запрос) ----
 const PERM_KINDS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'];
@@ -228,11 +231,11 @@ async function nameTopic(st, title) {
 async function sendLooseFiles(st, files, lang) {
   for (const f of files) {
     try {
-      await sendFile(st.to, f.buffer ? { buffer: f.buffer, name: f.name, size: f.size } : f.path, { photo: f.photo, size: f.size });
+      await sendFile(st.to, f.buffer ? { buffer: f.buffer, name: f.name, size: f.size } : f.path, { photo: f.photo, size: f.size, retryTransient: true });
       log('файл отправлен пользователю отдельно', st.userId, f.path);
     } catch (e) {
       log('отправка файла:', e.message);
-      await say(st.to, t('file.sendFail', lang, { name: f.name, why: t('file.why.error', lang, { msg: errText(e, lang) }) }));
+      await say(st.to, t('file.sendFail', lang, { name: f.name, why: t('file.why.error', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }) }));
     }
   }
 }
@@ -270,9 +273,18 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   const draftId = (Date.now() % 2_000_000_000) + 1;
   const startedAt = Date.now();
   let answer = '';
+  let answerTruncated = false;
   let thoughtBuf = '';
   let thought = '';
   const steps = []; // ход работы: инструменты агента
+  let stepsTruncated = false;
+  const addAnswer = (part) => {
+    if (!part) return;
+    const room = MAX_ANSWER_CHARS - answer.length;
+    if (part.length <= room) return void (answer += part);
+    answer += part.slice(0, Math.max(0, room));
+    answerTruncated = true;
+  };
   let plan = []; // план агента (ACP plan): пункты с отметками выполнения
   let breakBeforeText = false;
   let dirty = true;
@@ -314,21 +326,25 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     const kind = u.sessionUpdate;
     if (kind === 'agent_message_chunk' && u.content?.type === 'text') {
       // текст после вызова инструмента — новый абзац, иначе фразы склеиваются («…test.Команда…»)
-      if (breakBeforeText && answer.trim()) answer += '\n\n';
+      if (breakBeforeText && answer.trim()) addAnswer('\n\n');
       breakBeforeText = false;
-      answer += u.content.text;
+      addAnswer(u.content.text);
       dirty = true;
     } else if (kind === 'agent_thought_chunk' && u.content?.type === 'text') {
       // заголовок — **строка** без переводов строки, поэтому храним только незаконченную строку: раньше на каждом
       // фрагменте заново разбирались все рассуждения целиком (на длинных — квадратичная работа)
       const last = lastThoughtTitle(thoughtBuf + u.content.text);
       if (last.title) thought = last.title;
-      thoughtBuf = last.rest;
+      thoughtBuf = last.rest.slice(-MAX_THOUGHT_BUF);
       dirty = true;
     } else if (kind === 'tool_call') {
       const tool = parseTool(u, engine);
       breakBeforeText = true;
-      steps.push(tool);
+      if (steps.length < MAX_STEPS) steps.push(tool);
+      else if (!stepsTruncated) {
+        stepsTruncated = true;
+        log(`ход работы урезан до ${MAX_STEPS} шагов u${st.userId}`);
+      }
       db.toolStarted(requestId, tool);
       dirty = true;
     } else if (kind === 'plan' && Array.isArray(u.entries)) {
@@ -389,8 +405,9 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
       limited = true;
       answer = e.message; // понятное сообщение без пометки «Ошибка»
     } else {
-      log('ошибка запроса:', e.message);
-      answer += `\n\n${t('turn.error', lang, { msg: errText(e, lang) })}`;
+      log('ошибка запроса:', e.message, '| пользователь', st.userId, '| stopReason', stopReason);
+      dbg('ошибка запроса, стек:', e.stack);
+      addAnswer(`\n\n${t('turn.error', lang, { msg: errText(e, lang, errorRootOf(st.userId)) })}`);
     }
     if (!requestId) requestId = db.startRequest(st.agent?.dbSessionId ?? null, dbText);
   } finally {
@@ -424,6 +441,7 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   }
   let final = answerText ? sent.text.trim() : sent.paths.length && !limited ? `${t('turn.files', lang)}\n\n${sent.text.trim()}` : t('turn.empty', lang);
   if (stopReason === 'cancelled') final += `\n\n${t('turn.stopped', lang)}`;
+  if (answerTruncated) final += `\n\n${t('turn.truncated', lang)}`;
   // файлы — прямо в ответе, на месте меток (Bot API 10.3); не поместившиеся по размеру — отдельно после ответа
   const placed = limited
     ? { text: final.replace(FILE_PLACEHOLDER, ''), media: {}, extra: [] }
@@ -446,8 +464,8 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
     });
     loose.push(...left);
   }
-  const inAnswer = Object.keys(placed.media).length - loose.length;
-  if (inAnswer > 0) log('файлы в ответе:', inAnswer, '| пользователь', st.userId);
+  const inAnswer = Object.entries(placed.media).filter(([, f]) => !loose.includes(f)).map(([, f]) => f.name ?? f.path);
+  if (inAnswer.length) log('файлы в ответе:', inAnswer.join(', '), '| пользователь', st.userId);
   if (loose.length || placed.extra.length) await sendLooseFiles(st, [...loose, ...placed.extra], lang);
   // агент попросил отправить или получить изменения: кнопка под ответом, без нажатия ничего не уходит
   if (!limited && gitted.actions.length) await offerGitActions(st, gitted.actions).catch((e) => log('git: предложение агента:', e.message));

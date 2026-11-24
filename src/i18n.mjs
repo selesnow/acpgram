@@ -1,3 +1,5 @@
+import { relative, resolve, sep } from 'node:path';
+
 // Языки интерфейса бота: английский (по умолчанию), русский и украинский.
 // Все тексты, которые видит пользователь в Telegram, — здесь, по ключам: у каждого ключа есть перевод на каждый язык
 // (test/i18n.test.mjs это проверяет). Логи и сообщения в консоли остаются на русском — их читает администратор сервера.
@@ -61,8 +63,43 @@ export function t(key, lang = DEFAULT_LANG, vars = {}) {
  */
 export const i18nError = (message, key, vars = {}, extra = {}, opts = undefined) => Object.assign(new Error(message, opts), extra, { i18n: { key, vars } });
 
-/** Текст ошибки для пользователя на его языке; у ошибок без перевода (ответ агента, Telegram, система) — их message. */
-export const errText = (e, lang = DEFAULT_LANG) => (e?.i18n && M[e.i18n.key] ? t(e.i18n.key, lang, e.i18n.vars) : String(e?.message ?? e));
+/** Нормализация пути для сравнения по правилам текущей ОС (без обращения к projects.mjs: этот модуль не зависит от состояния бота). */
+const normFsPath = (p) => (process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p);
+
+/**
+ * Заменяет абсолютные пути в тексте ошибки: внутри личного пространства — путём от папки сотрудника,
+ * остальные пути — нейтральной подстановкой, чтобы серверные каталоги не уходили пользователю.
+ */
+export function maskErrorPaths(text, root, lang = DEFAULT_LANG) {
+  if (!root || !text) return text;
+  const rootN = normFsPath(resolve(root));
+  const within = (p) => {
+    const r = normFsPath(resolve(p));
+    return r === rootN || r.startsWith(`${rootN}${sep}`);
+  };
+  return String(text).replace(/(?<![\w])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'<>|]+/g, (m, offset, all) => {
+    if (all[offset - 1] === '/' || all[offset - 1] === ':') return m; // часть URL или схемы
+    let p = m;
+    let tail = '';
+    while (/[.,;:!?)}\]]$/.test(p)) {
+      tail = p.at(-1) + tail;
+      p = p.slice(0, -1);
+    }
+    let shown;
+    try {
+      shown = within(p) ? (normFsPath(resolve(p)) === rootN ? t('proj.myRoot', lang) : relative(resolve(root), resolve(p))) : t('err.serverPath', lang);
+    } catch {
+      return m;
+    }
+    return `${shown}${tail}`;
+  });
+}
+
+/** Текст ошибки для пользователя; root задан — абсолютные пути в нём маскируются (личные пространства сотрудников). */
+export const errText = (e, lang = DEFAULT_LANG, root = null) => {
+  const text = e?.i18n && M[e.i18n.key] ? t(e.i18n.key, lang, e.i18n.vars) : String(e?.message ?? e);
+  return root ? maskErrorPaths(text, root, lang) : text;
+};
 
 /** Выбор языка до того, как он сохранён: показываем сразу на трёх языках. */
 export const LANG_PICK = 'Choose your language:\nВыберите язык:\nОберіть мову:';
@@ -544,6 +581,10 @@ const M = {
   'err.agentExit': { en: '{engine} exited (code {code})', ru: '{engine} завершился (код {code})', uk: '{engine} завершився (код {code})' },
   'err.agentClosed': { en: '{engine}: the agent process has already exited', ru: '{engine}: процесс агента уже завершён', uk: '{engine}: процес агента вже завершено' },
   'err.agentNoReply': { en: '{engine}: no reply in {sec} s', ru: '{engine}: нет ответа за {sec} с', uk: '{engine}: немає відповіді за {sec} с' },
+  'err.serverPath': { en: '<server path>', ru: '<путь на сервере>', uk: '<шлях на сервері>' },
+  'err.agentLineTooLong': { en: '{engine}: a line longer than {mb} MB was received — the agent was stopped', ru: '{engine}: получена строка длиннее {mb} МБ — агент остановлен', uk: '{engine}: отримано рядок довший за {mb} МБ — агент зупинено' },
+  'turn.truncated': { en: '⚠️ The reply was too long and was shortened.', ru: '⚠️ Ответ слишком длинный и был сокращён.', uk: '⚠️ Відповідь занадто довга й була скорочена.' },
+  'turn.restarted': { en: '⚠️ The bot was restarted while your request was running. The request was interrupted — please try again.', ru: '⚠️ Бот перезапускался, пока выполнялся ваш запрос. Запрос прерван — повторите его.', uk: '⚠️ Бот перезапустився, поки виконувався ваш запит. Запит перервано — повторіть його.' },
   'err.tgTimeout': { en: 'Telegram {method}: no reply in {sec} s', ru: 'Telegram {method}: нет ответа за {sec} с', uk: 'Telegram {method}: немає відповіді за {sec} с' },
   'err.tgNoFilePath': { en: 'Telegram did not return the file path', ru: 'Telegram не вернул путь к файлу', uk: 'Telegram не повернув шлях до файлу' },
   'turn.error': { en: '⚠️ Error: {msg}', ru: '⚠️ Ошибка: {msg}', uk: '⚠️ Помилка: {msg}' },

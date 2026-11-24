@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { TelegramError, callApi, sendBuffer } from '../src/telegram.mjs';
+import { TelegramError, callApi, sendBuffer, sendRich } from '../src/telegram.mjs';
 
 /** Поддельный fetch: отдаёт ответы по очереди и считает вызовы. */
 const fakeFetch = (...replies) => {
@@ -60,6 +60,39 @@ test('callApi: тело запроса собирается заново для 
   const f = fakeFetch({ ok: false, error_code: 429, description: 'x', parameters: { retry_after: 0 } }, { ok: true, result: true });
   await callApi('sendDocument', () => (built++, { body: 'x' }), { fetchImpl: f.impl });
   assert.equal(built, 2);
+});
+
+test('callApi: retryTransient повторяет 5xx и сетевую ошибку, но не тайм-аут', async () => {
+  const f = fakeFetch({ ok: false, error_code: 500, description: 'Server Error' }, { ok: true, result: 'ok' });
+  assert.equal(await callApi('sendMessage', json, { fetchImpl: f.impl, retryTransient: true }), 'ok');
+  assert.equal(f.calls.length, 2);
+
+  let n = 0;
+  const network = async () => {
+    if (++n === 1) throw new TypeError('fetch failed');
+    return { json: async () => ({ ok: true, result: 7 }) };
+  };
+  assert.equal(await callApi('sendRichMessage', json, { fetchImpl: network, retryTransient: true }), 7);
+  assert.equal(n, 2);
+
+  const hang = fakeFetch('hang');
+  const keepAlive = setTimeout(() => {}, 3000);
+  try {
+    await assert.rejects(callApi('sendRichMessage', json, { fetchImpl: hang.impl, retryTransient: true, timeoutMs: 100 }), /нет ответа/);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+  assert.equal(hang.calls.length, 1, 'после тайм-аута не повторяем — сообщение могло дойти');
+});
+
+test('sendRich: обычным текстом отправляем только после 400, при 5xx ошибка уходит вызывающему', async () => {
+  const server = fakeFetch({ ok: false, error_code: 500, description: 'Server Error' });
+  await assert.rejects(sendRich(42, '**ответ**', { fetchImpl: server.impl, retries: 0 }), /500/);
+  assert.deepEqual(server.calls.map((c) => c.url.split('/').pop()), ['sendRichMessage'], 'plain-дубля не отправляем');
+
+  const bad = fakeFetch({ ok: false, error_code: 400, description: 'can\'t parse' }, { ok: true, result: {} });
+  await sendRich(42, '**ответ**', { fetchImpl: bad.impl, retries: 0 });
+  assert.deepEqual(bad.calls.map((c) => c.url.split('/').pop()), ['sendRichMessage', 'sendMessage']);
 });
 
 test('sendBuffer: документ уходит из памяти без обращения к файлу', async () => {

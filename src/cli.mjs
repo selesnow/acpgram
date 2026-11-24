@@ -50,7 +50,7 @@ export function route(argv) {
  * а не «успешно» (в `curl | bash` код выхода curl теряется).
  */
 export function updateCommand(platform = process.platform, env = process.env) {
-  const base = `https://raw.githubusercontent.com/${REPO}/main`;
+  const base = `https://github.com/${REPO}/releases/latest/download`;
   if (platform !== 'win32') return ['sh', ['-c', `f="$(mktemp)" && curl -fsSL ${base}/install.sh -o "$f" && bash "$f"; r=$?; rm -f "$f"; exit $r`]];
   // Windows PowerShell — по полному пути: папки WindowsPowerShell может не быть в PATH, а терминал при этом открыт
   // из меню «Пуск» и работает (так было на ноутбуке: `acpgram update` молча завершался с кодом 1)
@@ -109,7 +109,7 @@ if (isMain()) {
     if (res.error) {
       console.error(tc('cli.spawnFail', { cmd, msg: res.error.message }));
       if (/EPERM|EACCES/.test(res.error.code ?? '')) console.error(tc('cli.blocked'));
-      if (r.update) console.error(tc('cli.updateManual', { cmd: process.platform === 'win32' ? `irm https://raw.githubusercontent.com/${REPO}/main/install.ps1 | iex` : `curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash` }));
+      if (r.update) console.error(tc('cli.updateManual', { cmd: process.platform === 'win32' ? `irm https://github.com/${REPO}/releases/latest/download/install.ps1 | iex` : `curl -fsSL https://github.com/${REPO}/releases/latest/download/install.sh -o install.sh && bash install.sh` }));
     } else if (r.update) {
       const after = version();
       console.log(res.status === 0 ? tc('cli.updated', { before, after, same: before === after ? tc('cli.alreadyLatest') : '' }) : tc('cli.updateFailed', { code: res.status, after }));

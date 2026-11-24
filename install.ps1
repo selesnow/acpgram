@@ -1,6 +1,6 @@
 # AcpGram installer for Windows (Windows PowerShell 5.1+ and PowerShell 7).
 #
-#   irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
+#   irm https://github.com/selesnow/acpgram/releases/latest/download/install.ps1 | iex
 #
 # Installs (or updates) the latest release into %LOCALAPPDATA%\acpgram, adds the `acpgram` command to the user PATH,
 # installs a private Node.js 24 if the system one is missing or older (official build from nodejs.org, checksum verified),
@@ -123,6 +123,7 @@
       $tag = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'acpgram-installer' }).tag_name
       if (-not $tag) { Fail "could not find the latest release of $Repo" }
     }
+    if ($tag -notmatch '^v\d+\.\d+\.\d+$') { Fail "unexpected release tag: $tag" }
     Step "Installing AcpGram $tag into $AppHome"
     $archive = "acpgram-$tag.zip"
     $url = if ($env:ACPGRAM_RELEASE_URL) { $env:ACPGRAM_RELEASE_URL } else { "https://github.com/$Repo/releases/download/$tag" }
@@ -155,7 +156,7 @@
       'if not defined ACPGRAM_HOME set "ACPGRAM_HOME=%~dp0.."',
       'if /i "%~1"=="update" (',
       '  echo Updating AcpGram to the latest release...',
-      '  "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex"',
+      '  "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/selesnow/acpgram/releases/latest/download/install.ps1 | iex"',
       '  exit /b',
       ')',
       "$nodeRef --disable-warning=ExperimentalWarning `"%~dp0..\src\cli.mjs`" %*"

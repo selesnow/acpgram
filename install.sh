@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AcpGram installer for Linux and macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
+#   curl -fsSL https://github.com/selesnow/acpgram/releases/latest/download/install.sh -o install.sh && bash install.sh
 #
 # Installs (or updates) the latest release into ~/.local/share/acpgram, adds the `acpgram` command to ~/.local/bin,
 # installs a private Node.js 24 if the system one is missing or older (official build from nodejs.org, checksum verified),
@@ -82,7 +82,7 @@ main() {
     # the redirect of /releases/latest points to /releases/tag/<tag> (no API rate limits)
     TAG="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed -E 's#.*/tag/##')"
   fi
-  case "$TAG" in v[0-9]*) ;; *) die "could not find the release ($TAG)" ;; esac
+  if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then die "could not find the release ($TAG)"; fi
   step "Installing AcpGram $TAG into $APP_HOME"
   local ARCHIVE="acpgram-$TAG.tar.gz"
   local URL="${ACPGRAM_RELEASE_URL:-https://github.com/$REPO/releases/download/$TAG}"

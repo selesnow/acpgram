@@ -11,7 +11,7 @@ import { acquireGitLock, failText, gitNetOpts, gitOpts, releaseGitLock, repoOf }
 import { recall, remember } from './gitKeys.mjs';
 import { branchName, changedFiles, commitList, createBranch, discardFiles, fileDiff, listBranches, switchBranch } from './gitInspect.mjs';
 import { t } from './i18n.mjs';
-import { endAgent, userPath } from './state.mjs';
+import { endAgent, errorRootOf, userPath } from './state.mjs';
 import { escHtml, sendBuffer } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
 
@@ -197,7 +197,7 @@ export async function onRepoCallback(st, cb, h) {
   } catch (e) {
     log(`git: ${action}:`, e.message, '| пользователь', st.userId);
     await ack();
-    return edit({ text: failText(e, lang), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
+    return edit({ text: failText(e, lang, null, errorRootOf(st.userId)), markup: { inline_keyboard: [[{ text: t('btn.back', lang), callback_data: 'gt:v' }]] } });
   } finally {
     releaseGitLock(st, lock);
   }
@@ -232,7 +232,7 @@ export async function onBranchInput(st, text, h) {
     await say(st.to, th('git.br.created', lang, { name: hCode(name) }), { ...html, reply_markup: markup });
   } catch (e) {
     log('git: новая ветка:', e.message, '| пользователь', st.userId);
-    await say(st.to, failText(e, lang), html);
+    await say(st.to, failText(e, lang, null, errorRootOf(st.userId)), html);
   } finally {
     releaseGitLock(st, lock);
   }

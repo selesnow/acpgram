@@ -4,7 +4,7 @@ import { db, langOf, log, say } from './ctx.mjs';
 import { canUseEngine } from './access.mjs';
 import { ENGINES, getEngine, isAvailable } from './engines.mjs';
 import { LOCALES, errText, t } from './i18n.mjs';
-import { ClosedError, LimitError, ProjectError, endAgent, engineOf, ensureAgent, saveEngine, userPath } from './state.mjs';
+import { ClosedError, LimitError, ProjectError, endAgent, engineOf, ensureAgent, errorRootOf, saveEngine, userPath } from './state.mjs';
 import { dest, escHtml, tg } from './telegram.mjs';
 import { drainQueue } from './turn.mjs';
 import { trunc } from './ui.mjs';
@@ -106,7 +106,7 @@ export async function resumeSession(st, item, engine, report) {
     await report(
       e instanceof LimitError || e instanceof ProjectError ? e.message
       : e instanceof ClosedError ? t('ses.cancelled', lang)
-      : t('ses.failed', lang, { msg: errText(e, lang) }),
+      : t('ses.failed', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }),
     );
   } finally {
     st.busy = false;

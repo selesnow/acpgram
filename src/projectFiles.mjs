@@ -4,7 +4,8 @@
 // Все операции работают только внутри папки проекта и не ходят по ссылкам: агент пишет в ту же папку и мог бы подложить
 // ссылку «.env → файл вне проекта», чтобы бот (он работает без песочницы) перезаписал чужой файл.
 import { randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { lstat as lstatAsync, readdir as readdirAsync } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentFileError, openVerified, verifyStable } from './agentFiles.mjs';
 import { isWithin } from './projects.mjs';
@@ -150,21 +151,25 @@ export function deleteProjectFile(project, path) {
  * Содержимое папки проекта: папки и файлы по алфавиту, со скрытыми файлами (.env), без ссылок и служебных папок.
  * @returns {{dirs: string[], files: {name: string, size: number, mtime: number}[]}}
  */
-export function listProjectDir(project, dir, { hideConfig = false } = {}) {
+export async function listProjectDir(project, dir, { hideConfig = false } = {}) {
   const { real } = inProject(project, dir);
-  const dirs = [];
-  const files = [];
-  for (const d of readdirSync(real, { withFileTypes: true })) {
-    if (d.isSymbolicLink() || d.name.endsWith('.tmp') && d.name.startsWith('.acpgram-')) continue;
+  const entries = await readdirAsync(real, { withFileTypes: true });
+  const listed = await Promise.all(entries.map(async (d) => {
+    if (d.isSymbolicLink() || d.name.endsWith('.tmp') && d.name.startsWith('.acpgram-')) return null;
     const lower = d.name.toLowerCase();
     if (d.isDirectory()) {
-      if (!SKIP_DIRS.has(lower) && !(hideConfig && CONFIG_DIRS.has(lower))) dirs.push(d.name);
-    } else if (d.isFile()) {
-      if (hideConfig && CONFIG_FILES.has(lower)) continue;
-      const st = lstat(join(real, d.name));
-      if (st) files.push({ name: d.name, size: st.size, mtime: st.mtimeMs });
+      return !SKIP_DIRS.has(lower) && !(hideConfig && CONFIG_DIRS.has(lower)) ? { dir: d.name } : null;
     }
-  }
+    if (!d.isFile() || hideConfig && CONFIG_FILES.has(lower)) return null;
+    try {
+      const st = await lstatAsync(join(real, d.name));
+      return { file: { name: d.name, size: st.size, mtime: st.mtimeMs } };
+    } catch {
+      return null; // файл исчез или занят — не срываем список папки
+    }
+  }));
+  const dirs = listed.filter((x) => x?.dir).map((x) => x.dir);
+  const files = listed.filter((x) => x?.file).map((x) => x.file);
   const byName = (a, b) => a.localeCompare(b, 'ru');
   return { dirs: dirs.sort(byName), files: files.sort((a, b) => byName(a.name, b.name)) };
 }

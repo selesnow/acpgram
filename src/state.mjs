@@ -4,7 +4,7 @@ import { positiveEnv } from './app.mjs';
 import { t } from './i18n.mjs';
 import { canUseEngine, modelAllowed, parseJson } from './access.mjs';
 import { actualModelFromUpdate, DEFAULT_ENGINE, ENGINES, createAgent, engineCommand, engineMode, getEngine, modeAllowed, resolveEngine } from './engines.mjs';
-import { HOME, ROOT, insideRoot, isPersonalRoot, isWithin, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
+import { HOME, ROOT, USER_WORKSPACES, insideRoot, isPersonalRoot, isWithin, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
 import { GIT_AGENT_AUTH, agentGitEnv, refreshAccounts } from './gitAccess.mjs';
 
@@ -25,6 +25,9 @@ export const isAdmin = (id) => id === ADMIN_ID;
  * его папка в корне проектов, администратору и без них — общий корень; null — режим без корня.
  */
 export const rootOf = (userId) => userRoot(userId, { admin: isAdmin(userId) });
+
+/** Корень для маскировки путей в сообщениях об ошибках: только сотрудник с личным пространством. */
+export const errorRootOf = (userId) => (USER_WORKSPACES && !isAdmin(userId) ? rootOf(userId) : null);
 
 /** Папка, с которой начинает пользователь: его корень, а без корня — домашняя папка. */
 export const defaultDirOf = (userId) => rootOf(userId) ?? HOME;

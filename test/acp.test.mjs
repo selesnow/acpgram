@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { AcpAgent, checkCommand, quietStderrFilter } from '../src/acp.mjs';
+import { AcpAgent, checkCommand, quietStderrFilter, readLines } from '../src/acp.mjs';
 import { errText } from '../src/i18n.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-agent.mjs', import.meta.url));
@@ -153,4 +155,19 @@ test('AcpAgent: строки «null», число и подобные в выв�
     process.off('unhandledRejection', onRejection);
     agent.close();
   }
+});
+
+test('readLines: строки разделяются по \\n, CR отбрасывается, лимит длины срабатывает один раз', async () => {
+  const stream = new PassThrough();
+  const lines = [];
+  let overflows = 0;
+  const ended = once(stream, 'end');
+  readLines(stream, (l) => lines.push(l), { maxBytes: 8, onOverflow: () => overflows++ });
+  stream.write('abc\r\n');
+  stream.write('123456789');
+  stream.write('остаток строки игнорируется\n');
+  stream.end('и хвост тоже');
+  await ended;
+  assert.deepEqual(lines, ['abc'], 'короткая строка дошла, после превышения новые строки не разбираются');
+  assert.equal(overflows, 1);
 });

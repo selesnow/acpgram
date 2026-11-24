@@ -30,12 +30,14 @@ export const levelHint = (key, lang) => t(`level.${key}.hint`, lang);
 // В памяти — для всех, кто пишет боту (в том числе без доступа); в базу (tglang:<id>) — для пользователей с доступом,
 // чтобы бот знал язык и до первого сообщения после перезапуска (например, при уведомлении от администратора).
 const tgLangCache = new Map();
+const tgLangAt = new Map(); // когда язык впервые замечен в этом запуске: для чистки кэша незнакомцев
 const tgLangSaved = new Map(); // что уже записано в базу в этом запуске: userId -> язык ('' — не поддерживается)
 const tgLang = (userId) => (tgLangCache.has(userId) ? tgLangCache.get(userId) : normLang(db.getSetting(`tglang:${userId}`)));
 
 /** Запоминает язык из Telegram (from.language_code). persist — писать в базу (только для пользователей с доступом). */
 export function noteTgLang(userId, code, persist = false) {
   const lang = normLang(code);
+  if (!tgLangCache.has(userId)) tgLangAt.set(userId, Date.now());
   tgLangCache.set(userId, lang);
   if (persist && tgLangSaved.get(userId) !== (lang ?? '')) {
     tgLangSaved.set(userId, lang ?? '');
@@ -49,6 +51,20 @@ export function noteTgLang(userId, code, persist = false) {
  */
 export const langOf = (userId) => pickLang(db.getSetting(`lang:${userId}`), tgLang(userId));
 export const setLang = (userId, lang) => db.setSetting(`lang:${userId}`, lang);
+
+/** Чистит языковой кэш давно не писавших пользователей (в первую очередь — незнакомцев без доступа). */
+export function sweepLangCache(maxAgeMs = 24 * 3600_000) {
+  const until = Date.now() - maxAgeMs;
+  let n = 0;
+  for (const [id, at] of tgLangAt) {
+    if (at > until) continue;
+    tgLangCache.delete(id);
+    tgLangAt.delete(id);
+    tgLangSaved.delete(id);
+    n++;
+  }
+  return n;
+}
 
 export const botInfo = { username: null }; // заполняется при старте
 

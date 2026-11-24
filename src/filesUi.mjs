@@ -8,7 +8,7 @@ import { LOCALES, errText, t } from './i18n.mjs';
 import { FileError, deleteProjectFile, fmtSize, listProjectDir, projectFileInfo, relPath, resolveTarget, writeProjectFile } from './projectFiles.mjs';
 import { insideRoot, isPersonalRoot, samePath } from './projects.mjs';
 import { folderRows, pathToken, tokenPath } from './projectsUi.mjs';
-import { isAdmin, rootOf, userPath } from './state.mjs';
+import { errorRootOf, isAdmin, rootOf, userPath } from './state.mjs';
 import { dest, downloadFile, tg } from './telegram.mjs';
 import { hCode, th } from './ui.mjs';
 
@@ -38,14 +38,14 @@ const relShow = (project, path) => relative(project, path).split(sep).join('/') 
 const cancelMarkup = (lang) => ({ inline_keyboard: [[{ text: t('btn.cancel', lang), callback_data: 'fl:x' }]] });
 
 /** Текст причины отказа (FileError.code) на языке пользователя. */
-const whyText = (e, lang) => (e instanceof FileError ? t(`files.err.${e.code}`, lang) : errText(e, lang));
+const whyText = (e, lang, userId) => (e instanceof FileError ? t(`files.err.${e.code}`, lang) : errText(e, lang, errorRootOf(userId)));
 
 /** Удаляет сообщение пользователя с содержимым или файлом: в чате не должно оставаться копии секрета. */
 const dropMessage = (st, messageId) => (messageId ? tg('deleteMessage', { chat_id: st.chatId, message_id: messageId }).catch((e) => log('files: сообщение не удалено:', e.message)) : null);
 
 /** Экран папки проекта: папки, файлы с размером, «Вверх», «Создать файл» и «Загрузить файл». Текст — HTML. */
-export function filesView(st, project, dir, page = 0, lang = langOf(st.userId)) {
-  const { dirs, files } = listProjectDir(project, dir, { hideConfig: !canManageFiles(st.userId) });
+export async function filesView(st, project, dir, page = 0, lang = langOf(st.userId)) {
+  const { dirs, files } = await listProjectDir(project, dir, { hideConfig: !canManageFiles(st.userId) });
   const entries = [...dirs.map((name) => ({ name, dir: true })), ...files];
   const pages = Math.max(1, Math.ceil(entries.length / PAGE));
   page = Math.min(Math.max(page, 0), pages - 1);
@@ -78,7 +78,7 @@ export async function handleFiles(st) {
   const lang = langOf(st.userId);
   const project = projectOf(st);
   if (!project) return say(st.to, t('state.projectGone', lang));
-  const v = filesView(st, project, project, 0, lang);
+  const v = await filesView(st, project, project, 0, lang);
   return tg('sendMessage', { ...dest(st.to), text: v.text, ...HTML, reply_markup: v.markup }).catch((e) => log('files:', e.message));
 }
 
@@ -124,7 +124,7 @@ async function saveUpload(st, project, { dir, parts, meta, messageId }, lang, { 
     data = await downloadFile(meta.id);
   } catch (e) {
     log('files: скачивание:', e.message, '| пользователь', st.userId);
-    return say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang) }));
+    return say(st.to, t('file.downloadFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }));
   }
   if (data.length > MAX_FILE_BYTES) return say(st.to, t('file.tooBig', lang));
   try {
@@ -134,7 +134,7 @@ async function saveUpload(st, project, { dir, parts, meta, messageId }, lang, { 
     return say(st.to, th('files.saved', lang, { path: hCode(relShow(project, r.path)), size: fmtSize(r.size) }), HTML);
   } catch (e) {
     log('files: запись:', e.message, '| пользователь', st.userId);
-    return say(st.to, th('files.saveFail', lang, { why: whyText(e, lang) }), HTML);
+    return say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), HTML);
   }
 }
 
@@ -171,7 +171,7 @@ export async function onFilesCallback(st, cb) {
   if (!path) return ack(t('proj.stale', lang));
   try {
     if (action === 'o') {
-      const v = filesView(st, project, path, Number(pageStr) || 0, lang);
+      const v = await filesView(st, project, path, Number(pageStr) || 0, lang);
       await ack();
       return edit(v);
     }
@@ -186,17 +186,17 @@ export async function onFilesCallback(st, cb) {
       deleteProjectFile(project, path);
       log('файл проекта удалён:', st.userId, path);
       await ack(t('files.deleted', lang, { name: basename(path) }));
-      return edit(filesView(st, project, dirname(path), 0, lang));
+      return edit(await filesView(st, project, dirname(path), 0, lang));
     }
     if (action === 'n' || action === 'u') {
-      listProjectDir(project, path, { hideConfig: !canManageFiles(st.userId) }); // папка должна быть внутри проекта
+      await listProjectDir(project, path, { hideConfig: !canManageFiles(st.userId) }); // папка должна быть внутри проекта
       await ack();
       st.pendingInput = { kind: action === 'n' ? 'fileName' : 'fileUpload', dir: path, at: Date.now() };
       return say(st.to, th(action === 'n' ? 'files.nameAsk' : 'files.uploadAsk', lang, { dir: hCode(relShow(project, path)) }), { ...HTML, reply_markup: cancelMarkup(lang) });
     }
   } catch (e) {
     if (!(e instanceof FileError)) log('files:', e.message, '| пользователь', st.userId);
-    return ack(whyText(e, lang));
+    return ack(whyText(e, lang, st.userId));
   }
 }
 
@@ -235,7 +235,7 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
       await say(st.to, th('files.saved', lang, { path: hCode(relShow(project, r.path)), size: fmtSize(r.size) }), HTML);
     } catch (e) {
       log('files: запись:', e.message, '| пользователь', st.userId);
-      await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang) }), HTML);
+      await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), HTML);
     }
     return true;
   }
@@ -255,7 +255,7 @@ export async function onFileInput(st, text, { messageId, now = Date.now() } = {}
   try {
     target = resolveTarget(project, wait.dir, parts);
   } catch (e) {
-    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang) }), { ...HTML, reply_markup: cancelMarkup(lang) }), true);
+    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), { ...HTML, reply_markup: cancelMarkup(lang) }), true);
   }
   st.pendingInput = null;
   if (target.exists) await askReplace(st, project, { dir: wait.dir, parts }, lang);
@@ -289,7 +289,7 @@ export async function onFileUpload(st, msg, now = Date.now()) {
   try {
     if (resolveTarget(project, dir, parts).exists) return (await askReplace(st, project, job, lang), true);
   } catch (e) {
-    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang) }), HTML), true);
+    return (await say(st.to, th('files.saveFail', lang, { why: whyText(e, lang, st.userId) }), HTML), true);
   }
   await saveUpload(st, project, job, lang);
   return true;

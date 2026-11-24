@@ -234,6 +234,14 @@ export function openDb(path = 'data/bot.db') {
        stop_reason = ?, answer = ?, error = ?, model = ?, effort = ?, input_tokens = ?, output_tokens = ?, cached_tokens = ?,
        thought_tokens = ?, total_tokens = ?, cost_usd = ? WHERE id = ?`,
     ),
+    unfinishedRequests: db.prepare(
+      `SELECT r.id, s.user_id, s.chat_id, r.user_text FROM requests r JOIN sessions s ON s.id = r.session_id
+        WHERE r.finished_at IS NULL ORDER BY r.id`,
+    ),
+    interruptRequests: db.prepare(
+      `UPDATE requests SET finished_at = ?, duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER),
+       stop_reason = 'interrupted', error = ? WHERE finished_at IS NULL`,
+    ),
     setUserEngines: db.prepare('UPDATE users SET engines = ? WHERE user_id = ?'),
     setUserModels: db.prepare('UPDATE users SET models = ? WHERE user_id = ?'),
     insertTool: db.prepare(
@@ -283,17 +291,25 @@ export function openDb(path = 'data/bot.db') {
     deleteGitAccountsByHost: db.prepare('DELETE FROM git_accounts WHERE host = ?'),
   };
 
-  // Любая ошибка БД не должна ронять бота — журнал вторичен по отношению к работе.
-  const safe = (fn) => (...a) => {
-    try {
-      return fn(...a);
-    } catch (e) {
-      logError('[db]', e.message);
-      return null;
-    }
-  };
+  // Любая ошибка БД не должна ронять бота — журнал вторичен по отношению к работе. Имя операции добавляет
+  // обёртка named: по одному сообщению без имени невозможно понять, какой именно запрос упал.
+  const safe = (fn) => fn;
+  const named = (methods) =>
+    Object.fromEntries(
+      Object.entries(methods).map(([name, fn]) => [
+        name,
+        (...a) => {
+          try {
+            return fn(...a);
+          } catch (e) {
+            logError('[db]', name, e.message);
+            return null;
+          }
+        },
+      ]),
+    );
 
-  return {
+  return named({
     // --- доступ сотрудников ---
     getUser: safe((id) => q.getUser.get(id) ?? null),
     listUsers: () => safe(() => q.listUsers.all())() ?? [],
@@ -332,6 +348,12 @@ export function openDb(path = 'data/bot.db') {
       const n = (v) => (Number.isFinite(v) ? v : null);
       return id && q.finishRequest.run(t, t, stopReason ?? null, answer ?? null, error ?? null, usage.model ?? null, usage.effort ?? null,
         n(usage.input), n(usage.output), n(usage.cachedRead), n(usage.thought), n(usage.total), n(usage.cost), id);
+    }),
+    /** Запросы, оборванные перезапуском службы: их надо пометить и сообщить пользователям. */
+    unfinishedRequests: safe(() => q.unfinishedRequests.all() ?? []),
+    interruptRequests: safe((error) => {
+      const t = now();
+      return q.interruptRequests.run(t, t, error ?? 'bot restarted').changes;
     }),
     setUserEngines: safe((id, list) => q.setUserEngines.run(list?.length ? JSON.stringify(list) : null, id)),
     setUserModels: safe((id, map) => q.setUserModels.run(map && Object.keys(map).length ? JSON.stringify(map) : null, id)),
@@ -388,5 +410,5 @@ export function openDb(path = 'data/bot.db') {
     /** Удаляет аккаунты всех пользователей на сервисе (сервис убран администратором). Возвращает число удалённых. */
     deleteGitAccountsByHost: (host) => safe(() => Number(q.deleteGitAccountsByHost.run(host).changes))() ?? 0,
     close: () => db.close(),
-  };
+  });
 }

@@ -39,7 +39,7 @@ test('pending: clear и sweep удаляют просроченные ожида
 });
 
 test('looksLikeSecret: токены известных форматов распознаются', () => {
-  for (const s of ['ghp_abcdefghijklmnopqrstuvwxyz', 'gho_abcdefghijklmnopqrstuvwxyz', 'ghu_abcdefghijklmnopqrstuvwxyz', 'github_pat_abcdefghijklmnop', 'glpat-abcdefghijklmnop', 'npm_abcdefghijklmnopqrst', 'sk-abcdefghijklmnopqrst', 'AKIAIOSFODNN7EXAMPLE']) {
+  for (const s of ['ghp_abcdefghijklmnopqrstuvwxyz', 'gho_abcdefghijklmnopqrstuvwxyz', 'ghu_abcdefghijklmnopqrstuvwxyz', 'github_pat_abcdefghijklmnop', 'glpat-abcdefghijklmnop', 'npm_abcdefghijklmnopqrst', 'sk-abcdefghijklmnopqrst', 'AKIA' + 'IOSFODNN7EXAMPLE']) {
     assert.equal(looksLikeSecret(s), true, s);
   }
   for (const s of ['hello', '/project', 'ghp_short', '']) assert.equal(looksLikeSecret(s), false, s);

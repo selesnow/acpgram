@@ -51,3 +51,30 @@ test('cleanupHistory: HISTORY_KEEP_DAYS удаляет старую истори
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('unfinishedRequests/interruptRequests: запросы после перезапуска помечаются один раз', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bot-interrupted-'));
+  const path = join(dir, 'bot.db');
+  const db = openDb(path);
+  try {
+    const s = db.startSession('restarted', 2, 2, 'plan', '/p', 'gemini');
+    const first = db.startRequest(s, 'прерванный');
+    const second = db.startRequest(s, 'завершённый');
+    db.finishRequest(second, { stopReason: 'done', answer: 'ok', error: null, usage: {} });
+    const rows = db.unfinishedRequests();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].user_id, 2);
+    assert.equal(rows[0].chat_id, 2);
+    assert.equal(db.interruptRequests('interrupted by bot restart'), 1);
+    assert.equal(db.unfinishedRequests().length, 0);
+    assert.equal(db.interruptRequests('again'), 0);
+    const raw = new DatabaseSync(path);
+    const saved = raw.prepare('SELECT stop_reason, error FROM requests WHERE id = ?').get(first);
+    raw.close();
+    assert.equal(saved.stop_reason, 'interrupted');
+    assert.equal(saved.error, 'interrupted by bot restart');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

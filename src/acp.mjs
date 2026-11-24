@@ -1,7 +1,6 @@
 // Минимальный клиент Agent Client Protocol (JSON-RPC 2.0, построчный JSON по stdin/stdout)
 // для запуска ACP-агента (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) как подпроцесса. Движки — в engines.mjs.
 import { spawn, spawnSync } from 'node:child_process';
-import readline from 'node:readline';
 import { i18nError } from './i18n.mjs';
 import { logError } from './log.mjs';
 import { resolveProgram } from './winsvc.mjs';
@@ -105,6 +104,61 @@ export function quietStderrFilter(line = null, block = null) {
   };
 }
 
+/** Предел длины одной строки stdout/stderr агента: без него readline копил бы гигабайты до перевода строки. */
+export const MAX_LINE_BYTES = 32 * 1024 * 1024;
+const MAX_LINE_MB = Math.round(MAX_LINE_BYTES / 1024 / 1024);
+
+/**
+ * Построчное чтение потока с жёстким пределом длины строки. После превышения остаток потока не накапливается
+ * (и не разбирается), а вызывается onOverflow — вызывающий решает, остановить агента или только написать в журнал.
+ */
+export function readLines(stream, onLine, { maxBytes = MAX_LINE_BYTES, onOverflow } = {}) {
+  stream.setEncoding('utf8');
+  let buf = '';
+  let bytes = 0;
+  let overflowed = false;
+  const overflow = () => {
+    if (overflowed) return;
+    overflowed = true;
+    buf = '';
+    bytes = 0;
+    onOverflow?.(maxBytes);
+  };
+  const push = (part) => {
+    if (overflowed || !part) return;
+    const n = Buffer.byteLength(part);
+    if (bytes + n > maxBytes) return overflow();
+    buf += part;
+    bytes += n;
+  };
+  const emit = () => {
+    if (overflowed) return;
+    const line = buf.endsWith('\r') ? buf.slice(0, -1) : buf;
+    buf = '';
+    bytes = 0;
+    onLine?.(line);
+  };
+  stream.on('data', (chunk) => {
+    if (overflowed) return;
+    let rest = String(chunk);
+    for (;;) {
+      const i = rest.indexOf('\n');
+      if (i < 0) {
+        push(rest);
+        return;
+      }
+      push(rest.slice(0, i));
+      if (overflowed) return;
+      emit();
+      rest = rest.slice(i + 1);
+    }
+  });
+  stream.on('end', () => {
+    if (!overflowed && (buf || bytes)) emit();
+  });
+  stream.on('error', (e) => logError('[acp] поток агента:', e.message));
+}
+
 export class AcpAgent {
   /**
    * @param {object} o
@@ -140,10 +194,18 @@ export class AcpAgent {
     // окружение задаётся целиком: с окружением бота не смешивается, иначе в него вернулся бы токен бота
     this.proc = spawnCommand(this.command, this.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], ...(this.env ? { env: this.env } : {}) });
     // ошибка разбора одной строки агента не должна ронять бота (обработчик асинхронный: без catch это необработанное отклонение)
-    readline.createInterface({ input: this.proc.stdout }).on('line', (l) => this.#onLine(l).catch((e) => logError(`[${this.name}] строка агента не обработана:`, e.message)));
+    readLines(this.proc.stdout, (l) => this.#onLine(l).catch((e) => logError(`[${this.name}] строка агента не обработана:`, e.message)), {
+      onOverflow: () => {
+        logError(`[${this.name}] строка длиннее ${MAX_LINE_MB} МБ — агент завершён`);
+        killTree(this.proc);
+        this.#finish(null, () => i18nError(`${this.name}: строка агента больше ${MAX_LINE_MB} МБ`, 'err.agentLineTooLong', { engine: this.name, mb: MAX_LINE_MB }));
+      },
+    });
     const skip = quietStderrFilter(this.quietStderr, this.quietStderrBlock);
-    readline.createInterface({ input: this.proc.stderr }).on('line', (l) => {
+    readLines(this.proc.stderr, (l) => {
       if (!skip(l)) logError(`[${this.name}:stderr]`, l);
+    }, {
+      onOverflow: () => logError(`[${this.name}:stderr] строка длиннее ${MAX_LINE_MB} МБ — дальнейший вывод игнорируется`),
     });
     // запись в уже завершившийся процесс (EPIPE) не должна ронять бота
     this.proc.stdin.on('error', (e) => logError('[acp] stdin:', e.message));

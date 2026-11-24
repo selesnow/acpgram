@@ -81,7 +81,7 @@ test('writeProjectFile: создаёт подпапки, существующи�
   assert.throws(() => F.writeProjectFile(proj, proj, ['conf'], '1', { replace: true }), (e) => e.code === 'isdir');
 });
 
-test('ссылки: бот не пишет и не удаляет сквозь ссылку, подложенную в проект', (t) => {
+test('ссылки: бот не пишет и не удаляет сквозь ссылку, подложенную в проект', async (t) => {
   const outside = join(home, 'outside');
   try {
     symlinkSync(outside, join(proj, 'linkdir'), 'junction'); // на Windows junction не требует прав администратора
@@ -93,7 +93,7 @@ test('ссылки: бот не пишет и не удаляет сквозь �
   assert.throws(() => F.writeProjectFile(proj, join(proj, 'linkdir'), ['new.txt'], 'x'), (e) => e.code === 'outside', 'папка-ссылка как место записи');
   assert.throws(() => F.deleteProjectFile(proj, join(proj, 'linkdir', 'bot.env')), (e) => e.code === 'outside');
   assert.equal(readFileSync(join(outside, 'bot.env'), 'utf8'), 'BOT=1', 'чужой файл цел');
-  assert.ok(!F.listProjectDir(proj, proj).dirs.includes('linkdir'), 'ссылки в списке не показываются');
+  assert.ok(!(await F.listProjectDir(proj, proj)).dirs.includes('linkdir'), 'ссылки в списке не показываются');
   assert.equal(F.projectFileInfo(proj, join(proj, 'linkdir', 'bot.env')), null);
   // ссылка на файл (на Windows нужны права — тогда эта часть пропускается)
   try {
@@ -106,12 +106,12 @@ test('ссылки: бот не пишет и не удаляет сквозь �
   assert.equal(readFileSync(join(outside, 'bot.env'), 'utf8'), 'BOT=1');
 });
 
-test('listProjectDir, projectFileInfo, deleteProjectFile, fmtSize', () => {
+test('listProjectDir, projectFileInfo, deleteProjectFile, fmtSize', async () => {
   mkdirSync(join(proj, 'node_modules'));
   mkdirSync(join(proj, '.git'));
   writeFileSync(join(proj, 'b.txt'), 'bb');
   writeFileSync(join(proj, '.Renviron'), 'K=1');
-  const l = F.listProjectDir(proj, proj);
+  const l = await F.listProjectDir(proj, proj);
   assert.ok(l.dirs.includes('conf') && !l.dirs.includes('node_modules') && !l.dirs.includes('.git'));
   assert.deepEqual(l.files.map((f) => f.name).filter((n) => !n.startsWith('link')), ['.Renviron', 'b.txt'], 'скрытые файлы видны');
   assert.equal(F.projectFileInfo(proj, join(proj, 'b.txt')).size, 2);

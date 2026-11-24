@@ -14,7 +14,7 @@ import { createRepo, listNamespaces, openMergeRequest, repoInfo, repoSlug, visib
 import { HostError, showRemote } from './gitHosts.mjs';
 import { ensureRepo, hasCommits, isRepoRoot, lastSubject, setRemote } from './gitInspect.mjs';
 import { t } from './i18n.mjs';
-import { userPath } from './state.mjs';
+import { errorRootOf, userPath } from './state.mjs';
 import { hCode, th } from './ui.mjs';
 
 /** Действия кнопок этого модуля (gt:<действие>:<аргумент>). */
@@ -98,7 +98,7 @@ async function publish(st, project, lang, edit, view) {
     return await edit({ text: `${th('git.pb.done', lang, { address: hCode(showRemote(created.url)) })}${note}\n\n${v.text}`, markup: { inline_keyboard: [...open, ...v.markup.inline_keyboard] } });
   } catch (e) {
     log('git: публикация:', e.message, '| пользователь', st.userId);
-    return await edit({ text: failText(e, lang, host), markup: { inline_keyboard: [backRow(lang)] } });
+    return await edit({ text: failText(e, lang, host, errorRootOf(st.userId)), markup: { inline_keyboard: [backRow(lang)] } });
   } finally {
     releaseGitLock(st, lock);
   }
@@ -117,7 +117,7 @@ async function mergeRequest(st, project, title, lang, edit) {
     return await edit({ text, markup: { inline_keyboard: [[{ text: t('git.open', lang), url: r.url }], backRow(lang)] } });
   } catch (e) {
     log('git: запрос на слияние:', e.message, '| пользователь', st.userId);
-    return await edit({ text: failText(e, lang, repo.host), markup: { inline_keyboard: [backRow(lang)] } });
+    return await edit({ text: failText(e, lang, repo.host, errorRootOf(st.userId)), markup: { inline_keyboard: [backRow(lang)] } });
   }
 }
 
@@ -203,7 +203,7 @@ export async function onPublishCallback(st, cb, h) {
   } catch (e) {
     log(`git: ${action}:`, e.message, '| пользователь', st.userId);
     await ack();
-    return edit({ text: failText(e, lang, accountOf(st, st.gitPublish)?.host), markup: { inline_keyboard: [backRow(lang)] } });
+    return edit({ text: failText(e, lang, accountOf(st, st.gitPublish)?.host, errorRootOf(st.userId)), markup: { inline_keyboard: [backRow(lang)] } });
   }
 }
 
@@ -236,7 +236,7 @@ export async function onPublishInput(st, text, h) {
     return (await send(summaryView(st, project, lang)), true);
   } catch (e) {
     log('git: публикация (ввод):', e.message, '| пользователь', st.userId);
-    await say(st.to, failText(e, lang, accountOf(st, st.gitPublish)?.host), HTML);
+    await say(st.to, failText(e, lang, accountOf(st, st.gitPublish)?.host, errorRootOf(st.userId)), HTML);
     return true;
   }
 }

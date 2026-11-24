@@ -2,7 +2,7 @@
 // новая тема вместо сброса текущего диалога.
 import { botInfo, db, langOf, log, say } from './ctx.mjs';
 import { errText, t } from './i18n.mjs';
-import { engineOf, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { engineOf, errorRootOf, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { createTopic, topicLink, topicName } from './topics.mjs';
 
@@ -75,7 +75,7 @@ export async function newTopic(st, { project = st.project } = {}) {
     threadId = await createTopic(st.chatId, name);
   } catch (e) {
     log('создание темы:', e.message, '| пользователь', st.userId);
-    return say(st.to, t('topics.createFail', lang, { msg: errText(e, lang) }));
+    return say(st.to, t('topics.createFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }));
   }
   const engine = engineOf(st);
   db.saveTopic(st.userId, threadId, { name, named: false, project, engine: engine.id });

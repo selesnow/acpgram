@@ -45,16 +45,16 @@ test('типы изображений', () => {
   assert.ok(isImageMime('image/jpeg') && !isImageMime('application/pdf') && !isImageMime(undefined));
 });
 
-test('saveUpload: сохраняет с отметкой времени и не перезаписывает существующие файлы', () => {
+test('saveUpload: сохраняет с отметкой времени и не перезаписывает существующие файлы', async () => {
   const dir = join(tmp, 'up');
   const d = new Date(2026, 10, 13, 9, 5, 7);
-  const a = saveUpload(dir, 'a.txt', Buffer.from('1'), d);
-  const b = saveUpload(dir, 'a.txt', Buffer.from('2'), d);
+  const a = await saveUpload(dir, 'a.txt', Buffer.from('1'), d);
+  const b = await saveUpload(dir, 'a.txt', Buffer.from('2'), d);
   assert.match(a, /20261113-090507_a\.txt$/);
   assert.notEqual(a, b);
   assert.equal(readFileSync(a, 'utf8'), '1');
   assert.equal(readFileSync(b, 'utf8'), '2');
-  assert.ok(saveUpload(dir, '../../x.txt', Buffer.from('x'), d).startsWith(dir), 'путь в имени не выводит за каталог');
+  assert.ok((await saveUpload(dir, '../../x.txt', Buffer.from('x'), d)).startsWith(dir), 'путь в имени не выводит за каталог');
 });
 
 test('пути каталогов файлов по пользователям', () => {
@@ -62,7 +62,7 @@ test('пути каталогов файлов по пользователям',
   assert.equal(outboxDir(42, tmp), join(tmp, 'outbox', '42'));
 });
 
-test('cleanupOldFiles: удаляет только старые файлы', () => {
+test('cleanupOldFiles: удаляет только старые файлы', async () => {
   const root = join(tmp, 'clean');
   mkdirSync(join(root, '1'), { recursive: true });
   const oldF = join(root, '1', 'old.txt');
@@ -71,9 +71,9 @@ test('cleanupOldFiles: удаляет только старые файлы', () 
   writeFileSync(newF, 'n');
   const past = new Date(Date.now() - 10 * 24 * 3600_000);
   utimesSync(oldF, past, past);
-  assert.equal(cleanupOldFiles(root, 7 * 24 * 3600_000), 1);
+  assert.equal(await cleanupOldFiles(root, 7 * 24 * 3600_000), 1);
   assert.ok(!existsSync(oldF) && existsSync(newF));
-  assert.equal(cleanupOldFiles(join(tmp, 'нет-такой'), 1), 0);
+  assert.equal(await cleanupOldFiles(join(tmp, 'нет-такой'), 1), 0);
 });
 
 test('buildPromptBlocks: текст, изображение (если агент умеет), заметка о файлах и отправке', () => {
