@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -116,7 +116,7 @@ export const peekCall = (method) => calls.filter((c) => c.method === method);
 `;
 
 const harness = (options = {}) => {
-  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-projui-'));
+  const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'acpgram-projui-')));
   tempDirs.push(tmp);
   const mockPath = join(tmp, 'mock.mjs');
   writeFileSync(mockPath, UI_MOCK);

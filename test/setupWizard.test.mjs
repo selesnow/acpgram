@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -87,7 +87,7 @@ export function spawnSync(cmd, args, opts) {
 `;
 
 const harness = ({ prompts = [], fetchRules = [], engineChecks = [], serviceResult = { ok: true }, platform, bwrap = false } = {}) => {
-  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-setup-'));
+  const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'acpgram-setup-')));
   tempDirs.push(tmp);
   const home = join(tmp, 'home');
   const root = join(tmp, 'projects');
@@ -180,6 +180,7 @@ const adminFetch = () => [
 test('setupRoot: неверный путь спрашивается заново, корень и личные пространства сохраняются', () => {
   const missing = join(tmpdir(), 'acpgram-нет-такого-корня');
   const h = harness({
+    platform: 'darwin',
     prompts: [
       { method: 'ask', answer: missing },
       { method: 'ask', answer: '__ROOT__' },

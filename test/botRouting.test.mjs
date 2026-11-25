@@ -516,10 +516,17 @@ test('setupCommands и sweepUpdateLimits: меню всех языков и уб
 
   const limited = depsFor({ UPDATE_WINDOW_MS: 1 });
   const r = createBotRouting(limited.deps);
-  for (let i = 0; i < 21; i++) assert.equal(r.tooManyUpdates(USER), i === 20);
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(r.sweepUpdateLimits(), 1);
-  assert.equal(r.sweepUpdateLimits(), 0);
+  const realNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    for (let i = 0; i < 21; i++) assert.equal(r.tooManyUpdates(USER), i === 20);
+    now += 2;
+    assert.equal(r.sweepUpdateLimits(), 1);
+    assert.equal(r.sweepUpdateLimits(), 0);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('служебные сообщения тем: создание, переименование и перенос команды в General', async () => {
