@@ -3,9 +3,10 @@ import { db, dbg, log, say } from './ctx.mjs';
 import { FILE_PLACEHOLDER, attachFiles, outboxDir } from './files.mjs';
 import { offerGitActions } from './gitUi.mjs';
 import { errText, t } from './i18n.mjs';
-import { errorRootOf, topicProject, userPath } from './state.mjs';
+import { errorRootOf, topicProject, topicsOn, userPath } from './state.mjs';
 import { mediaIdsOf, sendFile, sendRich } from './telegram.mjs';
 import { renameTopic, titleFromRequest, topicName } from './topics.mjs';
+import { offerAgentTopics } from './topicsUi.mjs';
 import { finalExtras, finalMessages } from './ui.mjs';
 
 async function nameTopic(st, title) {
@@ -32,7 +33,7 @@ async function sendLooseFiles(st, files, lang) {
   }
 }
 
-export async function deliverTurn({ st, to, text, dbText, lang, engine, naming, stopReason, error, usage, agent, startedAt, steps, sent, asked, gitted, titled, answerText, limited, truncated, requestId }) {
+export async function deliverTurn({ st, to, text, dbText, lang, engine, naming, stopReason, error, usage, agent, startedAt, steps, sent, asked, gitted, titled, topical = { topics: [] }, answerText, limited, truncated, requestId }) {
   db.finishRequest(requestId, { stopReason, answer: answerText, error, usage: usage ?? {} });
   if (st.suppress) {
     st.suppress = false;
@@ -65,6 +66,7 @@ export async function deliverTurn({ st, to, text, dbText, lang, engine, naming, 
   if (inAnswer.length) log('файлы в ответе:', inAnswer.join(', '), '| пользователь', st.userId);
   if (loose.length || placed.extra.length) await sendLooseFiles(st, [...loose, ...placed.extra], lang);
   if (!limited && gitted.actions.length) await offerGitActions(st, gitted.actions).catch((e) => log('git: предложение агента:', e.message));
+  if (!limited && stopReason !== 'error' && topical.topics.length && topicsOn(st.userId)) await offerAgentTopics(st, topical.topics, lang).catch((e) => log('topics: предложение агента:', e.message));
   if (naming && !limited && stopReason !== 'error') await nameTopic(st, titled.title || titleFromRequest(text || dbText));
   return true;
 }

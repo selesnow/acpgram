@@ -14,13 +14,30 @@ const modelLabel = (d, st) => {
 const sendLangPicker = (d, chatId) =>
   d.say(chatId, d.LANG_PICK, { reply_markup: { inline_keyboard: [d.LANG_CODES.map((code) => ({ text: d.LANGS[code], callback_data: `lang:${code}` }))] } });
 
-/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
-const sendStart = (d, st) => {
+const replyOpts = (d, st) => ({ admin: d.isAdmin(st.userId), topics: d.topicsSupport.enabled ? (d.topicsOn(st.userId) ? 'on' : 'off') : null });
+const replySeenKey = (userId) => `replyKeyboard:${userId}`;
+const markReplyKeyboard = (d, userId) => d.db.setSetting(replySeenKey(userId), '1');
+
+/** /keyboard: подключить reply-клавиатуру повторно (первый /start делает это сам). */
+const sendReplyKeyboard = async (d, st) => {
   const lang = d.langOf(st.userId);
-  const admin = d.isAdmin(st.userId);
-  const topics = d.topicsSupport.enabled ? (d.topicsOn(st.userId) ? 'on' : 'off') : null;
-  const view = d.startView({ level: d.levelLabel(st.userId), project: d.userPath(st.userId, st.project, lang), engine: d.engineOf(st).label, model: modelLabel(d, st), isAdmin: admin, note: admin ? null : d.welcomeNote(lang), topics, lang });
-  return d.sendRich(st.to, view).catch((e) => d.log('start:', e.message));
+  await d.say(st.to, d.t('reply.keyboardOn', lang), { reply_markup: d.replyKeyboard(lang, replyOpts(d, st)) });
+  markReplyKeyboard(d, st.userId);
+};
+
+/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
+const sendStart = async (d, st) => {
+  const lang = d.langOf(st.userId);
+  const opts = replyOpts(d, st);
+  const view = d.startView({ level: d.levelLabel(st.userId), project: d.userPath(st.userId, st.project, lang), engine: d.engineOf(st).label, model: modelLabel(d, st), isAdmin: opts.admin, note: opts.admin ? null : d.welcomeNote(lang), topics: opts.topics, lang });
+  const first = !d.db.getSetting(replySeenKey(st.userId));
+  const extra = first ? { reply_markup: d.replyKeyboard(lang, opts) } : {};
+  try {
+    await d.sendRich(st.to, view, extra);
+    if (first) markReplyKeyboard(d, st.userId);
+  } catch (e) {
+    d.log('start:', e.message);
+  }
 };
 
 const helpCommand = (d, st) => {
@@ -42,6 +59,7 @@ async function onLangCallback(d, st, cb) {
   d.setLang(st.userId, code);
   const text = d.t('lang.set', code, { name: d.LANGS[code] });
   await d.tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => d.say(chatId, text));
+  return d.say(chatId, d.t('reply.updated', code));
 }
 
 /** /language [ru|uk|en] — без аргумента показываем выбор языка. */
@@ -98,6 +116,7 @@ export const COMMANDS = [
   { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
   { name: 'topics', menu: (d) => d.topicsSupport.enabled, button: true, run: (d, st) => d.handleTopics(st) },
   { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
+  { name: 'keyboard', menu: false, run: (d, st) => sendReplyKeyboard(d, st) },
   { name: 'help', menu: true, run: helpCommand },
   { name: 'start', menu: true, run: sendStart },
 ];
@@ -117,15 +136,19 @@ const sendToAgent = (d, st, text, opts = {}) => (st.busy ? d.enqueue(st, text, o
  * @param {{quote?: string|null}} [opts] quote — фрагмент прошлого сообщения, на которое отвечает пользователь
  */
 async function handleTextWith(d, st, text, { quote = null, messageId = null } = {}) {
-  const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
-  const name = m?.[1]?.toLowerCase();
-  const command = name ? commandsFor(d).find((c) => c.name === name || c.aliases?.includes(name)) : null;
   const lang = d.langOf(st.userId);
+  const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
+  const label = text.trim();
+  const reply = label ? d.replyCommandOf(label, lang, { ...replyOpts(d, st), admin: true }) : null;
+  const name = m?.[1]?.toLowerCase() || reply?.name;
+  const command = name ? commandsFor(d).find((c) => c.name === name || c.aliases?.includes(name)) : null;
   if (command) {
     d.clearPendingInput(st);
     if (command.admin && !d.isAdmin(st.userId)) return d.say(st.to, d.t('admin.only', lang));
-    return command.run(st, m[2]);
+    const arg = m?.[2];
+    return arg === undefined ? command.run(st) : command.run(st, arg);
   }
+
   if (await d.onProjectNameInput(st, text)) return;
   if (await d.onFileInput(st, text, { messageId })) return;
   if (await d.onGitInput(st, text, { messageId })) return;

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, mock, test } from 'node:test';
 
 const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'acpgram-files-')));
 const root = join(home, 'projects');
@@ -104,6 +104,22 @@ test('ссылки: бот не пишет и не удаляет сквозь �
   assert.throws(() => F.writeProjectFile(proj, proj, ['link.env'], 'ЗАХВАТ', { replace: true }), (e) => e.code === 'link');
   assert.throws(() => F.deleteProjectFile(proj, join(proj, 'link.env')), (e) => e.code === 'link');
   assert.equal(readFileSync(join(outside, 'bot.env'), 'utf8'), 'BOT=1');
+});
+
+test('writeProjectFile: подмена realpath между проверкой и записью не трогает исходный файл', (tc) => {
+  const originalNative = realpathSync.native;
+  const name = 'race.env';
+  const target = join(proj, name);
+  writeFileSync(target, 'ORIGINAL=1\n');
+  mock.method(realpathSync, 'native', (p, ...rest) => (String(p).includes('.acpgram-') && String(p).endsWith('.tmp') ? join(home, 'outside') : originalNative(p, ...rest)));
+  tc.after(() => {
+    mock.restoreAll();
+    rmSync(target, { force: true });
+  });
+
+  assert.throws(() => F.writeProjectFile(proj, proj, [name], 'NEW=2\n', { replace: true }), (e) => e instanceof F.FileError && e.code === 'outside');
+  assert.equal(readFileSync(target, 'utf8'), 'ORIGINAL=1\n');
+  assert.deepEqual(readdirSync(proj).filter((n) => n.startsWith('.acpgram-') && n.endsWith('.tmp')), []);
 });
 
 test('listProjectDir, projectFileInfo, deleteProjectFile, fmtSize', async () => {

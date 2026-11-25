@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanTitle, commandName, extractTitle, isAutoTopicCommand, projectLabel, stripTitle, titleFromRequest, topicInfoOf, topicLink, topicName } from '../src/topics.mjs';
+import { TOPIC_NOTE, cleanTitle, commandName, extractTitle, extractTopicMarks, isAutoTopicCommand, projectLabel, stripTitle, stripTopicMarks, titleFromRequest, topicInfoOf, topicLink, topicName } from '../src/topics.mjs';
 import { dest } from '../src/telegram.mjs';
 
 const FENCE = '`'.repeat(3);
@@ -22,6 +22,27 @@ test('stripTitle: в черновике не видно ни целой, ни н
   }
   assert.equal(stripTitle('[[title: Отчёт]]\nПишу ответ'), 'Пишу ответ');
   assert.equal(stripTitle('Обычный ответ [1]'), 'Обычный ответ [1]');
+});
+
+test('extractTopicMarks: метка темы убирается из ответа, названий не больше трёх', () => {
+  assert.deepEqual(extractTopicMarks('[[topic: Отчёт по списаниям]]\nГотово'), { topics: ['Отчёт по списаниям'], text: 'Готово' });
+  assert.deepEqual(extractTopicMarks('Готово: [[topic: "**Новый проект**".]]'), { topics: ['Новый проект'], text: 'Готово:' });
+  assert.deepEqual(extractTopicMarks('Без метки'), { topics: [], text: 'Без метки' });
+  const code = `Пример:\n${FENCE}\n[[topic: x]]\n${FENCE}`;
+  assert.deepEqual(extractTopicMarks(code), { topics: [], text: code });
+  assert.deepEqual(extractTopicMarks('[[topic: А]]\n[[topic: Б]]\n[[topic: В]]\n[[topic: Г]]').topics, ['А', 'Б', 'В']);
+});
+
+test('stripTopicMarks: в черновике не видно ни целой, ни недописанной метки', () => {
+  for (const partial of ['[', '[[', '[[top', '[[topic:', '[[topic: Отчёт по', '[[topic: Отчёт]', '  [[topic: Отчёт]]']) {
+    assert.equal(stripTopicMarks(partial), '', partial);
+  }
+  assert.equal(stripTopicMarks('[[topic: Отчёт]]\nПишу ответ'), 'Пишу ответ');
+  assert.equal(stripTopicMarks('Обычный ответ [1]'), 'Обычный ответ [1]');
+});
+
+test('TOPIC_NOTE: агент узнаёт о метке темы', () => {
+  assert.match(TOPIC_NOTE, /\[\[topic: /);
 });
 
 test('cleanTitle и titleFromRequest: одна строка, без разметки, коротко', () => {

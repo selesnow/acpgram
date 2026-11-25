@@ -1,7 +1,7 @@
 // Темы в личном чате с ботом (Bot API 9.3+): в режиме «диалоги» каждая тема — отдельный диалог с агентом.
 // Здесь — работа с темами в Telegram и название темы от агента; состояние диалогов — в state.mjs.
 import { tg } from './telegram.mjs';
-import { TITLE_HEAD, TITLE_MARK, extractAgentMarks } from './agentMarks.mjs';
+import { TITLE_HEAD, TITLE_MARK, TOPIC_DRAFT, TOPIC_MARK, extractAgentMarks, stripAgentMarks } from './agentMarks.mjs';
 
 /** Название темы в Telegram: 1–128 символов. */
 const NAME_MAX = 128;
@@ -61,6 +61,11 @@ export const TITLE_NOTE =
   '[[title: <short topic title, 2-5 words, in the language of the user\'s message, no emoji>]] — it becomes the topic name ' +
   'and is hidden from the user. Do it only in this reply.';
 
+export const TOPIC_NOTE =
+  '[AcpGram] If the user asks to create a new dialog/topic, put a marker on its own line in your reply: ' +
+  '[[topic: <short topic title, 2-5 words, in the language of the user\'s message, no emoji>]] — AcpGram creates the topic ' +
+  'and sends a link to it. Use it only when the user asks for a new topic, not to organize your own work.';
+
 /** Достаёт из ответа агента название темы (метка вне кода) и убирает метку из текста. */
 export function extractTitle(text) {
   const state = { title: null };
@@ -84,6 +89,24 @@ export function stripTitle(text) {
   if (TITLE_HEAD.test(head)) return ''; // начало метки ещё пишется
   return extractTitle(s).text;
 }
+
+export function extractTopicMarks(text) {
+  const state = { topics: [] };
+  return extractAgentMarks(text, {
+    present: (s) => /\[\[topic:/i.test(s),
+    mark: TOPIC_MARK,
+    state,
+    onMatch: (s, _full, name) => {
+      const title = cleanTitle(name);
+      if (title && s.topics.length < 3) s.topics.push(title);
+      return '';
+    },
+    finish: (s) => s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim(),
+  });
+}
+
+export const stripTopicMarks = (text) =>
+  stripAgentMarks(text, { mark: TOPIC_DRAFT.mark, tail: TOPIC_DRAFT.tail, finish: (s) => s.trim() });
 
 /** Имя команды бота из текста («/model@bot arg» → «model») или null. */
 export const commandName = (text) => /^\/(\w+)(?:@\w+)?(?:\s|$)/.exec(String(text ?? ''))?.[1]?.toLowerCase() ?? null;

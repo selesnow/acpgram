@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 // настоящий путь: на macOS временная папка — ссылка (/var → /private/var), на Windows бывает короткое имя (RUNNER~1),
 // а бот хранит проект настоящим путём
@@ -19,6 +20,7 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = async () => ({ json: async () => ({ ok: true, result: { message_id: 1 } }) });
 const ctx = await import('../src/ctx.mjs');
 const { CATALOG_TTL_MS, catalogFresh, catalogStaleReason, envSignature } =await import('../src/access.mjs');
+const PROBE = fileURLToPath(new URL('./fixtures/probe-agent.mjs', import.meta.url));
 after(() => {
   globalThis.fetch = realFetch;
   ctx.db.close();
@@ -288,4 +290,84 @@ test('applyChoice: выбор модели из виджета и кнопок �
   assert.equal(M.applyChoice(st, engine, 'effort', 'ultra').ok, false);
   const html = M.modelWidgetHtml({ userId: 1 }, engine, A.getCatalog(engine.id));
   assert.match(html, /"m":\[\["opus","Opus"\],\["sonnet","Sonnet"\]\]/);
+});
+
+test('/model: устаревший каталог обновляется по запросу и показывает свежий список', async () => {
+  const A = await import('../src/access.mjs');
+  const M = await import('../src/modelUi.mjs');
+  const { ENGINES } = await import('../src/engines.mjs');
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  const originalClaudeArgs = ENGINES.claude.args;
+  const originalGeminiArgs = ENGINES.gemini.args;
+  const originalClaudeCommand = process.env.CLAUDE_COMMAND;
+  const originalGeminiCommand = process.env.GEMINI_COMMAND;
+  const originalProbe = process.env.FAKE_PROBE;
+  const restoreEnv = (name, value) => (value === undefined ? delete process.env[name] : (process.env[name] = value));
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: String(url).split('/').pop().split('?')[0], body: init.body ? JSON.parse(init.body) : {} });
+    return { json: async () => ({ ok: true, result: { message_id: 1 } }) };
+  };
+  try {
+    process.env.CLAUDE_COMMAND = process.execPath;
+    process.env.GEMINI_COMMAND = process.execPath;
+    process.env.FAKE_PROBE = 'normal';
+    ENGINES.claude.args = [PROBE];
+    ENGINES.gemini.args = [PROBE];
+    const seeded = A.saveCatalog(ENGINES.claude, { configOptions: [{ id: 'model', currentValue: 'opencode/old', options: [{ value: 'opencode/old', name: 'Old' }] }] });
+    seeded.at = new Date(Date.now() - 2 * 24 * 3600_000).toISOString();
+    ctx.db.setSetting('lang:1', 'en');
+    await M.handleModel({ userId: 1, to: 1, engine: 'claude' }, '', { classic: true });
+    assert.ok(calls.some((c) => /Updating the model list/.test(c.body.text ?? '')), 'показано сообщение об обновлении');
+    assert.match(JSON.stringify(calls.at(-1).body.reply_markup), /Zen/);
+    assert.ok(A.getCatalog('claude').models.some((m) => m.id === 'opencode/zen'));
+  } finally {
+    A.killProbes();
+    globalThis.fetch = originalFetch;
+    ENGINES.claude.args = originalClaudeArgs;
+    ENGINES.gemini.args = originalGeminiArgs;
+    restoreEnv('CLAUDE_COMMAND', originalClaudeCommand);
+    restoreEnv('GEMINI_COMMAND', originalGeminiCommand);
+    restoreEnv('FAKE_PROBE', originalProbe);
+  }
+});
+
+test('/model: если обновить каталог не вышло, показывается прежний список', async () => {
+  const A = await import('../src/access.mjs');
+  const M = await import('../src/modelUi.mjs');
+  const { ENGINES } = await import('../src/engines.mjs');
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  const originalClaudeArgs = ENGINES.claude.args;
+  const originalGeminiArgs = ENGINES.gemini.args;
+  const originalClaudeCommand = process.env.CLAUDE_COMMAND;
+  const originalGeminiCommand = process.env.GEMINI_COMMAND;
+  const originalProbe = process.env.FAKE_PROBE;
+  const restoreEnv = (name, value) => (value === undefined ? delete process.env[name] : (process.env[name] = value));
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: String(url).split('/').pop().split('?')[0], body: init.body ? JSON.parse(init.body) : {} });
+    return { json: async () => ({ ok: true, result: { message_id: 1 } }) };
+  };
+  try {
+    process.env.CLAUDE_COMMAND = process.execPath;
+    process.env.GEMINI_COMMAND = process.execPath;
+    process.env.FAKE_PROBE = 'auth';
+    ENGINES.claude.args = [PROBE];
+    ENGINES.gemini.args = [PROBE];
+    const seeded = A.saveCatalog(ENGINES.gemini, { models: { currentModelId: 'gemini-old', availableModels: [{ modelId: 'gemini-old', name: 'Old Gemini' }] } });
+    seeded.at = new Date(Date.now() - 2 * 24 * 3600_000).toISOString();
+    ctx.db.setSetting('lang:1', 'en');
+    await M.handleModel({ userId: 1, to: 1, engine: 'gemini' }, '', { classic: true });
+    assert.ok(calls.some((c) => /Updating the model list/.test(c.body.text ?? '')), 'показано сообщение об обновлении');
+    assert.match(JSON.stringify(calls.at(-1).body.reply_markup), /Old Gemini/);
+    assert.equal(A.getCatalog('gemini').models[0].id, 'gemini-old');
+  } finally {
+    A.killProbes();
+    globalThis.fetch = originalFetch;
+    ENGINES.claude.args = originalClaudeArgs;
+    ENGINES.gemini.args = originalGeminiArgs;
+    restoreEnv('CLAUDE_COMMAND', originalClaudeCommand);
+    restoreEnv('GEMINI_COMMAND', originalGeminiCommand);
+    restoreEnv('FAKE_PROBE', originalProbe);
+  }
 });

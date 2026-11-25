@@ -233,11 +233,11 @@ export const stripMedia = (md) => md.replace(MEDIA_LINE, '').replace(/\n{3,}/g, 
 const kindIn = (md, id) => new RegExp(`tg://(photo|document)\\?id=${id}\\)`).exec(md)?.[1] ?? 'document';
 
 /** Одно rich-сообщение с файлами; если Telegram отверг фото — повтор, где все фото идут документами. */
-async function sendRichMedia(to, md, ids, media, opts = {}) {
+async function sendRichMedia(to, md, ids, media, opts = {}, reply_markup = null) {
   const send = (text) =>
     tgForm(
       'sendRichMessage',
-      { ...dest(to), rich_message: { markdown: text, media: ids.map((id) => ({ id, media: { type: kindIn(text, id), media: `attach://${id}` } })) } },
+      { ...dest(to), rich_message: { markdown: text, media: ids.map((id) => ({ id, media: { type: kindIn(text, id), media: `attach://${id}` } })) }, ...(reply_markup ? { reply_markup } : {}) },
       Object.fromEntries(ids.map((id) => [id, media[id]])),
       opts,
     );
@@ -258,14 +258,17 @@ async function sendRichMedia(to, md, ids, media, opts = {}) {
  * Если Telegram отверг разметку — отправляем обычным текстом.
  * @returns {Promise<object[]>} файлы из media, которые не удалось вставить в сообщение
  */
-export async function sendRich(to, markdown, { media = {}, ...opts } = {}) {
+export async function sendRich(to, markdown, { media = {}, reply_markup, ...opts } = {}) {
   const finalOpts = { retryTransient: true, ...opts }; // итоговый ответ повторяем при 5xx/сети; черновики — нет
   const leftover = [];
-  for (let part of splitRich(markdown, RICH_LIMIT)) {
+  const parts = splitRich(markdown, RICH_LIMIT);
+  for (let i = 0; i < parts.length; i++) {
+    let part = parts[i];
+    const markup = i === parts.length - 1 ? reply_markup : null;
     const ids = mediaIdsOf(part).filter((id) => media[id]);
     if (ids.length) {
       try {
-        await sendRichMedia(to, part, ids, media, finalOpts);
+        await sendRichMedia(to, part, ids, media, finalOpts, markup);
         continue;
       } catch (e) {
         logError('rich-сообщение с файлами не прошло, файлы уйдут отдельно:', e.message);
@@ -275,13 +278,17 @@ export async function sendRich(to, markdown, { media = {}, ...opts } = {}) {
       }
     }
     try {
-      await tg('sendRichMessage', { ...dest(to), rich_message: { markdown: part } }, finalOpts);
+      await tg('sendRichMessage', { ...dest(to), rich_message: { markdown: part }, ...(markup ? { reply_markup: markup } : {}) }, finalOpts);
     } catch (e) {
       // обычным текстом отправляем только когда Telegram отверг именно разметку (400): при 5xx/сети сообщение
       // могло дойти, и повтор в другом виде продублировал бы его в чате
       if (!(e instanceof TelegramError && e.code === 400)) throw e;
       logError('sendRichMessage не прошёл, отправляю обычным текстом:', e.message);
-      for (const plain of splitText(richToPlain(part), 4000)) await tg('sendMessage', { ...dest(to), text: plain }, finalOpts);
+      const plainParts = splitText(richToPlain(part), 4000);
+      for (let j = 0; j < plainParts.length; j++) {
+        const plainMarkup = j === plainParts.length - 1 ? markup : null;
+        await tg('sendMessage', { ...dest(to), text: plainParts[j], ...(plainMarkup ? { reply_markup: plainMarkup } : {}) }, finalOpts);
+      }
     }
   }
   return leftover;

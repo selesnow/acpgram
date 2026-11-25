@@ -52,6 +52,7 @@ export function startView({ level, project, engine, model, isAdmin, note, topics
     cmd('close'),
     ...(topics ? [cmd('topics')] : []),
     cmd('language'),
+    cmd('keyboard'),
     ...(isAdmin ? [cmd('users'), cmd('active'), cmd('invite'), cmd('usage')] : []),
   ];
   const row = (items) => `<tg-button-row>${items.join('')}</tg-button-row>`;

@@ -5,7 +5,7 @@ import { stripGitMarks } from './gitMarks.mjs';
 import { forceStopAfter } from './forceStop.mjs';
 import { stripSendMarks } from './files.mjs';
 import { sendRichDraft, sendThinkingDraft } from './telegram.mjs';
-import { stripTitle } from './topics.mjs';
+import { stripTitle, stripTopicMarks } from './topics.mjs';
 import { parseTool } from './tools.mjs';
 import { composeDraft, lastThoughtTitle, neutralizeTgTags } from './ui.mjs';
 
@@ -54,7 +54,7 @@ export function createTurnStream({ st, to, clean, engine, lang, startedAt, getRe
     if (!dirty && Date.now() - lastSent < HEARTBEAT_MS) return;
     dirty = false;
     lastSent = Date.now();
-    const d = composeDraft({ thought, steps, plan, answer: stripAskMarks(stripGitMarks(stripTitle(stripSendMarks(neutralizeTgTags(clean(answer)))))), elapsedMs: Date.now() - startedAt, lang });
+    const d = composeDraft({ thought, steps, plan, answer: stripAskMarks(stripGitMarks(stripTitle(stripTopicMarks(stripSendMarks(neutralizeTgTags(clean(answer))))))), elapsedMs: Date.now() - startedAt, lang });
     const draft = d.plain ? '(точки Telegram)' : d.markdown;
     if (draft !== lastText) dbg(`draft u${st.userId}`, draft);
     lastText = draft;

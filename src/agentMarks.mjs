@@ -4,11 +4,13 @@ export const SEND_MARK = /\[\[send:([^\]\r\n]+)\]\]/g;
 export const ASK_MARK = /\[\[ask:([^\]\r\n]*)\]\]/gi;
 export const GIT_MARK = /\[\[git:(push|pull)\]\]/gi;
 export const TITLE_MARK = /\[\[title:([^\]\r\n]*)\]\][ \t]*\r?\n?/i;
+export const TOPIC_MARK = /\[\[topic:([^\]\r\n]*)\]\][ \t]*\r?\n?/gi;
 
 export const SEND_DRAFT = { mark: /\[\[send:[^\]\r\n]*(?:\]\]?)?/g, tail: /\[{1,2}(?:s(?:e(?:n(?:d)?)?)?)?$/ };
 export const ASK_DRAFT = { mark: /\[\[ask:[^\]\r\n]*(?:\]\]?)?/gi, tail: /\[{1,2}(?:a(?:s(?:k)?)?)?$/i };
 export const GIT_DRAFT = { mark: GIT_MARK, tail: /\[\[g(?:i(?:t(?::(?:p(?:u(?:s(?:h(?:\]\]?)?)?|l(?:l(?:\]\]?)?)?)?)?)?)?)?)?$/i };
 export const TITLE_HEAD = /^\[(\[(t(i(t(l(e(:[^\]\r\n]*(\](\])?)?)?)?)?)?)?)?)?$/i;
+export const TOPIC_DRAFT = { mark: /\[\[topic:[^\]\r\n]*(?:\]\]?)?/gi, tail: /\[{1,2}(?:t(?:o(?:p(?:i(?:c(?::[^\]\r\n]*)?)?)?)?)?)?$/i };
 
 export const markPlaceholder = (char, i) => `${char}${i}${char}`;
 

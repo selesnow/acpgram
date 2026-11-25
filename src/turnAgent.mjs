@@ -6,8 +6,8 @@ import { parseUsage } from './engines.mjs';
 import { errText, t } from './i18n.mjs';
 import { SECRETS_NOTE, buildPromptBlocks, outboxDir } from './files.mjs';
 import { gitNote } from './gitAccess.mjs';
-import { ClosedError, LimitError, ProjectError, ensureAgent, errorRootOf } from './state.mjs';
-import { TITLE_NOTE } from './topics.mjs';
+import { ClosedError, LimitError, ProjectError, ensureAgent, errorRootOf, topicsOn } from './state.mjs';
+import { TITLE_NOTE, TOPIC_NOTE } from './topics.mjs';
 
 const OUTBOX_NOTE_EVERY = 10;
 
@@ -42,7 +42,9 @@ export async function callAgent({ st, text, files, quote, lang, naming, stream, 
     mkdirSync(outbox, { recursive: true });
     const noteNow = (a.promptCount ?? 0) % OUTBOX_NOTE_EVERY === 0;
     a.promptCount = (a.promptCount ?? 0) + 1;
-    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? [ASK_NOTE, SECRETS_NOTE, gitNote(st.userId)].filter(Boolean) : [] });
+    const notes = [ASK_NOTE, SECRETS_NOTE, gitNote(st.userId)];
+    if (topicsOn(st.userId)) notes.push(TOPIC_NOTE);
+    const blocks = buildPromptBlocks({ text, files, caps: a.caps, outbox: noteNow ? outbox : null, quote, notes: noteNow ? notes.filter(Boolean) : [] });
     if (naming) blocks.push({ type: 'text', text: TITLE_NOTE });
     const res = await a.prompt(blocks);
     stopReason = res.stopReason;

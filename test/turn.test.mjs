@@ -10,11 +10,11 @@ process.env.TELEGRAM_BOT_TOKEN ??= 'test';
 process.env.ALLOWED_USER_ID ??= '1';
 delete process.env.TURN_IDLE_MINUTES;
 
-const { db } = await import('../src/ctx.mjs');
+const { botInfo, db } = await import('../src/ctx.mjs');
 const { getEngine } = await import('../src/engines.mjs');
 const { setGitAvailable } = await import('../src/git.mjs');
 const { askPermission } = await import('../src/permission.mjs');
-const { getState, topicsSupport } = await import('../src/state.mjs');
+const { getState, stopUser, topicsSupport } = await import('../src/state.mjs');
 const { onPermissionCallback, runTurn } = await import('../src/turn.mjs');
 
 const USER_ID = 1;
@@ -152,6 +152,32 @@ test('runTurn: черновик, события ACP, метки и смена м
   }
 });
 
+test('runTurn: метка topic создаёт тему ботом и даёт ссылку', async () => {
+  const st = state(null);
+  const tg = telegram({ createForumTopic: ({ result }) => (result.message_thread_id = 555) });
+  const prevUsername = botInfo.username;
+  botInfo.username = 'acp_bot';
+  const a = agent(st, 's-topic', async (_a, _blocks, st) => {
+    st.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Готово: [[topic: Отчёт по списаниям]]' } });
+    return { stopReason: 'end_turn' };
+  });
+  try {
+    await runTurn(st, 'создай тему');
+    const created = findCall(tg.calls, 'createForumTopic');
+    assert.ok(created, 'тема создана через Bot API');
+    assert.match(created.body.name, /Отчёт по списаниям/);
+    assert.ok(tg.calls.some((c) => c.method === 'sendMessage' && c.body.message_thread_id === 555), 'в новой теме есть приветствие');
+    assert.ok(tg.calls.some((c) => c.method === 'sendMessage' && c.body.reply_markup?.inline_keyboard?.[0]?.[0]?.url === 'https://t.me/acp_bot/555'), 'в ответе есть ссылка на тему');
+    assert.equal(db.getTopic(USER_ID, 555)?.engine, 'claude');
+    assert.doesNotMatch(finalMarkdown(tg.calls), /\[\[topic:/);
+  } finally {
+    a.close();
+    tg.restore();
+    botInfo.username = prevUsername;
+    db.deleteTopic(USER_ID, 555);
+  }
+});
+
 test('runTurn: запрос разрешения, ответ кнопкой и смена режима агента', async () => {
   setGitAvailable(true);
   const st = state(null);
@@ -218,6 +244,31 @@ test('runTurn: типичная ошибка агента доходит до п
     assert.match(rich, /⚠️ Error: boom/);
     assert.equal(st.busy, false);
     assert.equal(st.requestId, null);
+  } finally {
+    a.close();
+    tg.restore();
+  }
+});
+
+test('runTurn: остановка во время хода гасит финальный ответ и очищает очередь', async () => {
+  const st = state(null);
+  st.queued = { text: 'следующий запрос', quote: null, messageId: 1 };
+  const tg = telegram();
+  let promptCount = 0;
+  const a = agent(st, 's-suppressed', async (_a, _blocks, turnState) => {
+    promptCount++;
+    stopUser(turnState, 'test');
+    turnState.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Ответ не нужен' } });
+    return { stopReason: 'end_turn' };
+  });
+  try {
+    await runTurn(st, 'прервать');
+    assert.equal(promptCount, 1);
+    assert.equal(st.queued, null);
+    assert.equal(st.suppress, false);
+    assert.equal(st.busy, false);
+    assert.ok(tg.calls.some((c) => c.method === 'sendMessageDraft'), 'черновик до остановки отправлен');
+    assert.equal(tg.calls.some((c) => c.method === 'sendRichMessage' && c.body.rich_message), false, 'финальный ответ подавлен');
   } finally {
     a.close();
     tg.restore();

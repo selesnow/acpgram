@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { BOT_COMMANDS, COMMANDS, configureBotRouting, createBotRouting, handleUpdate, hasAccess } from '../src/botRouting.mjs';
+import { replyCommandOf, replyKeyboard } from '../src/ui.mjs';
+import { t as realT } from '../src/i18n.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const ADMIN = 100;
@@ -26,6 +28,7 @@ const depsFor = (overrides = {}) => {
     [USER, { status: 'active', level: 'normal' }],
   ]);
   const states = new Map();
+  const settings = new Map();
   const rec = (name) => (...args) => { calls.push([name, ...args]); };
   const asyncRec = (name, result = false) => async (...args) => { calls.push([name, ...args]); return result; };
   const db = {
@@ -34,8 +37,11 @@ const depsFor = (overrides = {}) => {
       return users.get(id) ?? null;
     },
     touchUser: rec('touchUser'),
-    getSetting: () => null,
-    setSetting: rec('setSetting'),
+    getSetting: (key) => settings.get(key) ?? null,
+    setSetting: (key, value) => {
+      calls.push(['setSetting', key, value]);
+      settings.set(key, value);
+    },
     getTopic: () => null,
     saveTopic: rec('saveTopic'),
     deleteTopic: rec('deleteTopic'),
@@ -122,6 +128,8 @@ const depsFor = (overrides = {}) => {
     onTopicsCallback: rec('onTopicsCallback'),
     onWidgetQuery: rec('onWidgetQuery'),
     quoteOf: (msg) => msg.quote?.text ?? null,
+    replyCommandOf: (text, lang, opts) => replyCommandOf(text, lang, opts),
+    replyKeyboard: (lang, opts) => replyKeyboard(lang, opts),
     runTurn: rec('runTurn'),
     saveUpload: asyncRec('saveUpload', '/tmp/x'),
     say: rec('say'),
@@ -169,7 +177,7 @@ test('импорт botRouting.mjs: без опроса, .env, process.exit и с
 });
 
 test('COMMANDS и BOT_COMMANDS: порядок, флаги, псевдонимы', () => {
-  assert.deepEqual(COMMANDS.map((c) => c.name), ['active', 'users', 'invite', 'usage', 'project', 'files', 'git', 'engine', 'model', 'new', 'sessions', 'stop', 'close', 'topics', 'language', 'help', 'start']);
+  assert.deepEqual(COMMANDS.map((c) => c.name), ['active', 'users', 'invite', 'usage', 'project', 'files', 'git', 'engine', 'model', 'new', 'sessions', 'stop', 'close', 'topics', 'language', 'keyboard', 'help', 'start']);
   assert.deepEqual(COMMANDS.filter((c) => c.admin).map((c) => c.name), ['active', 'users', 'invite', 'usage']);
   assert.deepEqual(COMMANDS.find((c) => c.name === 'close').aliases, ['exit']);
   assert.deepEqual(COMMANDS.find((c) => c.name === 'language').aliases, ['lang']);
@@ -286,6 +294,75 @@ test('handleText: unknown command goes to agent, typo offers buttons, secret is 
   assert.deepEqual(first(calls, 'say'), ['say', USER, t('secret.detected', 'en')]);
 });
 
+test('/start: reply-клавиатура только при первом приветствии на языке пользователя', async () => {
+  const { deps, calls } = depsFor();
+  deps.langOf = () => 'ru';
+  const routing = createBotRouting(deps);
+  const st = deps.getState(USER, USER, null);
+
+  await routing.handleText(st, '/start');
+  const firstSend = first(calls, 'sendRich');
+  assert.ok(firstSend, 'приветствие отправлено');
+  assert.equal(firstSend[1], USER);
+  assert.deepEqual(firstSend[3], { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) });
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKeyboard:${USER}`, '1']);
+
+  calls.length = 0;
+  await routing.handleText(st, '/start');
+  const secondSend = first(calls, 'sendRich');
+  assert.ok(secondSend, 'повторное приветствие отправлено');
+  assert.deepEqual(secondSend[3], {});
+  assert.equal(first(calls, 'setSetting'), undefined);
+});
+
+test('кнопки reply-меню: подписи выполняют команды, обычный текст уходит агенту', async () => {
+  const { deps, calls } = depsFor();
+  deps.langOf = () => 'ru';
+  const routing = createBotRouting(deps);
+  const st = deps.getState(USER, USER, null);
+
+  await routing.handleText(st, realT('start.btn.files', 'ru'));
+  assert.deepEqual(first(calls, 'clearPendingInput'), ['clearPendingInput', st]);
+  assert.deepEqual(first(calls, 'handleFiles'), ['handleFiles', st]);
+  assert.equal(first(calls, 'runTurn'), undefined);
+  calls.length = 0;
+
+  await routing.handleText(st, 'обычный запрос агенту');
+  assert.deepEqual(first(calls, 'runTurn'), ['runTurn', st, 'обычный запрос агенту', { quote: null }]);
+  calls.length = 0;
+
+  await routing.handleText(st, realT('reply.usage', 'ru'));
+  assert.deepEqual(first(calls, 'say'), ['say', USER, t('admin.only', 'ru')]);
+});
+
+test('смена языка не подключает reply-клавиатуру повторно', async () => {
+  const { deps, calls } = depsFor();
+  deps.langOf = () => 'en';
+  const routing = createBotRouting(deps);
+  const st = deps.getState(USER, USER, null);
+  await routing.handleText(st, '/language uk');
+  assert.deepEqual(first(calls, 'setLang'), ['setLang', USER, 'uk']);
+  assert.deepEqual(first(calls, 'say'), ['say', USER, t('lang.set', 'uk', { name: 'Українська' })]);
+});
+
+test('/keyboard: подключает reply-клавиатуру и ставит флаг показанной', async () => {
+  const { deps, calls } = depsFor();
+  deps.langOf = () => 'ru';
+  const routing = createBotRouting(deps);
+  const st = deps.getState(USER, USER, null);
+
+  await routing.handleText(st, '/keyboard');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', USER, t('reply.keyboardOn', 'ru'),
+    { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) },
+  ]);
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKeyboard:${USER}`, '1']);
+
+  calls.length = 0;
+  await routing.handleText(st, '/start');
+  assert.deepEqual(first(calls, 'sendRich')[3], {});
+});
+
 test('adm:-кнопки: администратор получает обработчик, чужой — только пустой answer', async () => {
   const { deps, calls } = depsFor();
   const routing = createBotRouting(deps);
@@ -363,4 +440,196 @@ test('configureBotRouting: публичный handleUpdate работает на
   configureBotRouting(deps);
   await handleUpdate(message(USER, 'привет'));
   assert.equal(all(calls, 'runTurn').length, 1);
+});
+
+test('команды /language, /start, /stop, /close, /new: аргументы и состояния', async () => {
+  const { deps, calls } = depsFor();
+  const routing = createBotRouting(deps);
+  const st = deps.getState(USER, USER, null);
+  await routing.handleText(st, '/language ru');
+  assert.deepEqual(first(calls, 'setLang'), ['setLang', USER, 'ru']);
+  assert.deepEqual(first(calls, 'say'), ['say', USER, t('lang.set', 'ru', { name: 'Русский' })]);
+  calls.length = 0;
+
+  await routing.handleText(st, '/language xx');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', USER, deps.LANG_PICK,
+    { reply_markup: { inline_keyboard: [['en', 'ru', 'uk'].map((code) => ({ text: deps.LANGS[code], callback_data: `lang:${code}` }))] } },
+  ]);
+  calls.length = 0;
+
+  await routing.handleText(st, '/start');
+  assert.equal(first(calls, 'sendRich').length, 4);
+  calls.length = 0;
+
+  await routing.handleText(st, '/stop');
+  assert.deepEqual(first(calls, 'say'), ['say', USER, t('stop.none', 'en')]);
+  const stopped = depsFor({ dropQueue: () => true });
+  const stStopped = stopped.deps.getState(USER, USER, null);
+  await createBotRouting(stopped.deps).handleText(stStopped, '/stop');
+  assert.equal(first(stopped.calls, 'say'), undefined);
+  calls.length = 0;
+
+  const busy = depsFor();
+  const stBusy = busy.deps.getState(USER, USER, null);
+  stBusy.busy = true;
+  let cancelled = 0;
+  stBusy.agent = { cancel: () => cancelled++ };
+  await createBotRouting(busy.deps).handleText(stBusy, '/stop');
+  assert.equal(cancelled, 1);
+  assert.equal(first(busy.calls, 'forceStopAfter')[1], stBusy);
+  assert.equal(first(busy.calls, 'dropPermissions')[1], stBusy);
+
+  const closing = depsFor({ closeSession: () => false });
+  const stClosing = closing.deps.getState(USER, USER, null);
+  await createBotRouting(closing.deps).handleText(stClosing, '/close');
+  assert.deepEqual(first(closing.calls, 'say'), ['say', USER, t('close.none', 'en')]);
+  const closed = depsFor({ closeSession: () => true });
+  const stClosed = closed.deps.getState(USER, USER, null);
+  await createBotRouting(closed.deps).handleText(stClosed, '/close');
+  assert.ok(first(closed.calls, 'say')[2].startsWith('close.done'));
+  assert.deepEqual(first(closed.calls, 'say')[3], { reply_markup: { inline_keyboard: [[{ text: t('btn.sessions', 'en'), callback_data: 'ui:sessions' }]] } });
+
+  const topic = depsFor({ topicsOn: () => true });
+  const stTopic = topic.deps.getState(USER, USER, null);
+  await createBotRouting(topic.deps).handleText(stTopic, '/new');
+  assert.deepEqual(first(topic.calls, 'newTopic'), ['newTopic', stTopic]);
+  const newBusy = depsFor();
+  const stNewBusy = newBusy.deps.getState(USER, USER, null);
+  stNewBusy.busy = true;
+  await createBotRouting(newBusy.deps).handleText(stNewBusy, '/new');
+  assert.equal(first(newBusy.calls, 'say')[2], t('busy.stop', 'en'));
+  const newFree = depsFor();
+  const stNewFree = newFree.deps.getState(USER, USER, null);
+  await createBotRouting(newFree.deps).handleText(stNewFree, '/new');
+  assert.deepEqual(first(newFree.calls, 'endAgent'), ['endAgent', stNewFree, 'new']);
+  assert.ok(first(newFree.calls, 'say')[2].startsWith('new.done'));
+});
+
+test('setupCommands и sweepUpdateLimits: меню всех языков и уборка старых лимитов', async () => {
+  const { deps, calls } = depsFor();
+  const routing = createBotRouting(deps);
+  await routing.setupCommands();
+  const tg = all(calls, 'tg');
+  assert.equal(tg.filter((c) => c[1] === 'setMyCommands').length, 6);
+  assert.deepEqual(tg.at(-1), ['tg', 'setChatMenuButton', { menu_button: { type: 'link' } }]);
+
+  const limited = depsFor({ UPDATE_WINDOW_MS: 1 });
+  const r = createBotRouting(limited.deps);
+  for (let i = 0; i < 21; i++) assert.equal(r.tooManyUpdates(USER), i === 20);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(r.sweepUpdateLimits(), 1);
+  assert.equal(r.sweepUpdateLimits(), 0);
+});
+
+test('служебные сообщения тем: создание, переименование и перенос команды в General', async () => {
+  const { deps, calls } = depsFor({ topicsOn: () => true, isAutoTopicCommand: (msg) => Boolean(msg.text), topicInfoOf: () => ({ name: 'Новая', implicit: false }) });
+  const routing = createBotRouting(deps);
+  await routing.handleUpdate(message(USER, '', { is_topic_message: true, message_thread_id: 55, forum_topic_created: {} }));
+  assert.deepEqual(first(calls, 'saveTopic'), ['saveTopic', USER, 55, { name: 'Новая', named: true }]);
+  assert.equal(first(calls, 'runTurn'), undefined);
+  calls.length = 0;
+
+  await routing.handleUpdate(message(USER, '', { is_topic_message: true, message_thread_id: 55, forum_topic_edited: { name: 'Имя' } }));
+  assert.deepEqual(first(calls, 'saveTopic'), ['saveTopic', USER, 55, { name: 'Имя', named: true }]);
+  assert.equal(first(calls, 'runTurn'), undefined);
+  calls.length = 0;
+
+  await routing.handleUpdate(message(USER, '/model', { is_topic_message: true, message_thread_id: 77 }));
+  assert.equal(first(calls, 'deleteTopic')[1], USER);
+  assert.equal(first(calls, 'runTurn'), undefined);
+  assert.equal(first(calls, 'handleModel')[1], deps.getState(USER, USER, null));
+
+  const failed = depsFor({ topicsOn: () => true, isAutoTopicCommand: () => true, deleteTopic: async () => { throw new Error('нет прав'); } });
+  await createBotRouting(failed.deps).handleUpdate(message(USER, 'привет', { is_topic_message: true, message_thread_id: 78 }));
+  assert.equal(all(failed.calls, 'runTurn').length, 1);
+  assert.ok(failed.calls.some((c) => c[0] === 'log' && String(c[1]).includes('удаление темы под команду')));
+});
+
+test('receiveFile: лимит по размеру, квота и сбой скачивания не создают файл', async () => {
+  const meta = { id: 'f1', name: 'a.txt', mime: 'text/plain', size: 2000 };
+  const big = depsFor({ describeAttachment: () => meta });
+  await createBotRouting(big.deps).handleUpdate(message(USER, '', { document: {} }));
+  assert.equal(first(big.calls, 'say')[2], t('file.tooBig', 'en'));
+  assert.equal(first(big.calls, 'downloadFile'), undefined);
+
+  const quota = depsFor({ describeAttachment: () => ({ ...meta, size: 10 }), fitsUpload: () => false });
+  await createBotRouting(quota.deps).handleUpdate(message(USER, '', { document: {} }));
+  assert.equal(first(quota.calls, 'say')[2], t('file.quota', 'en'));
+  assert.equal(first(quota.calls, 'saveUpload'), undefined);
+
+  const failed = depsFor({
+    describeAttachment: () => ({ ...meta, size: 10 }),
+    downloadFile: async () => { throw new Error('network'); },
+  });
+  await createBotRouting(failed.deps).handleUpdate(message(USER, '', { document: {} }));
+  assert.ok(first(failed.calls, 'say')[2].startsWith('file.downloadFail'));
+  assert.equal(first(failed.calls, 'saveUpload'), undefined);
+
+  const grown = depsFor({ describeAttachment: () => ({ ...meta, size: 10 }), downloadFile: async () => Buffer.alloc(2000) });
+  await createBotRouting(grown.deps).handleUpdate(message(USER, '', { document: {} }));
+  assert.equal(first(grown.calls, 'say')[2], t('file.tooBig', 'en'));
+  assert.equal(first(grown.calls, 'saveUpload'), undefined);
+});
+
+test('receiveFile: картинка попадает в файл, а сбой распаковки архива не срывает запрос', async () => {
+  const { deps, calls } = depsFor({
+    describeAttachment: () => ({ id: 'f1', name: 'a.zip', mime: 'image/png', size: 10 }),
+    isImageMime: () => true,
+    archiveKind: () => 'zip',
+    extractArchiveAsync: async () => { throw Object.assign(new Error('boom'), { reason: 'encrypted' }); },
+  });
+  const routing = createBotRouting(deps);
+  await routing.handleUpdate(message(USER, '', { document: {}, caption: ' captions ' }));
+  assert.ok(calls.some((c) => c[0] === 'say' && c[2].startsWith('file.archiveSkipped')));
+  const sent = first(calls, 'runTurn');
+  assert.equal(sent[2], 'captions');
+  assert.equal(sent[3].files[0].name, 'a.zip');
+  assert.ok(Buffer.isBuffer(sent[3].files[0].data));
+});
+
+test('processAttachments: файл, принятый пока диалог занялся, удаляется', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'acpgram-routing-upload-'));
+  const path = join(dir, 'drop.txt');
+  writeFileSync(path, 'x');
+  const { deps, calls } = depsFor({
+    uploadsDir: () => dir,
+    describeAttachment: () => ({ id: 'f1', name: 'drop.txt', mime: 'text/plain', size: 10 }),
+    saveUpload: async () => path,
+    downloadFile: async () => Buffer.from('x'),
+  });
+  const st = deps.getState(USER, USER, null);
+  deps.downloadFile = async () => {
+    st.busy = true;
+    return Buffer.from('x');
+  };
+  try {
+    await createBotRouting(deps).handleUpdate(message(USER, '', { document: {} }));
+    assert.equal(existsSync(path), false);
+    assert.equal(first(calls, 'say')[2], t('busy.running', 'en'));
+    assert.equal(first(calls, 'runTurn'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('альбом: буфер сортирует сообщения по message_id и уходит одним запросом', async () => {
+  const items = [];
+  let onFlush;
+  const { deps, calls } = depsFor({
+    createAlbumBuffer: ({ onFlush: flush }) => {
+      onFlush = flush;
+      return { add: async (key, item) => { calls.push(['albums.add', key, item.msg.message_id]); items.push(item); } };
+    },
+    describeAttachment: (msg) => ({ id: `f${msg.message_id}`, name: msg.message_id === 1 ? 'a.txt' : 'b.txt', mime: 'text/plain', size: 10 }),
+    saveUpload: async (_dir, name) => `/tmp/${name}`,
+  });
+  const routing = createBotRouting(deps);
+  await routing.handleUpdate(message(USER, '', { photo: [{}], media_group_id: 'g', message_id: 2 }));
+  await routing.handleUpdate(message(USER, '', { photo: [{}], media_group_id: 'g', message_id: 1 }));
+  assert.deepEqual(all(calls, 'albums.add').map((c) => c[2]), [2, 1]);
+  onFlush('key', items);
+  await new Promise((resolve) => setImmediate(resolve));
+  const sent = first(calls, 'runTurn');
+  assert.deepEqual(sent[3].files.map((f) => f.name), ['a.txt', 'b.txt']);
 });

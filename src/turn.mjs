@@ -6,7 +6,7 @@ import { extractGitMarks } from './gitMarks.mjs';
 import { t } from './i18n.mjs';
 import { onPermissionCallback } from './permission.mjs';
 import { dest, tg } from './telegram.mjs';
-import { extractTitle } from './topics.mjs';
+import { extractTitle, extractTopicMarks } from './topics.mjs';
 import { callAgent } from './turnAgent.mjs';
 import { deliverTurn } from './turnDelivery.mjs';
 import { createTurnStream } from './turnStream.mjs';
@@ -54,11 +54,12 @@ export async function runTurn(st, text, { files = [], quote = null } = {}) {
   await stream.waitDraft();
 
   const titled = extractTitle(neutralizeTgTags(clean(stream.answer)));
-  const gitted = extractGitMarks(titled.text);
+  const topical = extractTopicMarks(titled.text);
+  const gitted = extractGitMarks(topical.text);
   const asked = extractAsks(gitted.text);
   const sent = extractSendMarks(asked.text, { placeholders: true });
   const answerText = sent.text.replace(FILE_PLACEHOLDER, '').replace(ASK_PLACEHOLDER, '').trim();
-  const delivered = await deliverTurn({ st, to, text, dbText, lang, engine, naming, ...outcome, startedAt, steps: stream.steps, sent, asked, gitted, titled, answerText, truncated: stream.truncated, requestId });
+  const delivered = await deliverTurn({ st, to, text, dbText, lang, engine, naming, ...outcome, startedAt, steps: stream.steps, sent, asked, gitted, titled, topical, answerText, truncated: stream.truncated, requestId });
   if (!delivered) return;
   return drainQueue(st);
 }

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { setCliLang } from '../src/cli-i18n.mjs';
+import { setCliLang, tc } from '../src/cli-i18n.mjs';
 import { help, isNpm, route, updateCommand, updateEnv } from '../src/cli.mjs';
 
 setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
@@ -104,6 +104,144 @@ test('acpgram update при установке через npm: подсказк�
       assert.ok(res.stdout.includes(installed), `${lang}: текст на языке терминала`);
       assert.ok(!/Обновляю AcpGram|Updating AcpGram|Оновлюю AcpGram/.test(res.stdout), lang);
     }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('cli.mjs как команда: запуск service и передача кода выхода', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-cli-service-'));
+  const src = join(tmp, 'src');
+  try {
+    mkdirSync(src, { recursive: true });
+    copyFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), join(tmp, 'package.json'));
+    copyFileSync(CLI, join(src, 'cli.mjs'));
+    copyFileSync(fileURLToPath(new URL('../src/cli-i18n.mjs', import.meta.url)), join(src, 'cli-i18n.mjs'));
+    copyFileSync(fileURLToPath(new URL('../src/winReg.mjs', import.meta.url)), join(src, 'winReg.mjs'));
+    writeFileSync(join(src, 'service.mjs'), "console.log('SERVICE_OK')\n");
+    const ok = spawnSync(process.execPath, [join(src, 'cli.mjs'), 'service', 'status'], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /SERVICE_OK/);
+    writeFileSync(join(src, 'service.mjs'), 'process.exit(3)\n');
+    const bad = spawnSync(process.execPath, [join(src, 'cli.mjs'), 'service', 'status'], { encoding: 'utf8' });
+    assert.equal(bad.status, 3, bad.stderr);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+const copyCli = (tmp) => {
+  const src = join(tmp, 'src');
+  mkdirSync(src, { recursive: true });
+  copyFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), join(tmp, 'package.json'));
+  copyFileSync(CLI, join(src, 'cli.mjs'));
+  copyFileSync(fileURLToPath(new URL('../src/cli-i18n.mjs', import.meta.url)), join(src, 'cli-i18n.mjs'));
+  copyFileSync(fileURLToPath(new URL('../src/winReg.mjs', import.meta.url)), join(src, 'winReg.mjs'));
+  return join(src, 'cli.mjs');
+};
+
+const SPAWN_MOCK = String.raw`
+const rules = JSON.parse(process.env.FAKE_CLI_CMDS || '[]');
+let index = 0;
+export function spawnSync(cmd, args, opts) {
+  const rule = rules[index++];
+  console.log('CALL ' + JSON.stringify({
+    cmd, args,
+    opts: { stdio: opts?.stdio, env: Boolean(opts?.env), windowsVerbatimArguments: opts?.windowsVerbatimArguments },
+  }));
+  if (!rule) return { status: 0 };
+  if (rule.error) {
+    const e = new Error(rule.error);
+    e.code = rule.code;
+    return { error: e };
+  }
+  return { status: rule.status ?? 0 };
+}
+`;
+
+const cliUpdate = ({ rules = [], platform = 'win32', argv = ['update'] } = {}) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-cli-update-'));
+  try {
+    const cli = copyCli(tmp);
+    const spawnPath = join(tmp, 'spawn.mjs');
+    writeFileSync(spawnPath, SPAWN_MOCK);
+    const loader = join(tmp, 'loader.mjs');
+    writeFileSync(loader, String.raw`
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === 'node:child_process') return { url: ${JSON.stringify(new URL(`file:///${spawnPath.replace(/\\/g, '/')}`).href)}, shortCircuit: true };
+  return nextResolve(specifier, context);
+}
+`);
+    const prelude = join(tmp, 'prelude.mjs');
+    writeFileSync(prelude, `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)}, configurable: true });`);
+    const r = spawnSync(process.execPath, ['--no-warnings', '--experimental-loader', new URL(`file:///${loader.replace(/\\/g, '/')}`).href, '--import', new URL(`file:///${prelude.replace(/\\/g, '/')}`).href, cli, ...argv], {
+      encoding: 'utf8',
+      env: { ...process.env, ACPGRAM_LANG: 'ru', FAKE_CLI_CMDS: JSON.stringify(rules) },
+      timeout: 30_000,
+    });
+    const lines = (r.stdout ?? '').split(/\r?\n/);
+    return {
+      status: r.status,
+      stderr: r.stderr,
+      text: lines.filter((s) => !s.startsWith('CALL ')).join('\n') + '\n' + (r.stderr ?? ''),
+      calls: lines.filter((s) => s.startsWith('CALL ')).map((s) => JSON.parse(s.slice(5))),
+    };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+};
+
+test('cli.mjs update: успех установщика и тот же код версии', () => {
+  const r = cliUpdate({ rules: [{ status: 0 }] });
+  assert.equal(r.status, 0, r.text);
+  assert.equal(r.calls.length, 1);
+  assert.ok(r.text.includes(tc('cli.updating', { before: VERSION })), r.text);
+  assert.ok(r.text.includes(tc('cli.updated', { before: VERSION, after: VERSION, same: tc('cli.alreadyLatest') })), r.text);
+});
+
+test('cli.mjs update: EPERM на Windows запускает установщик через cmd.exe', () => {
+  const r = cliUpdate({ rules: [{ error: 'blocked', code: 'EPERM' }, { status: 0 }], platform: 'win32' });
+  assert.equal(r.status, 0, r.text);
+  assert.equal(r.calls.length, 2);
+  assert.match(r.calls[1].cmd, /cmd\.exe$/i);
+  assert.equal(r.calls[1].opts.windowsVerbatimArguments, true);
+  assert.ok(r.text.includes(tc('cli.psBlocked', { code: 'EPERM' })), r.text);
+  assert.ok(!r.text.includes('Обновите вручную'), r.text);
+});
+
+test('cli.mjs update: повторный отказ запуска печатает Manual и код 1', () => {
+  const r = cliUpdate({ rules: [{ error: 'denied', code: 'EACCES' }, { error: 'denied', code: 'EACCES' }], platform: 'win32' });
+  assert.equal(r.status, 1, r.text);
+  assert.equal(r.calls.length, 2);
+  assert.match(r.text, /Не удалось запустить/);
+  assert.ok(r.text.includes(tc('cli.blocked')), r.text);
+  assert.ok(r.text.includes('install.ps1'), r.text);
+});
+
+test('cli.mjs update: вне Windows нет cmd.exe-fallback, ошибка запуска честно сообщается', () => {
+  const r = cliUpdate({ rules: [{ error: 'no such file', code: 'ENOENT' }], platform: 'linux' });
+  assert.equal(r.status, 1, r.text);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].cmd, 'sh');
+  assert.match(r.text, /Не удалось запустить sh:/);
+  assert.ok(r.text.includes('install.sh'), r.text);
+  assert.ok(!r.text.includes(tc('cli.psBlocked', { code: 'ENOENT' })), r.text);
+});
+
+test('cli.mjs update: ненулевой код установщика не прячется за сообщением об успехе', () => {
+  const r = cliUpdate({ rules: [{ status: 3 }], platform: 'linux' });
+  assert.equal(r.status, 3, r.text);
+  assert.ok(r.text.includes(tc('cli.updateFailed', { code: 3, after: VERSION })), r.text);
+  assert.ok(!r.text.includes('AcpGram: '), r.text);
+});
+
+test('cli.mjs как модуль: import не выполняет команду (realpath process.argv[1] недоступен)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'acpgram-cli-import-'));
+  try {
+    const cli = copyCli(tmp);
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', 'await import(' + JSON.stringify(new URL(`file:///${cli.replace(/\\/g, '/')}`).href) + ')'], { encoding: 'utf8', env: { ...process.env, ACPGRAM_LANG: 'ru' }, timeout: 30_000 });
+    assert.equal(r.status, 0, `${r.stderr}\n${r.stdout}`);
+    assert.equal(r.stdout.trim(), '');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -5,13 +5,41 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
-import { resolveHomeDir } from '../src/app.mjs';
+import { ENV_PATH, resolveHomeDir } from '../src/app.mjs';
 import { homedir } from 'node:os';
-import { copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, serializeEnv, setupApiKeys, setupWorkspaces, startSetupService, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
-import { LOGON_FAILURE, findNssm, launchdPlist, nssmCommands, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
+import { applySetupDefaults, copyLegacyDb, envValue, findLegacyHome, legacyHomeDirs, pickAdmin, readEnvFile, globalBinDir, npmCommand, opencodeKeysToAsk, sendTestMessage, serializeEnv, setupAdmin, setupApiKeys, setupToken, setupWorkspaces, startSetupService, suggestDefaultEngine, writeEnvFile } from '../src/setup.mjs';
+import { LOGON_FAILURE, applyNssmCommands, chooseWindowsAccount, findNssm, launchdPlist, nssmCommands, prepareWindowsInstall, startInstalledService, systemdUnit, winMessage, windowsAccount } from '../src/service.mjs';
 import { serviceErrorCode, serviceState } from '../src/winsvc.mjs';
 import { parseVersion, versionAtLeast } from '../src/engines.mjs';
-import { setCliLang } from '../src/cli-i18n.mjs';
+import { setCliLang, tc } from '../src/cli-i18n.mjs';
+
+const captureConsole = async (fn) => {
+  const lines = [];
+  const log = console.log;
+  const error = console.error;
+  console.log = (...args) => lines.push(args.join(' '));
+  console.error = (...args) => lines.push(args.join(' '));
+  try {
+    await fn();
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+  return lines.join('\n');
+};
+
+const quiet = async (fn) => {
+  const log = console.log;
+  const error = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+};
 
 setCliLang('ru'); // тесты проверяют русские тексты; язык определения — в cli-i18n.test.mjs
 
@@ -21,6 +49,7 @@ test('serializeEnv: порядок, комментарии, прочие ран�
     TELEGRAM_BOT_TOKEN: '123:ABC',
     ALLOWED_USER_ID: '42',
     PROJECTS_ROOT: 'C:\\Program Files\\my projects',
+    GIT_AGENT_AUTH: '1',
     DEFAULT_ENGINE: 'claude',
     CLAUDE_COMMAND: 'C:\\Users\\u\\AppData\\Roaming\\npm\\claude-agent-acp.cmd',
     GEMINI_API_KEY: '',
@@ -31,11 +60,18 @@ test('serializeEnv: порядок, комментарии, прочие ран�
   assert.ok(lines[0].includes('мастером настройки'));
   // основные — по порядку, затем «прочие»
   const keys = lines.filter((l) => /^[A-Z_]+=/.test(l)).map((l) => l.split('=')[0]);
-  assert.deepEqual(keys, ['TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'PROJECTS_ROOT', 'DEFAULT_ENGINE', 'CLAUDE_COMMAND', 'ANTHROPIC_API_KEY', 'ANIMATED_ICONS']);
+  assert.deepEqual(keys, ['TELEGRAM_BOT_TOKEN', 'ALLOWED_USER_ID', 'PROJECTS_ROOT', 'GIT_AGENT_AUTH', 'DEFAULT_ENGINE', 'CLAUDE_COMMAND', 'ANTHROPIC_API_KEY', 'ANIMATED_ICONS']);
   assert.ok(!text.includes('GEMINI_API_KEY='), 'пустое значение не пишется');
   // главное: Node прочитает ровно те же значения (пути с пробелами и обратными слешами, # в ключе)
   const back = parseEnv(text);
   for (const k of keys) assert.equal(back[k], values[k], k);
+});
+
+test('applySetupDefaults: GIT_AGENT_AUTH=1 для новых установок, явный 0 сохраняется', () => {
+  assert.equal(applySetupDefaults({}).GIT_AGENT_AUTH, '1');
+  assert.equal(applySetupDefaults({ GIT_AGENT_AUTH: '' }).GIT_AGENT_AUTH, '1');
+  assert.equal(applySetupDefaults({ GIT_AGENT_AUTH: '0' }).GIT_AGENT_AUTH, '0');
+  assert.equal(applySetupDefaults({ GIT_AGENT_AUTH: '1' }).GIT_AGENT_AUTH, '1');
 });
 
 test('envValue: кавычки только когда нужны, двойные — никогда (в них Node раскрывает \\n), перенос строки запрещён', () => {
@@ -321,4 +357,256 @@ test('startSetupService: отказ, успешная и неудачная ре
   const yes = { yes: async () => true };
   assert.deepEqual(await startSetupService(yes, false, async () => ({ ok: true })), { ok: true, service: true });
   assert.deepEqual(await startSetupService(yes, false, async () => ({ ok: false, installed: true })), { ok: true, service: false });
+});
+
+test('prepareWindowsInstall: не спрашивает пароль до проверок и предлагает рестарт существующей службы', async () => {
+  let probed = 0;
+  const probe = () => (probed++, { exists: null });
+  const log = [];
+  const first = await prepareWindowsInstall({ nssm: 'nssm', name: 'svc', dry: true, probe, log: (s) => log.push(s) });
+  assert.equal(first.done, false);
+  assert.equal(probed, 0);
+  const unknown = await prepareWindowsInstall({ nssm: 'nssm', name: 'svc', probe, log: (s) => log.push(s) });
+  assert.equal(unknown.done, true);
+  assert.equal(unknown.result.ok, false);
+  assert.equal(probed, 1);
+  let removed = 0;
+  const marked = await prepareWindowsInstall({ nssm: 'nssm', name: 'svc', probe: () => ({ exists: true }), marked: () => true, remove: async () => (removed++, true), log: (s) => log.push(s) });
+  assert.equal(marked.done, false, 'после успешного добивания помеченной службы установка продолжается');
+  assert.equal(removed, 1);
+  const restarted = await prepareWindowsInstall({
+    nssm: 'nssm', name: 'svc', probe: () => ({ exists: true }), prompt: { yes: async () => true },
+    restart: async () => ({ ok: true }), log: (s) => log.push(s),
+  });
+  assert.deepEqual(restarted, { done: true, result: { ok: true, installed: true } });
+  const answers = [false, true];
+  const reinstall = await prepareWindowsInstall({
+    nssm: 'nssm', name: 'svc', probe: () => ({ exists: true }), prompt: { yes: async () => answers.shift() },
+    remove: async () => true, log: (s) => log.push(s),
+  });
+  assert.equal(reinstall.done, false);
+  assert.equal(answers.length, 0);
+});
+
+test('chooseWindowsAccount: пароль, отказ и LocalSystem без терминала', async () => {
+  const account = await chooseWindowsAccount({ prompt: { yes: async () => true, secret: async () => 'pw' }, user: '.\\u', log: () => {} });
+  assert.deepEqual(account, { done: false, account: { user: '.\\u', password: 'pw' } });
+  const rejected = await chooseWindowsAccount({ prompt: { yes: async () => true, secret: async () => '' }, user: '.\\u', log: () => {} });
+  assert.equal(rejected.done, true);
+  assert.equal(rejected.result.ok, false);
+  const system = await chooseWindowsAccount({ prompt: null, allowSystem: true, user: '.\\u', log: () => {} });
+  assert.deepEqual(system, { done: false, account: null });
+  const noTty = await chooseWindowsAccount({ prompt: null, allowSystem: false, user: '.\\u', log: () => {} });
+  assert.equal(noTty.done, true);
+  assert.equal(noTty.result.ok, false);
+});
+
+test('applyNssmCommands: пароль не попадает в лог, ошибка ObjectName откатывает установку', () => {
+  const calls = [];
+  const log = [];
+  const commands = () => [['install', 'svc', 'n'], ['set', 'svc', 'ObjectName', '.\\u', 'p@ss']];
+  const ok = applyNssmCommands({ nssm: 'nssm', name: 'svc', node: 'n', commands, run: (_cmd, args, opts) => (calls.push({ args, opts }), { status: 0 }), log: (s) => log.push(s) });
+  assert.equal(ok.done, false);
+  assert.deepEqual(calls[1].args, ['set', 'svc', 'ObjectName', '.\\u', 'p@ss']);
+  assert.equal(calls[1].opts.secretAt, 4);
+  assert.ok(!log.join('\n').includes('p@ss'));
+  const failed = applyNssmCommands({
+    nssm: 'nssm', name: 'svc', node: 'n', commands: () => [['set', 'svc', 'ObjectName', '.\\u', 'p@ss']],
+    run: (_cmd, args, opts) => (calls.push({ args, opts }), { status: 5, stderr: 'denied' }), log: (s) => log.push(s),
+  });
+  assert.equal(failed.done, true);
+  assert.equal(failed.result.ok, false);
+  assert.deepEqual(calls.at(-1).args, ['remove', 'svc', 'confirm']);
+});
+
+test('startInstalledService: dry-run, успех и повтор пароля после LOGON_FAILURE', async () => {
+  const calls = [];
+  const log = [];
+  const dry = await startInstalledService({ nssm: 'nssm', name: 'svc', dry: true, run: (_cmd, args, opts) => (calls.push({ args, opts }), { status: 0 }), log: (s) => log.push(s) });
+  assert.equal(dry.ok, true);
+  assert.deepEqual(calls.at(-1).args, ['start', 'svc']);
+  const ok = await startInstalledService({ nssm: 'nssm', name: 'svc', start: async () => ({ running: true, code: 0, state: 'RUNNING' }), log: (s) => log.push(s) });
+  assert.deepEqual(ok, { ok: true, installed: true });
+  const starts = [{ running: false, code: LOGON_FAILURE, state: 'STOPPED' }, { running: true, code: 0, state: 'RUNNING' }];
+  const setCalls = [];
+  const retried = await startInstalledService({
+    nssm: 'nssm', name: 'svc', account: { user: '.\\u', password: 'old' }, prompt: { secret: async () => 'new' },
+    start: async () => starts.shift(),
+    run: (_cmd, args, opts) => (setCalls.push({ args, opts }), { status: 0 }), log: (s) => log.push(s),
+  });
+  assert.equal(retried.ok, true);
+  assert.deepEqual(setCalls[0].args, ['set', 'svc', 'ObjectName', '.\\u', 'new']);
+  assert.equal(setCalls[0].opts.secretAt, 4);
+  const failed = await startInstalledService({
+    nssm: 'nssm', name: 'svc', account: { user: '.\\u' },
+    start: async () => ({ running: false, code: 5, state: 'STOPPED' }), log: (s) => log.push(s),
+  });
+  assert.deepEqual(failed, { ok: false, installed: true });
+});
+
+test('setupApiKeys: ключ есть только в окружении — сохраняется по согласию и не печатается', async () => {
+  const secret = 'env-only-secret-123';
+  const prev = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = secret;
+  try {
+    const declined = {};
+    const prompts = [];
+    const output = await captureConsole(() => setupApiKeys({
+      secret: async (prompt) => (prompts.push(prompt), ''),
+      yes: async (prompt) => (prompts.push(prompt), false),
+    }, declined, ['gemini']));
+    assert.equal(declined.GEMINI_API_KEY, undefined);
+    assert.ok(prompts.some((s) => s.includes(tc('setup.keyEnv'))));
+    assert.ok(prompts.includes(tc('setup.keySave', { name: 'GEMINI_API_KEY' })));
+    const accepted = {};
+    await captureConsole(() => setupApiKeys({ secret: async () => '', yes: async () => true }, accepted, ['gemini']));
+    assert.equal(accepted.GEMINI_API_KEY, secret);
+    assert.ok(!output.includes(secret));
+    assert.ok(!prompts.join('\n').includes(secret));
+  } finally {
+    if (prev === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = prev;
+  }
+});
+
+test('setupApiKeys: OpenCode без ключей печатает путь .env и не запрашивает ключи', async () => {
+  const asked = [];
+  const answered = [];
+  const output = await captureConsole(() => setupApiKeys({
+    secret: async (prompt) => (asked.push(prompt), ''),
+    yes: async (prompt) => (answered.push(prompt), false),
+  }, {}, ['opencode']));
+  const keys = opencodeKeysToAsk(['opencode']).map(([name]) => name).join(', ');
+  assert.ok(answered.includes(tc('setup.opencodeKeysAsk')));
+  assert.deepEqual(asked, []);
+  assert.ok(output.includes(tc('setup.opencodeNote')));
+  assert.ok(output.includes(tc('setup.opencodeKeysLater', { path: ENV_PATH, list: keys })));
+});
+
+test('startSetupService: предупреждения о службе и ручной запуск', async () => {
+  const notStarted = await captureConsole(() => startSetupService({ yes: async () => true }, false, async () => ({ ok: false, installed: true })));
+  assert.ok(notStarted.includes(tc('setup.serviceStartFail')));
+  const notInstalled = await captureConsole(() => startSetupService({ yes: async () => true }, false, async () => ({ ok: false, installed: false })));
+  assert.ok(notInstalled.includes(tc('setup.serviceFail')));
+  const manual = await captureConsole(() => startSetupService({ yes: async () => false }, false, async () => ({ ok: true })));
+  assert.ok(manual.includes(tc('setup.manual')));
+});
+
+test('sendTestMessage: сетевая ошибка не прерывает настройку и не показывает токен', async () => {
+  const fetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('network down'); };
+  try {
+    const output = await captureConsole(() => sendTestMessage({ TELEGRAM_BOT_TOKEN: 'SECRET_BOT_TOKEN' }, '42'));
+    assert.ok(output.includes(tc('setup.testFail', { msg: 'network down' })));
+    assert.ok(!output.includes('SECRET_BOT_TOKEN'));
+  } finally {
+    globalThis.fetch = fetch;
+  }
+});
+
+test('saveEnvAndDb: успех пишет .env и базу, ошибка записи возвращает false', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'setup-save-'));
+  const setupUrl = new URL('../src/setup.mjs', import.meta.url).href;
+  const script = `
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const home = process.env.ACPGRAM_TEST_HOME;
+mkdirSync(home, { recursive: true });
+if (process.env.ACPGRAM_TEST_MODE === 'fail') mkdirSync(join(home, '.env'), { recursive: true });
+const { saveEnvAndDb } = await import(process.env.ACPGRAM_SETUP_URL);
+const value = 'E2E_SECRET_VALUE';
+const result = await saveEnvAndDb({ GEMINI_API_KEY: value, ALLOWED_USER_ID: '42' });
+const path = join(home, '.env');
+const text = existsSync(path) && statSync(path).isFile() ? readFileSync(path, 'utf8') : '';
+writeFileSync(join(home, 'result.json'), JSON.stringify({ result, saved: text.includes(value), db: existsSync(join(home, 'data', 'bot.db')) }));
+`;
+  try {
+    const run = (mode) => {
+      const home = join(dir, mode);
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        env: { ...process.env, ACPGRAM_HOME: home, ACPGRAM_LANG: 'ru', ACPGRAM_TEST_HOME: home, ACPGRAM_TEST_MODE: mode, ACPGRAM_SETUP_URL: setupUrl },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { output: r.stdout, ...JSON.parse(readFileSync(join(home, 'result.json'), 'utf8')) };
+    };
+    const ok = run('ok');
+    assert.equal(ok.result, true);
+    assert.ok(ok.saved);
+    assert.ok(ok.db);
+    const bad = run('fail');
+    assert.equal(bad.result, false);
+    assert.ok(!bad.saved);
+    assert.ok(bad.output.includes(tc('setup.saveFail', { msg: '' }).trimEnd()));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('setupToken: неверный токен спрашивается заново, верный сохраняется', async () => {
+  const fetch = globalThis.fetch;
+  const urls = [];
+  const secrets = ['bad-token', 'good-token'];
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    const ok = url.includes('/botgood-token/getMe');
+    return { status: ok ? 200 : 401, json: async () => ok ? { ok: true, result: { username: 'test_bot', first_name: 'Bot' } } : { ok: false, description: 'wrong token' } };
+  };
+  try {
+    const env = {};
+    let asked = 0;
+    const me = await quiet(() => setupToken({ secret: async () => {
+      if (asked >= secrets.length) throw new Error('answer exhausted');
+      return secrets[asked++];
+    } }, env));
+    assert.equal(asked, 2);
+    assert.equal(env.TELEGRAM_BOT_TOKEN, 'good-token');
+    assert.equal(me.username, 'test_bot');
+    assert.deepEqual(urls.map((u) => u.split('/bot')[1]), ['bad-token/getMe', 'good-token/getMe']);
+  } finally {
+    globalThis.fetch = fetch;
+  }
+});
+
+test('setupAdmin: ожидание автора сообщения и подтверждение ID; конфликт и ручной ввод', async () => {
+  const fetch = globalThis.fetch;
+  const updates = [
+    { update_id: 1, message: { chat: { type: 'private' }, from: { id: 42, username: 'alice' } } },
+  ];
+  let getUpdates = 0;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/deleteWebhook')) throw new Error('Conflict: webhook');
+    if (url.includes('/getUpdates')) {
+      const n = getUpdates++;
+      if (n === 0) return { status: 200, json: async () => ({ ok: true, result: [] }) };
+      if (n === 1) return { status: 200, json: async () => ({ ok: true, result: updates }) };
+      return { status: 200, json: async () => ({ ok: true, result: [] }) };
+    }
+    return { status: 200, json: async () => ({ ok: true, result: {} }) };
+  };
+  try {
+    const confirmed = {};
+    let confirmedYes = 0;
+    const id = await quiet(() => setupAdmin({ yes: async () => (confirmedYes++, true), ask: async () => { throw new Error('ask не нужен'); } }, confirmed, { username: 'test_bot' }));
+    assert.equal(id, '42');
+    assert.equal(confirmed.ALLOWED_USER_ID, '42');
+    assert.equal(confirmedYes, 1);
+    assert.equal(getUpdates, 3);
+
+    getUpdates = 0;
+    globalThis.fetch = async (url) => {
+      if (url.includes('/deleteWebhook')) throw new Error('Conflict: webhook');
+      if (url.includes('/getUpdates')) throw new Error('Conflict: another bot is running');
+      return { status: 200, json: async () => ({ ok: true, result: {} }) };
+    };
+    const manual = {};
+    const answers = ['abc', '777'];
+    let asked = 0;
+    const output = await captureConsole(() => setupAdmin({ yes: async () => false, ask: async () => answers[asked++] }, manual, { username: 'test_bot' }));
+    assert.equal(output.includes(tc('setup.conflictHint')), true, output);
+    assert.equal(asked, 2);
+    assert.equal(manual.ALLOWED_USER_ID, '777');
+  } finally {
+    globalThis.fetch = fetch;
+  }
 });

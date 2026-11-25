@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, parse, sep } from 'node:path';
@@ -171,5 +172,51 @@ test('findDirs: уступает циклу событий и останавли
     assert.equal(r.truncated, true, 'обход оборван по лимиту');
   } finally {
     clearInterval(timer);
+  }
+});
+
+test('resolveRoot: неверный корень прерывает запуск бота с понятной ошибкой', () => {
+  const url = new URL('../src/projects.mjs', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(url)});`], {
+    encoding: 'utf8',
+    env: { ...process.env, PROJECTS_ROOT: join(base, 'нет-такой-папки'), USER_WORKSPACES: '', ACPGRAM_LANG: 'ru' },
+  });
+  assert.equal(r.status, 1, `${r.stderr}\n${r.stdout}`);
+  assert.match(`${r.stderr}${r.stdout}`, /PROJECTS_ROOT: папка не найдена/);
+});
+
+test('USER_WORKSPACES=1 без корня прерывает запуск с понятной ошибкой', () => {
+  const url = new URL('../src/projects.mjs', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(url)});`], {
+    encoding: 'utf8',
+    env: { ...process.env, PROJECTS_ROOT: '', USER_WORKSPACES: '1', ACPGRAM_LANG: 'ru' },
+  });
+  assert.equal(r.status, 1, `${r.stderr}\n${r.stdout}`);
+  assert.match(`${r.stderr}${r.stdout}`, /USER_WORKSPACES=1: задайте PROJECTS_ROOT/);
+});
+
+test('listDirs: исчезнувшая папка — пустой список, а не исключение', () => {
+  assert.deepEqual(P.listDirs(join(base, 'нет-такой-папки')), []);
+});
+
+test('findDirs: после 200 папок принудительно уступает циклу событий', async () => {
+  const tree = mkdtempSync(join(tmpdir(), 'gcb-yield-'));
+  try {
+    for (let i = 0; i < 210; i++) {
+      const parent = join(tree, String(i).padStart(3, '0'));
+      mkdirSync(join(parent, 'child'), { recursive: true });
+    }
+    const realImmediate = globalThis.setImmediate;
+    let yields = 0;
+    globalThis.setImmediate = (fn) => (yields++, realImmediate(fn));
+    try {
+      const r = await P.findDirs('нет-такой', { base: tree, maxDepth: 2, maxVisited: 500 });
+      assert.deepEqual(r.results, []);
+    } finally {
+      globalThis.setImmediate = realImmediate;
+    }
+    assert.ok(yields >= 1, 'поиск уступил событийному циклу после 200 просмотренных папок');
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
   }
 });

@@ -43,6 +43,7 @@ const LAYOUT = [
   ['PROJECTS_ROOT', 'env.c.root'],
   ['USER_WORKSPACES', 'env.c.workspaces'],
   ['AGENT_SANDBOX', 'env.c.sandbox'],
+  ['GIT_AGENT_AUTH', 'env.c.gitAgentAuth'],
   ['DEFAULT_ENGINE', 'env.c.engine'],
   ['GEMINI_COMMAND', null],
   ['CLAUDE_COMMAND', null],
@@ -71,6 +72,11 @@ const OPENCODE_KEYS = [
   ['DEEPSEEK_API_KEY', 'DeepSeek'],
   ['MISTRAL_API_KEY', 'Mistral'],
 ];
+
+export function applySetupDefaults(env) {
+  if (env.GIT_AGENT_AUTH == null || env.GIT_AGENT_AUTH === '') env.GIT_AGENT_AUTH = '1';
+  return env;
+}
 
 /** Ключи для OpenCode, которые мастер ещё не спросил: ключи Gemini, Claude Code и Codex уже спрошены, если те установлены. */
 export function opencodeKeysToAsk(available) {
@@ -487,7 +493,7 @@ export async function startSetupService(p, fromStart, install = null) {
  */
 export async function runSetup({ fromStart = false } = {}) {
   const p = prompter();
-  const env = { ...readEnvFile() };
+  const env = applySetupDefaults({ ...readEnvFile() });
   try {
     console.log(tc('setup.title', { label: APP.label, hint: existsSync(ENV_PATH) ? tc('setup.titleHint') : '' }));
     if (fromStart) console.log(tc('setup.fromStart'));

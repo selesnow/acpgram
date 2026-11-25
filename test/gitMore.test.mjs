@@ -380,3 +380,142 @@ test('/git: публикация проекта — место, видимост
   await U.onGitCallback(ann, press(ANN, 'gt:pb'));
   assert.deepEqual(take().map((c) => c.method), ['answerCallbackQuery']);
 });
+
+test('/git: аккаунт — ошибка сохранения, сбой входа по коду и устаревшая кнопка', needGit, async () => {
+  const { setPendingInput } = await import('../src/pendingInput.mjs');
+  const originalSave = ctx.db.saveGitAccount;
+  ctx.db.saveGitAccount = () => false;
+  try {
+    setPendingInput(ann, 'gitToken', { host: 'github' });
+    assert.equal(await U.onGitInput(ann, 'ghp_new0123456789secret', { messageId: 1 }), true);
+    assert.match(texts(take()), /Не удалось сохранить доступ/);
+  } finally {
+    ctx.db.saveGitAccount = originalSave;
+  }
+  await U.onGitCallback(ann, press(ANN, 'gt:dv:github'));
+  assert.match(texts(take()), /Не удалось войти/);
+  await U.onGitCallback(ann, press(ANN, 'gt:dv:unknown'));
+  assert.match(texts(take()), /Кнопка устарела/);
+});
+
+test('/git: публикация — устаревшее ожидание названия и устаревшая кнопка', needGit, async () => {
+  const { setPendingInput } = await import('../src/pendingInput.mjs');
+  ann.gitPublish = null;
+  setPendingInput(ann, 'gitRepoName');
+  assert.equal(await U.onGitInput(ann, 'newproj', { messageId: 1 }), false);
+  assert.deepEqual(take(), []);
+  await U.onGitCallback(ann, press(ANN, 'gt:pbgo'));
+  assert.match(texts(take()), /Кнопка устарела/);
+  ann.pendingInput = null;
+  ann.gitPublish = null;
+});
+
+test('/git: публикация — выбор сервиса при нескольких аккаунтах и отказ неизвестного сервиса', needGit, async () => {
+  const proj = join(ws, 'many');
+  mkdirSync(proj);
+  S.saveProject(ann, proj);
+  ann.gitPublish = null;
+  ann.pendingInput = null;
+  ctx.db.saveGitAccount(ANN, { host: 'gitlab', login: 'ann-dev', name: 'Ann Dev', email: 'ann@example.com', token: 'glpat-test0123456789' });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => (String(url).startsWith('https://gitlab.com/api/v4/groups') ? json([{ id: 9, full_path: 'acme/team' }]) : previousFetch(url, init));
+  try {
+    await U.onGitCallback(ann, press(ANN, 'gt:pb'));
+    const hosts = take();
+    assert.deepEqual(buttons(hosts).filter((b) => b.callback_data?.startsWith('gt:pbh:')).map((b) => b.callback_data), ['gt:pbh:github', 'gt:pbh:gitlab']);
+    await U.onGitCallback(ann, press(ANN, 'gt:pbh:unknown'));
+    assert.match(texts(take()), /Кнопка устарела/);
+    await U.onGitCallback(ann, press(ANN, 'gt:pbh:gitlab'));
+    const places = take();
+    assert.match(texts(places), /GitLab/);
+    assert.ok(buttons(places).some((b) => b.callback_data?.startsWith('gt:pbn:')));
+  } finally {
+    globalThis.fetch = previousFetch;
+    ctx.db.deleteGitAccount(ANN, 'gitlab');
+    ann.gitPublish = null;
+    ann.pendingInput = null;
+  }
+});
+
+test('/git: ветки — сбой сверки с сервером не ломает экран', needGit, async () => {
+  const proj = join(ws, 'app');
+  S.saveProject(ann, proj);
+  const missingBare = join(home, 'remote', 'missing.git').replace(/\\/g, '/');
+  const missingUrl = 'https://github.com/acme/missing.git';
+  await I.setRemote(proj, missingUrl, { env });
+  const oldCount = process.env.GIT_CONFIG_COUNT;
+  const oldKey = process.env.GIT_CONFIG_KEY_3;
+  const oldValue = process.env.GIT_CONFIG_VALUE_3;
+  process.env.GIT_CONFIG_COUNT = '4';
+  process.env.GIT_CONFIG_KEY_3 = `url.${missingBare}.insteadOf`;
+  process.env.GIT_CONFIG_VALUE_3 = missingUrl;
+  try {
+    await U.onGitCallback(ann, press(ANN, 'gt:br:0'));
+    const view = take();
+    assert.match(texts(view), /Ветки/);
+    assert.ok(buttons(view).some((b) => b.callback_data?.startsWith('gt:bs:')));
+  } finally {
+    if (oldCount === undefined) delete process.env.GIT_CONFIG_COUNT;
+    else process.env.GIT_CONFIG_COUNT = oldCount;
+    if (oldKey === undefined) delete process.env.GIT_CONFIG_KEY_3;
+    else process.env.GIT_CONFIG_KEY_3 = oldKey;
+    if (oldValue === undefined) delete process.env.GIT_CONFIG_VALUE_3;
+    else process.env.GIT_CONFIG_VALUE_3 = oldValue;
+    await I.setRemote(proj, APP_URL, { env });
+  }
+});
+
+test('/git: переключение ветки — ошибка в обработчике показывает причину и кнопку «Назад»', needGit, async () => {
+  const K = await import('../src/gitKeys.mjs');
+  const R = await import('../src/gitRepoUi.mjs');
+  const proj = join(ws, 'app');
+  S.saveProject(ann, proj);
+  const key = K.remember(ann, { branch: 'main' });
+  const edits = [];
+  let acks = 0;
+  await R.onRepoCallback(ann, {
+    action: 'bs',
+    arg: key,
+    lang: 'ru',
+    project: proj,
+    ack: async () => {
+      acks++;
+      if (acks === 1) throw new Error('boom');
+    },
+    edit: async (v) => edits.push(v),
+  });
+  assert.equal(acks, 2);
+  assert.equal(edits.length, 1);
+  assert.match(edits[0].text, /⚠️ Git: boom/);
+  assert.equal(edits[0].markup.inline_keyboard[0][0].callback_data, 'gt:v');
+});
+
+test('/git: публикация — нехватка прав API при создании репозитория', needGit, async () => {
+  const proj = join(ws, 'failpub');
+  mkdirSync(proj);
+  writeFileSync(join(proj, 'index.html'), '<h1>нет прав</h1>\n');
+  S.saveProject(ann, proj);
+  ann.gitPublish = null;
+  ann.pendingInput = null;
+  gh.forbid = true;
+  try {
+    await U.onGitCallback(ann, press(ANN, 'gt:pb'));
+    const places = take().filter((c) => c.method === 'editMessageText');
+    const acme = buttons(places).find((b) => b.text === '👥 acme');
+    assert.ok(acme, 'организация acme доступна');
+    await U.onGitCallback(ann, press(ANN, acme.callback_data));
+    take();
+    await U.onGitCallback(ann, press(ANN, 'gt:pbv:private'));
+    take();
+    await U.onGitCallback(ann, press(ANN, 'gt:pbname'));
+    take();
+    assert.equal(await U.onGitInput(ann, 'failpub', { messageId: 1 }), true);
+    take();
+    await U.onGitCallback(ann, press(ANN, 'gt:pbgo'));
+    assert.match(texts(take()), /токену не хватает прав для этого действия[\s\S]*api/);
+  } finally {
+    gh.forbid = false;
+    ann.gitPublish = null;
+    ann.pendingInput = null;
+  }
+});

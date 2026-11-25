@@ -2,10 +2,13 @@
 // новая тема вместо сброса текущего диалога.
 import { botInfo, db, langOf, log, say } from './ctx.mjs';
 import { errText, t } from './i18n.mjs';
-import { engineOf, errorRootOf, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { engineOf, errorRootOf, isAdmin, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { cbCtx } from './uiActions.mjs';
-import { createTopic, topicLink, topicName } from './topics.mjs';
+import { cleanTitle, createTopic, topicLink, topicName } from './topics.mjs';
+import { replyKeyboard } from './ui.mjs';
+
+const topicKeyboard = (st, lang) => replyKeyboard(lang, { admin: isAdmin(st.userId), topics: 'on' });
 
 const modeKeyboard = (on, lang) => ({
   inline_keyboard: [
@@ -79,7 +82,36 @@ export async function newTopic(st, { project = st.project } = {}) {
   const engine = engineOf(st);
   db.saveTopic(st.userId, threadId, { name, named: false, project, engine: engine.id });
   log('тема создана', threadId, '| пользователь', st.userId);
-  await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: userPath(st.userId, project, lang) }));
+  await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: userPath(st.userId, project, lang) }), { reply_markup: topicKeyboard(st, lang) });
   const link = topicLink(botInfo.username, threadId);
   return say(st.to, t('topics.created', lang), link ? { reply_markup: { inline_keyboard: [[{ text: t('topics.open', lang), url: link }]] } } : {});
+}
+
+export async function offerAgentTopics(st, names, lang) {
+  const titles = names.map(cleanTitle).filter(Boolean).slice(0, 3);
+  if (!titles.length) return;
+  const engine = engineOf(st);
+  const created = [];
+  for (const label of titles) {
+    const name = topicName(topicProject(st.userId, st.project, lang), label);
+    let threadId;
+    try {
+      threadId = await createTopic(st.chatId, name);
+      if (!threadId) throw new Error('createForumTopic: нет message_thread_id');
+    } catch (e) {
+      log('создание темы агентом:', e.message, '| пользователь', st.userId);
+      continue;
+    }
+    db.saveTopic(st.userId, threadId, { name, named: true, project: st.project, engine: engine.id });
+    log('тема создана агентом', threadId, '| пользователь', st.userId);
+    await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.agentHello', lang, { engine: engine.label, project: userPath(st.userId, st.project, lang) }), { reply_markup: topicKeyboard(st, lang) }).catch((e) => log('приветствие в теме агента:', e.message));
+    created.push({ name, threadId });
+  }
+  if (!created.length) return say(st.to, t('topics.agentCreateFail', lang));
+  const rows = created
+    .map(({ threadId }) => topicLink(botInfo.username, threadId))
+    .filter(Boolean)
+    .map((url) => [{ text: t('topics.open', lang), url }]);
+  const key = created.length > 1 ? 'topics.agentCreatedMany' : 'topics.agentCreated';
+  return say(st.to, t(key, lang, { names: created.map(({ name }) => name).join(', ') }), rows.length ? { reply_markup: { inline_keyboard: rows } } : {});
 }

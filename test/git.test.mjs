@@ -68,6 +68,7 @@ const G = await import('../src/git.mjs');
 const A = await import('../src/gitAccess.mjs');
 const S = await import('../src/state.mjs');
 const U = await import('../src/gitUi.mjs');
+const RA = await import('../src/gitRepoAction.mjs');
 G.setGitAvailable(hasGit);
 const CORP = 'gitlab-git-example-com'; // id своего GitLab из GITLAB_URL: вид и адрес
 
@@ -82,6 +83,24 @@ const bob = S.getState(BOB, BOB);
 const ws = S.rootOf(ANN);
 const env = G.gitEnv({ identity: { name: 'Сервер', email: 'server@example.com' } });
 const git = (cwd, ...args) => G.runGit(args, { cwd, env });
+
+async function freshRepo(userId) {
+  ctx.setLang(userId, 'ru');
+  ctx.db.upsertUser({ user_id: userId, username: `u${userId}`, level: 'normal', added_by: ADMIN });
+  ctx.db.saveGitAccount(userId, { host: 'github', login: `dev${userId}`, name: 'Dev', email: `${userId}@example.com`, token: TOKEN });
+  const root = S.rootOf(userId);
+  mkdirSync(root, { recursive: true });
+  const project = join(root, 'app');
+  await git(root, 'clone', '-q', REPO_URL, 'app');
+  const st = S.getState(userId, userId);
+  st.project = project;
+  const edits = [];
+  const acks = [];
+  const view = async () => ({ text: 'экран', markup: { inline_keyboard: [] } });
+  const edit = async (payload) => { edits.push(payload); return payload; };
+  const ack = async (text) => { acks.push(text); };
+  return { st, project, edits, acks, view, edit, ack };
+}
 
 after(() => {
   globalThis.fetch = realFetch;
@@ -612,4 +631,53 @@ test('/git: «Изменения» — список файлов, diff в соо
   assert.equal(await U.onGitInput(ann, 'правки главной'), true);
   assert.match(texts(take()), /Создана и выбрана ветка <code>правки-главной<\/code>/);
   assert.equal((await G.repoState(proj, { env })).branch, 'правки-главной');
+});
+
+test('gt:savenow: описание коммита проставляется автоматически', needGit, async () => {
+  const { st, project, edits, view, edit, ack } = await freshRepo(4101);
+  writeFileSync(join(project, 'auto.txt'), 'auto\n');
+
+  await RA.onRepoActionCallback(st, { action: 'save', lang: 'ru', ack, edit, view });
+  assert.equal(st.pendingInput?.kind, 'gitMessage');
+  take();
+
+  await RA.onRepoActionCallback(st, { action: 'savenow', lang: 'ru', ack, edit, view });
+  assert.equal(st.pendingInput, null);
+  assert.match(edits.map((x) => x.text ?? '').join('\n'), /Изменения сохранены и отправлены/);
+  const message = (await git(home, '--git-dir', bare, 'log', '-1', '--format=%s', 'main')).trim();
+  assert.match(message, /^Изменения из AcpGram,/);
+});
+
+test('gt:push: отклонение не-fast-forward предлагает получить изменения', needGit, async () => {
+  const { st, project, edits, view, edit, ack } = await freshRepo(4102);
+  writeFileSync(join(project, 'reject.txt'), 'локально\n');
+  await G.commitAll(project, 'локальный коммит', { env });
+
+  const otherHome = join(home, 'other-reject');
+  mkdirSync(otherHome);
+  await git(otherHome, 'clone', '-q', REPO_URL, 'work');
+  const other = join(otherHome, 'work');
+  writeFileSync(join(other, 'server.txt'), 'с сервера\n');
+  await G.commitAll(other, 'удалённый коммит', { env });
+  await G.pushRepo(other, { env });
+
+  await RA.onRepoActionCallback(st, { action: 'push', lang: 'ru', ack, edit, view });
+  assert.match(edits.map((x) => x.text ?? '').join('\n'), /Сервер не принял отправку/);
+  assert.equal((await G.repoState(project, { env })).ahead, 1);
+});
+
+test('gt:push: общий сбой git показывается с текстом ошибки', needGit, async () => {
+  const { st, project, edits, view, edit, ack } = await freshRepo(4103);
+  writeFileSync(join(project, 'fail.txt'), 'fail\n');
+  await G.commitAll(project, 'перед сбоем', { env });
+
+  const saved = process.env.GIT_CONFIG_VALUE_0;
+  process.env.GIT_CONFIG_VALUE_0 = join(home, 'нет-такого-remote.git');
+  try {
+    await RA.onRepoActionCallback(st, { action: 'push', lang: 'ru', ack, edit, view });
+  } finally {
+    if (saved === undefined) delete process.env.GIT_CONFIG_VALUE_0;
+    else process.env.GIT_CONFIG_VALUE_0 = saved;
+  }
+  assert.match(edits.map((x) => x.text ?? '').join('\n'), /⚠️ Git:/);
 });

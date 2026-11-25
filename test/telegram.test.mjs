@@ -95,6 +95,17 @@ test('sendRich: обычным текстом отправляем только 
   assert.deepEqual(bad.calls.map((c) => c.url.split('/').pop()), ['sendRichMessage', 'sendMessage']);
 });
 
+test('sendRich: reply-клавиатура уходит с rich-сообщением и с обычным текстом при откате', async () => {
+  const markup = { keyboard: [[{ text: 'Help' }]], resize_keyboard: true };
+  const ok = fakeFetch({ ok: true, result: {} });
+  await sendRich(42, '**ответ**', { fetchImpl: ok.impl, reply_markup: markup });
+  assert.deepEqual(JSON.parse(ok.calls[0].init.body).reply_markup, markup);
+
+  const bad = fakeFetch({ ok: false, error_code: 400, description: "can't parse" }, { ok: true, result: {} });
+  await sendRich(42, '**ответ**', { fetchImpl: bad.impl, reply_markup: markup });
+  assert.deepEqual(JSON.parse(bad.calls[1].init.body).reply_markup, markup);
+});
+
 test('sendBuffer: документ уходит из памяти без обращения к файлу', async () => {
   const f = fakeFetch({ ok: true, result: { message_id: 1 } });
   assert.equal((await sendBuffer(42, Buffer.from('diff'), 'change.diff', { fetchImpl: f.impl })).message_id, 1);

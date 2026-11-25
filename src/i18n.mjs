@@ -107,6 +107,11 @@ export const LANG_PICK = 'Choose your language:\nВыберите язык:\nО�
 const M = {
   // ---------- общее ----------
   'btn.language': { en: '🌐 Language', ru: '🌐 Язык', uk: '🌐 Мова' },
+  'reply.help': { en: '📖 Help', ru: '📖 Справка', uk: '📖 Довідка' },
+  'reply.usage': { en: '📊 Usage', ru: '📊 Расход', uk: '📊 Витрати' },
+  'reply.topic': { en: '💬 New topic', ru: '💬 Новая тема', uk: '💬 Нова тема' },
+  'reply.updated': { en: '⌨️ Button menu updated.', ru: '⌨️ Меню кнопок обновлено.', uk: '⌨️ Меню кнопок оновлено.' },
+  'reply.keyboardOn': { en: '⌨️ Quick command keyboard attached. Open it with the keyboard icon in the input field.', ru: '⌨️ Клавиатура быстрых команд подключена. Откройте её иконкой клавиатуры в поле ввода.', uk: '⌨️ Клавіатуру швидких команд підключено. Відкрийте її іконкою клавіатури в полі введення.' },
   'btn.cancel': { en: 'Cancel', ru: 'Отмена', uk: 'Скасувати' },
   'btn.back': { en: '← Back', ru: '← Назад', uk: '← Назад' },
   'btn.reject': { en: '⛔ Reject', ru: '⛔ Отклонить', uk: '⛔ Відхилити' },
@@ -164,6 +169,7 @@ const M = {
   'help.stop': { en: '/stop — stop the running request', ru: '/stop — остановить запрос', uk: '/stop — зупинити запит' },
   'help.close': { en: '/close — close the session and free server memory', ru: '/close — закрыть сессию и освободить память сервера', uk: '/close — закрити сесію та звільнити пам’ять сервера' },
   'help.language': { en: '/language — interface language', ru: '/language — язык интерфейса', uk: '/language — мова інтерфейсу' },
+  'help.keyboard': { en: '/keyboard — attach the quick command keyboard again', ru: '/keyboard — снова подключить клавиатуру быстрых команд', uk: '/keyboard — знову підключити клавіатуру швидких команд' },
   'help.users': { en: '/users — users with access', ru: '/users — сотрудники с доступом', uk: '/users — співробітники з доступом' },
   'help.active': { en: '/active — active sessions', ru: '/active — активные сессии', uk: '/active — активні сесії' },
   'help.usage': { en: '/usage — requests and tokens by user', ru: '/usage — запросы и токены по сотрудникам', uk: '/usage — запити й токени по співробітниках' },
@@ -678,7 +684,15 @@ const M = {
     ru: '💬 Новый диалог.\n🤖 {engine} · 📁 {project}\n\nНапишите запрос — тема получит название по первому ответу. /engine здесь меняет только этот диалог; проект у темы не меняется (/project покажет диалоги другого проекта).',
     uk: '💬 Новий діалог.\n🤖 {engine} · 📁 {project}\n\nНапишіть запит — тема отримає назву за першою відповіддю. /engine тут змінює лише цей діалог; проєкт теми не змінюється (/project покаже діалоги іншого проєкту).',
   },
+  'topics.agentHello': {
+    en: '💬 New dialog.\n🤖 {engine} · 📁 {project}\n\nWrite your request here. /engine here applies only to this dialog; the project of a topic does not change (/project shows the dialogs of another project).',
+    ru: '💬 Новый диалог.\n🤖 {engine} · 📁 {project}\n\nПишите запрос здесь. /engine здесь меняет только этот диалог; проект у темы не меняется (/project покажет диалоги другого проекта).',
+    uk: '💬 Новий діалог.\n🤖 {engine} · 📁 {project}\n\nПишіть запит тут. /engine тут змінює лише цей діалог; проєкт теми не змінюється (/project покаже діалоги іншого проєкту).',
+  },
   'topics.created': { en: '💬 Created a new topic: a new dialog with the agent.', ru: '💬 Создал новую тему — новый диалог с агентом.', uk: '💬 Створив нову тему — новий діалог з агентом.' },
+  'topics.agentCreated': { en: '💬 Created the topic {names}. Open it to continue the dialog.', ru: '💬 Создал тему {names}. Откройте её, чтобы продолжить диалог.', uk: '💬 Створив тему {names}. Відкрийте її, щоб продовжити діалог.' },
+  'topics.agentCreatedMany': { en: '💬 Created the topics {names}. Open one to continue the dialog.', ru: '💬 Создал темы {names}. Откройте нужную, чтобы продолжить диалог.', uk: '💬 Створив теми {names}. Відкрийте потрібну, щоб продовжити діалог.' },
+  'topics.agentCreateFail': { en: '⚠️ Could not create a topic requested by the agent.', ru: '⚠️ Не удалось создать тему по просьбе агента.', uk: '⚠️ Не вдалося створити тему на прохання агента.' },
   'topics.open': { en: 'Open topic', ru: 'Открыть тему', uk: 'Відкрити тему' },
   // ---- темы проекта (режим «диалоги») ----
   'tpl.headGeneral': {
