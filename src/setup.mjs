@@ -285,15 +285,41 @@ export async function setupToken(p, env) {
     const token = (await p.secret(env.TELEGRAM_BOT_TOKEN ? tc('setup.tokenKeep') : tc('setup.token'))) || env.TELEGRAM_BOT_TOKEN;
     if (!token) continue;
     try {
-      me = await api(token, 'getMe');
+      const raw = await api(token, 'getMe');
+      const username = raw.username || raw.active_usernames?.[0] || '';
+      me = { ...raw, username };
       env.TELEGRAM_BOT_TOKEN = token;
-      ok(tc('setup.botOk', { username: me.username, name: me.first_name }));
+      ok(tc('setup.botOk', { username, name: me.first_name }));
       break;
     } catch (e) {
       warn(tc('setup.tokenBad', { msg: e.message }));
     }
   }
   return me;
+}
+
+/** Рекомендуемые настройки бота через setMySettings (Bot API 10.5): темы с боковой панелью, без групп. */
+export async function setupBotSettings(p, env, me) {
+  const ready = Boolean(me?.has_topics_enabled && me?.has_topic_sidebar && me?.can_join_groups === false);
+  if (ready) {
+    ok(tc('setup.botSettingsAlready'));
+    return false;
+  }
+  console.log(tc('setup.botSettingsNote'));
+  if (!(await p.yes(tc('setup.botSettingsAsk'), true))) return false;
+  try {
+    await api(env.TELEGRAM_BOT_TOKEN, 'setMySettings', {
+      has_topics_enabled: true,
+      has_topic_sidebar: true,
+      allows_users_to_create_topics: true,
+      can_join_groups: false,
+    });
+    ok(tc('setup.botSettingsOk'));
+    return true;
+  } catch (e) {
+    warn(tc('setup.botSettingsFail', { msg: e.message }));
+    return false;
+  }
 }
 
 export async function setupAdmin(p, env, me) {
@@ -500,6 +526,7 @@ export async function runSetup({ fromStart = false } = {}) {
 
     await migrateLegacySetup(p, env);
     const me = await setupToken(p, env);
+    await setupBotSettings(p, env, me);
     const adminId = await setupAdmin(p, env, me);
     await setupRoot(p, env);
     const available = await setupEngines(p, env);

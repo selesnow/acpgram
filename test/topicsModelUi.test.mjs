@@ -104,20 +104,39 @@ after(() => {
   rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-test('/topics: поддержка из getMe, режим с заметкой и отказ getMe не ломает экран', async () => {
+test('/topics: поддержка из getMe, active_usernames, режим с заметкой и настройки бота для администратора', async () => {
   const st = freshState();
-  me = { ...me, has_topics_enabled: false, allows_users_to_create_topics: false };
+  const emp = getState(2, 2, null);
+  db.setSetting('lang:2', 'en');
+  botInfo.username = '';
+  me = { active_usernames: ['alias_bot'], has_topics_enabled: false, allows_users_to_create_topics: false, has_topic_sidebar: false, can_join_groups: true };
   calls.length = 0;
-  await handleTopics(st);
+  await handleTopics(emp);
   assert.equal(findCall('sendMessage').body.text, t('topics.unsupported', 'en'));
   assert.equal(findCall('sendMessage').body.reply_markup, undefined);
+  assert.equal(botInfo.username, 'alias_bot');
 
-  me = { ...me, has_topics_enabled: true, allows_users_to_create_topics: false };
+  calls.length = 0;
+  await handleTopics(st);
+  const adminOff = findCall('sendMessage').body;
+  assert.equal(adminOff.text, t('topics.unsupportedAdmin', 'en'));
+  assert.deepEqual(
+    adminOff.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
+    ['tpc:bot:topics', 'tpc:bot:groups'],
+  );
+
+  me = { username: 'acp_bot', has_topics_enabled: true, allows_users_to_create_topics: false, has_topic_sidebar: true, can_join_groups: false };
   db.setSetting(`topics:${USER}`, 'on');
   calls.length = 0;
   await handleTopics(st);
   const menu = findCall('sendMessage');
+  assert.equal(topicsSupport.enabled, true);
+  assert.equal(topicsSupport.usersCreate, false);
+  assert.equal(topicsSupport.sidebar, true);
+  assert.equal(topicsSupport.canJoinGroups, false);
+  assert.equal(botInfo.username, 'acp_bot');
   assert.ok(menu.body.reply_markup.inline_keyboard.flat().some((b) => b.callback_data === 'tpc:off'));
+  assert.ok(menu.body.reply_markup.inline_keyboard.flat().some((b) => b.callback_data === 'tpc:bot:sidebar'));
   assert.match(menu.body.text, /creating topics yourself is turned off/i);
 
   failMethods.add('getMe');
@@ -126,6 +145,57 @@ test('/topics: поддержка из getMe, режим с заметкой и 
   failMethods.delete('getMe');
   assert.ok(findCall('sendMessage'));
   assert.equal(topicsSupport.enabled, true);
+  botInfo.username = 'smoke_bot';
+});
+
+test('tpc:bot:*: администратор меняет настройки бота через setMySettings, сотрудник получает отказ', async () => {
+  const admin = freshState();
+  const emp = getState(2, 2, null);
+  db.setSetting('lang:2', 'en');
+  topicsSupport.enabled = false;
+  topicsSupport.sidebar = false;
+  topicsSupport.usersCreate = false;
+  topicsSupport.canJoinGroups = true;
+
+  calls.length = 0;
+  await onTopicsCallback(emp, cb(2, 'tpc:bot:topics'));
+  assert.equal(findCall('answerCallbackQuery').body.text, t('admin.only', 'en'));
+  assert.equal(findCall('setMySettings'), undefined);
+
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:topics'));
+  assert.deepEqual(findCall('setMySettings').body, { has_topics_enabled: true, has_topic_sidebar: true });
+  assert.equal(topicsSupport.enabled, true);
+  assert.equal(topicsSupport.sidebar, true);
+  assert.equal(findCall('answerCallbackQuery').body.text, t('topics.botSaved', 'en'));
+  assert.ok(findCall('editMessageText'));
+
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:sidebar'));
+  assert.deepEqual(findCall('setMySettings').body, { has_topic_sidebar: false });
+  assert.equal(topicsSupport.sidebar, false);
+
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:create'));
+  assert.deepEqual(findCall('setMySettings').body, { allows_users_to_create_topics: true });
+  assert.equal(topicsSupport.usersCreate, true);
+
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:groups'));
+  assert.deepEqual(findCall('setMySettings').body, { can_join_groups: false });
+  assert.equal(topicsSupport.canJoinGroups, false);
+
+  failMethods.add('setMySettings');
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:sidebar'));
+  failMethods.delete('setMySettings');
+  assert.equal(topicsSupport.sidebar, false);
+  assert.match(findCall('answerCallbackQuery').body.text, /setMySettings rejected/);
+
+  calls.length = 0;
+  await onTopicsCallback(admin, cb(USER, 'tpc:bot:topics'));
+  assert.deepEqual(findCall('setMySettings').body, { has_topics_enabled: false });
+  assert.equal(topicsSupport.enabled, false);
 });
 
 test('tpc:off: лишние нажатия, занятый диалог, закрытие агентов и fallbacksend', async () => {

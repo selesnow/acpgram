@@ -72,6 +72,28 @@ test('cbCtx.edit: fallback-объект уходит в say', async () => {
   assert.deepEqual(sends, [{ to: 42, text: 'текст', extra: { parse_mode: 'HTML' } }]);
 });
 
+test('cbCtx.edit: richHtml уходит в rich_message, при ошибке откатывается на text или onRichError', async () => {
+  const ok = recorder();
+  const markup = { inline_keyboard: [[{ text: 'Назад', callback_data: 'back' }]] };
+  await cbCtx(st, cb, { api: ok.api, html: true }).edit({ richHtml: '<p>hi</p><blockquote expandable><pre>a</pre></blockquote>', text: 'hi', markup });
+  assert.deepEqual(ok.calls[0].payload, { chat_id: 42, message_id: 13, rich_message: { html: '<p>hi</p><blockquote expandable><pre>a</pre></blockquote>' }, reply_markup: markup });
+
+  const calls = [];
+  const apiFailRich = async (method, payload) => {
+    calls.push({ method, payload });
+    if (payload.rich_message) throw new Error('Bad Request: rich rejected');
+    return {};
+  };
+  await cbCtx(st, cb, { api: apiFailRich, html: true }).edit({ richHtml: '<p>hi</p>', text: '<b>hi</b>', markup });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].payload.text, '<b>hi</b>');
+  assert.equal(calls[1].payload.parse_mode, 'HTML');
+
+  let richErr = null;
+  await cbCtx(st, cb, { api: failing('rich fail'), html: true }).edit({ richHtml: '<p>hi</p>', markup, onRichError: (e) => (richErr = e.message) });
+  assert.equal(richErr, 'rich fail');
+});
+
 test('btnText: обрезка по символам, а не по половинке эмодзи', () => {
   assert.equal(btnText(null), '');
   assert.equal(btnText('🙂abcdef', 3), '🙂ab');

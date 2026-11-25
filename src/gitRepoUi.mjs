@@ -22,8 +22,10 @@ import { btnText, cancelRow } from './uiActions.mjs';
 export const REPO_ACTIONS = ['ch', 'cf', 'cm', 'br', 'bs', 'bn', 'dx', 'dX', 'da', 'dA'];
 
 const PAGE = 10;
-/** Изменения файла длиннее этого приходят файлом: в сообщение Telegram они не помещаются. */
+/** Короткие изменения — прямо в сообщении; длиннее порога — сворачиваемая цитата в rich-сообщении (Bot API 10.5), ещё длиннее — файлом. */
 const DIFF_INLINE_MAX = 3200;
+const DIFF_RICH_MAX = 8000;
+const DIFF_COLLAPSE_LINES = 14;
 const DIFF_FILE_MAX = 1024 * 1024;
 const MARK = { new: '🆕', modified: '✏️', deleted: '🗑', renamed: '🔀', conflict: '⚠️' };
 
@@ -86,10 +88,20 @@ async function showDiff(st, project, file, index, opts, lang, edit) {
   const back = { inline_keyboard: [...(canManageFiles(st.userId) ? [[{ text: t('git.dx.btn', lang), callback_data: `gt:dx:${index}` }]] : []), toList] };
   const diff = await fileDiff(project, file, opts);
   if (!diff) return edit({ text: `${title}\n\n${th('git.diff.empty', lang)}`, markup: back });
-  if (diff.length <= DIFF_INLINE_MAX) return edit({ text: `${title}\n<pre><code class="language-diff">${escHtml(diff)}</code></pre>`, markup: back });
-  const content = diff.length > DIFF_FILE_MAX ? `${diff.slice(0, DIFF_FILE_MAX)}\n… (truncated)\n` : `${diff}\n`;
-  await sendBuffer(st.to, Buffer.from(content), `${safeFileName(basename(file.path))}.diff`);
-  return edit({ text: th('git.diff.sent', lang, { path: hCode(file.path) }), markup: back });
+  const code = `<pre><code class="language-diff">${escHtml(diff)}</code></pre>`;
+  const sendAsFile = async () => {
+    const content = diff.length > DIFF_FILE_MAX ? `${diff.slice(0, DIFF_FILE_MAX)}\n… (truncated)\n` : `${diff}\n`;
+    await sendBuffer(st.to, Buffer.from(content), `${safeFileName(basename(file.path))}.diff`);
+    return edit({ text: th('git.diff.sent', lang, { path: hCode(file.path) }), markup: back });
+  };
+  if (diff.length <= DIFF_INLINE_MAX && diff.split('\n').length <= DIFF_COLLAPSE_LINES) return edit({ text: `${title}\n${code}`, markup: back });
+  if (diff.length <= DIFF_RICH_MAX) {
+    const richHtml = `<p>${title}</p><blockquote expandable>${code}</blockquote>`;
+    return diff.length <= DIFF_INLINE_MAX
+      ? edit({ richHtml, text: `${title}\n${code}`, markup: back })
+      : edit({ richHtml, markup: back, onRichError: sendAsFile });
+  }
+  return sendAsFile();
 }
 
 /** Список коммитов: ещё не отправленных ('o') или ждущих на сервере ('i'). */

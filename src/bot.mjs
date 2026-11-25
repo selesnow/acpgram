@@ -7,7 +7,7 @@ import { choiceName, effectiveSelection, killProbes, refreshCatalogs } from './a
 import { handleEngine, onEngineCallback } from './engineUi.mjs';
 import { handleModel, onModelCallback } from './modelUi.mjs';
 import { ADMIN_ID, DATA_DIR, HISTORY_KEEP_DAYS, IDLE_MINUTES, LEVEL_KEYS, LOGS_KEEP_DAYS, MAX_AGENTS, botInfo, db, langOf, log, noteTgLang, say, setLang, sweepLangCache } from './ctx.mjs';
-import { adminCommand, handleUnknownUser, onAdminCallback, sweepUnknownUsers, welcomeNote } from './admin.mjs';
+import { adminCommand, handleBotInvite, handleUnknownUser, onAdminCallback, sweepUnknownUsers, welcomeNote } from './admin.mjs';
 import { tc } from './cli-i18n.mjs';
 import { LANGS, LANG_CODES, LANG_PICK, errText, normLang, t } from './i18n.mjs';
 import { HOME, ROOT, USER_WORKSPACES } from './projects.mjs';
@@ -81,6 +81,7 @@ configureBotRouting({
   forceStopAfter,
   freeBytes,
   getState,
+  handleBotInvite,
   handleEngine,
   handleFiles,
   handleGit,
@@ -234,14 +235,16 @@ async function main() {
   catalogs();
   setInterval(catalogs, 24 * 3600_000).unref();
   const me = await tg('getMe');
-  botInfo.username = me.username;
-  // темы в личном чате включает владелец бота в @BotFather; без них режим «диалоги» недоступен, бот работает как раньше
+  botInfo.username = me.username || me.active_usernames?.[0] || '';
+  // настройки тем и групп бота (BotFullInfo, Bot API 10.5); администратор может менять их в /topics или в мастере настройки
   topicsSupport.enabled = Boolean(me.has_topics_enabled);
   topicsSupport.usersCreate = Boolean(me.allows_users_to_create_topics);
+  topicsSupport.sidebar = Boolean(me.has_topic_sidebar);
+  topicsSupport.canJoinGroups = me.can_join_groups !== false;
   log(
     topicsSupport.enabled
-      ? `темы в личном чате включены (режим «диалоги», /topics)${topicsSupport.usersCreate ? '' : ' — пользователи не могут создавать темы сами, только через /new'}`
-      : 'темы в личном чате выключены — режим «диалоги» недоступен',
+      ? `темы в личном чате включены (режим «диалоги», /topics)${topicsSupport.sidebar ? ', боковая панель тем' : ''}${topicsSupport.usersCreate ? '' : ' — пользователи не могут создавать темы сами, только через /new'}`
+      : 'темы в личном чате выключены — режим «диалоги» недоступен (администратор может включить в /topics)',
   );
   await setupCommands().catch((e) => log('настройка меню:', e.message));
   notifyInterrupted();

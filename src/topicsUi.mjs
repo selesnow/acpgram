@@ -25,32 +25,95 @@ const stateText = (st, lang) => {
   return `${t(on ? 'topics.stateOn' : 'topics.stateOff', lang)}${extra}`;
 };
 
+const botSettingsKeyboard = (lang) =>
+  topicsSupport.enabled
+    ? [
+        [
+          { text: t(topicsSupport.sidebar ? 'topics.bot.sidebarOn' : 'topics.bot.sidebarOff', lang), callback_data: 'tpc:bot:sidebar' },
+          { text: t(topicsSupport.usersCreate ? 'topics.bot.createOn' : 'topics.bot.createOff', lang), callback_data: 'tpc:bot:create' },
+        ],
+        [
+          { text: t(topicsSupport.canJoinGroups ? 'topics.bot.groupsOn' : 'topics.bot.groupsOff', lang), callback_data: 'tpc:bot:groups' },
+          { text: t('topics.bot.disableTopics', lang), callback_data: 'tpc:bot:topics' },
+        ],
+      ]
+    : [
+        [{ text: t('topics.bot.enableTopics', lang), callback_data: 'tpc:bot:topics', style: 'primary' }],
+        [{ text: t(topicsSupport.canJoinGroups ? 'topics.bot.groupsOn' : 'topics.bot.groupsOff', lang), callback_data: 'tpc:bot:groups' }],
+      ];
+
+const topicsView = (st, lang) => {
+  const admin = isAdmin(st.userId);
+  if (!topicsSupport.enabled) {
+    if (!admin) return { text: t('topics.unsupported', lang) };
+    return { text: t('topics.unsupportedAdmin', lang), markup: { inline_keyboard: botSettingsKeyboard(lang) } };
+  }
+  const text = admin ? `${stateText(st, lang)}\n\n${t('topics.botSettingsHead', lang)}` : stateText(st, lang);
+  const rows = [...modeKeyboard(topicsOn(st.userId), lang).inline_keyboard, ...(admin ? botSettingsKeyboard(lang) : [])];
+  return { text, markup: { inline_keyboard: rows } };
+};
+
+const syncBotInfo = (me) => {
+  topicsSupport.enabled = Boolean(me.has_topics_enabled);
+  topicsSupport.usersCreate = Boolean(me.allows_users_to_create_topics);
+  topicsSupport.sidebar = Boolean(me.has_topic_sidebar);
+  topicsSupport.canJoinGroups = me.can_join_groups !== false;
+  const username = me.username || me.active_usernames?.[0];
+  if (username) botInfo.username = username;
+};
+
 /**
- * Настройки тем бота из getMe: владелец мог изменить их в @BotFather, пока бот работает (при запуске они читаются
- * один раз). Ошибку запроса не показываем — остаются прежние значения.
+ * Настройки тем бота из getMe (BotFullInfo): владелец мог изменить их в @BotFather или через setMySettings,
+ * пока бот работает. Ошибку запроса не показываем — остаются прежние значения.
  */
 async function refreshTopicsSupport() {
   try {
-    const me = await tg('getMe');
-    topicsSupport.enabled = Boolean(me.has_topics_enabled);
-    topicsSupport.usersCreate = Boolean(me.allows_users_to_create_topics);
+    syncBotInfo(await tg('getMe'));
   } catch (e) {
     log('getMe (настройки тем):', e.message);
   }
 }
 
-/** /topics: текущий режим и кнопки переключения. */
+/** /topics: текущий режим и кнопки переключения (администратору — также настройки бота через setMySettings). */
 export async function handleTopics(st) {
   await refreshTopicsSupport();
   const lang = langOf(st.userId);
-  if (!topicsSupport.enabled) return say(st.to, t('topics.unsupported', lang));
-  return say(st.to, stateText(st, lang), { reply_markup: modeKeyboard(topicsOn(st.userId), lang) });
+  const v = topicsView(st, lang);
+  return say(st.to, v.text, v.markup ? { reply_markup: v.markup } : {});
 }
 
-/** Кнопка режима (tpc:on | tpc:off). */
+async function onBotSettingCallback(st, cb, lang) {
+  const { ack, edit } = cbCtx(st, cb, { alert: true, notModified: true, fallback: (text, markup) => say(st.to, text, markup ? { reply_markup: markup } : {}) });
+  if (!isAdmin(st.userId)) return ack(t('admin.only', lang));
+  const setting = cb.data.slice('tpc:bot:'.length);
+  const patches = {
+    topics: topicsSupport.enabled ? { has_topics_enabled: false } : { has_topics_enabled: true, has_topic_sidebar: true },
+    sidebar: { has_topic_sidebar: !topicsSupport.sidebar },
+    create: { allows_users_to_create_topics: !topicsSupport.usersCreate },
+    groups: { can_join_groups: !topicsSupport.canJoinGroups },
+  };
+  const patch = patches[setting];
+  if (!patch) return ack();
+  try {
+    await tg('setMySettings', patch);
+  } catch (e) {
+    log('setMySettings:', e.message);
+    return ack(t('topics.botFail', lang, { msg: errText(e, lang, errorRootOf(st.userId)) }));
+  }
+  if ('has_topics_enabled' in patch) topicsSupport.enabled = patch.has_topics_enabled;
+  if ('has_topic_sidebar' in patch) topicsSupport.sidebar = patch.has_topic_sidebar;
+  if ('allows_users_to_create_topics' in patch) topicsSupport.usersCreate = patch.allows_users_to_create_topics;
+  if ('can_join_groups' in patch) topicsSupport.canJoinGroups = patch.can_join_groups;
+  log('настройки бота изменены (setMySettings):', JSON.stringify(patch), '| администратор', st.userId);
+  await ack(t('topics.botSaved', lang));
+  return edit(topicsView(st, lang));
+}
+
+/** Кнопка режима (tpc:on | tpc:off) или глобальной настройки бота (tpc:bot:* — только администратор). */
 export async function onTopicsCallback(st, cb) {
-  const want = cb.data === 'tpc:on';
   const lang = langOf(st.userId);
+  if (cb.data?.startsWith('tpc:bot:')) return onBotSettingCallback(st, cb, lang);
+  const want = cb.data === 'tpc:on';
   const { ack, edit } = cbCtx(st, cb, { alert: true, fallback: (text) => say(st.to, text) });
   if (!topicsSupport.enabled) return ack(t('topics.unsupported', lang));
   if (want === topicsOn(st.userId)) return ack();
@@ -60,8 +123,8 @@ export async function onTopicsCallback(st, cb) {
   setTopicsMode(st.userId, want);
   log('режим «диалоги»', want ? 'включён' : 'выключен', '| пользователь', st.userId);
   await ack();
-  const text = `${t(want ? 'topics.enabled' : 'topics.disabled', lang)}\n\n${stateText(st, lang)}`;
-  await edit(text, modeKeyboard(want, lang));
+  const v = topicsView(st, lang);
+  await edit(`${t(want ? 'topics.enabled' : 'topics.disabled', lang)}\n\n${v.text}`, v.markup);
 }
 
 /**

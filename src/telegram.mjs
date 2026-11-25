@@ -209,7 +209,7 @@ export function richToPlain(md) {
     .replace(/<tg-button-row[^>]*>[\s\S]*?<\/tg-button-row>\n*/g, '')
     .replace(/!\[([^\]]*)\]\(tg:\/\/emoji\?id=\d+\)/g, '$1')
     .replace(/<tg-emoji[^>]*>([\s\S]*?)<\/tg-emoji>/g, '$1')
-    .replace(/<\/?(details|summary|footer|tg-thinking)[^>]*>/g, '')
+    .replace(/<\/?(details|summary|footer|tg-thinking|blockquote|cite)[^>]*>/g, '')
     .replace(/<\/?code>/g, '`')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

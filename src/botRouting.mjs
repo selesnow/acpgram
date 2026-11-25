@@ -114,7 +114,7 @@ export const COMMANDS = [
   { name: 'sessions', menu: true, button: true, run: (d, st) => d.handleSessions(st) },
   { name: 'stop', menu: true, button: true, run: stopCommand },
   { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
-  { name: 'topics', menu: (d) => d.topicsSupport.enabled, button: true, run: (d, st) => d.handleTopics(st) },
+  { name: 'topics', menu: (d, admin) => admin || d.topicsSupport.enabled, button: true, run: (d, st) => d.handleTopics(st) },
   { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
   { name: 'keyboard', menu: false, run: (d, st) => sendReplyKeyboard(d, st) },
   { name: 'help', menu: true, run: helpCommand },
@@ -183,7 +183,7 @@ async function onRawCommandCallback(d, st, cb) {
  * (язык меню задаёт приложение Telegram, а не /language). У администратора — дополнительно /users, /active, /invite.
  */
 const menuForWith = (d, lang, admin) =>
-  COMMANDS.filter((c) => (typeof c.menu === 'function' ? c.menu(d) : c.menu) && (admin || !c.admin)).map((c) => ({ command: c.name, description: d.t(`menu.${c.name}`, lang) }));
+  COMMANDS.filter((c) => (typeof c.menu === 'function' ? c.menu(d, admin) : c.menu) && (admin || !c.admin)).map((c) => ({ command: c.name, description: d.t(`menu.${c.name}`, lang) }));
 
 async function setupCommandsWith(d) {
   await d.tg('setMyCommands', { scope: { type: 'default' }, commands: menuForWith(d, 'en', false) });
@@ -387,6 +387,10 @@ export const createBotRouting = (d) => {
 
   function deniedUpdate(from, cb, chatId, msg) {
     if (cb) return d.tg('answerCallbackQuery', { callback_query_id: cb.id, text: d.t('access.denied', d.langOf(from.id)) }).catch(() => {});
+    if (msg?.write_access_allowed?.inviter) {
+      d.log('приглашение через botinvite, id =', from.id, from.username);
+      return d.handleBotInvite?.(from, chatId, msg.write_access_allowed.inviter);
+    }
     if (msg?.text) {
       d.log('нет доступа, id =', from.id, from.username);
       return d.handleUnknownUser(from, chatId, msg.text);

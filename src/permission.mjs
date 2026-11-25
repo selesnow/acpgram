@@ -13,6 +13,9 @@ import { toolMeta } from './ui.mjs';
 
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000;
 const PERM_KINDS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'];
+const EXPANDABLE_LINES = 10;
+const EXPANDABLE_CHARS = 500;
+const needsExpandable = (s) => Boolean(s) && (s.length > EXPANDABLE_CHARS || s.split('\n').length >= EXPANDABLE_LINES);
 let permSeq = 0;
 
 /**
@@ -92,26 +95,32 @@ export async function askPermission(st, params) {
     return reject ? { outcome: 'selected', optionId: reject.optionId } : { outcome: 'cancelled' };
   }
   const isCmd = info.kind === 'execute' && info.title;
-  const body = isCmd
-    ? `${escHtml(clipped(info.description || t('step.command', lang), 400))}\n\n<pre>${escHtml(clipped(info.title, 1200))}</pre>`
-    : `<code>${escHtml(clipped(what, 600))}</code>`;
+  const cmdText = isCmd ? clipped(info.title, 1200) : '';
+  const cmdDesc = isCmd ? escHtml(clipped(info.description || t('step.command', lang), 400)) : '';
+  const body = isCmd ? `${cmdDesc}\n\n<pre>${escHtml(cmdText)}</pre>` : `<code>${escHtml(clipped(what, 600))}</code>`;
   const change = isCmd ? null : diffOf(tc);
   const diff = change ? lineDiff(change.oldText, change.newText, { maxLines: 30 }).text : '';
-  const diffBlock = diff ? `\n\n<pre><code class="language-diff">${escHtml(clipped(diff, 1800))}</code></pre>` : '';
+  const diffText = diff ? clipped(diff, 1800) : '';
+  const diffBlock = diffText ? `\n\n<pre><code class="language-diff">${escHtml(diffText)}</code></pre>` : '';
   const text = `${t('perm.ask', lang)}\n\n<b>${escHtml(head)}</b>: ${body}${diffBlock}`;
+  // длинную команду или дифф сворачиваем в expandable blockquote с блоком кода (Bot API 10.5): видно начало и сразу кнопки
+  const richHtml = isCmd && needsExpandable(cmdText)
+    ? `<p>${escHtml(t('perm.ask', lang))}</p><p><b>${escHtml(head)}</b>: ${cmdDesc}</p><blockquote expandable><pre>${escHtml(cmdText)}</pre></blockquote>`
+    : !isCmd && needsExpandable(diffText)
+      ? `<p>${escHtml(t('perm.ask', lang))}</p><p><b>${escHtml(head)}</b>: <code>${escHtml(clipped(what, 600))}</code></p><blockquote expandable><pre><code class="language-diff">${escHtml(diffText)}</code></pre></blockquote>`
+      : null;
 
   const permId = dbId();
-  const msg = await tg('sendMessage', {
-    ...dest(st.to),
-    text,
-    parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: options.map((o, i) => {
-        const style = optionStyle(engine, o);
-        return [{ text: optionLabel(engine, o, lang, { keys, what: meta.label }), callback_data: `perm:${seq}:${i}`, ...(style ? { style } : {}) }];
-      }),
-    },
-  });
+  const replyMarkup = {
+    inline_keyboard: options.map((o, i) => {
+      const style = optionStyle(engine, o);
+      return [{ text: optionLabel(engine, o, lang, { keys, what: meta.label }), callback_data: `perm:${seq}:${i}`, ...(style ? { style } : {}) }];
+    }),
+  };
+  const sendPlain = () => tg('sendMessage', { ...dest(st.to), text, parse_mode: 'HTML', reply_markup: replyMarkup });
+  const msg = richHtml
+    ? await tg('sendRichMessage', { ...dest(st.to), rich_message: { html: richHtml }, reply_markup: replyMarkup }).catch((e) => (log('sendRichMessage (разрешение):', e.message), sendPlain()))
+    : await sendPlain();
   const chatId = st.chatId;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {

@@ -11,6 +11,8 @@ import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView,
 import { cbCtx } from './uiActions.mjs';
 
 const INVITE_TTL_MS = 24 * 3600_000;
+const BOT_INVITE_TTL_MS = 15 * 60_000; // окно автоподключения после выбора уровня в /invite (t.me/botinvite/<bot>, до 10 контактов)
+const BOT_INVITE_KEY = 'botInvite';
 const REQUEST_COOLDOWN_MS = 3600_000; // повторный запрос доступа от одного человека — не чаще раза в час
 const NOTICE_COOLDOWN_MS = 10 * 60_000; // напоминание «запрос уже отправлен» — не чаще раза в 10 минут
 const STRANGER_REPLY_COOLDOWN_MS = 5 * 60_000; // незнакомцу — не больше одного ответа за любое число попыток, кроме входа по валидной ссылке
@@ -43,6 +45,58 @@ export const welcomeNote = (lang) => t('welcome.note', lang);
 
 /** Текст о выданном доступе: при подключении по приглашению или по запросу. */
 const grantedText = (level, lang, byAdmin) => t(byAdmin ? 'access.grantedByAdmin' : 'access.granted', lang, { level: levelName(level, lang), hint: levelHint(level, lang), note: welcomeNote(lang) });
+
+const botInviteLink = () => (botInfo.username ? `https://t.me/botinvite/${botInfo.username}` : null);
+
+function activeBotInvite(now = Date.now()) {
+  try {
+    const raw = db.getSetting(BOT_INVITE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return isLevel(data?.level) && Number(data?.until) > now ? data.level : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Сервисное сообщение WriteAccessAllowed с полем inviter (Bot API 10.5): владелец бота пригласил пользователя
+ * из контактов по ссылке https://t.me/botinvite/<bot>. Доступ выдаётся только если inviter.id === ADMIN_ID:
+ * - в течение 15 минут после выбора уровня в /invite — сразу выбранный уровень и приветствие сотруднику;
+ * - иначе — карточка выбора уровня администратору (без сообщения «нет доступа» приглашённому).
+ */
+export async function handleBotInvite(from, chatId, inviter, { now = Date.now() } = {}) {
+  if (!from || from.is_bot) return;
+  if (inviter?.id !== ADMIN_ID) {
+    log('botinvite: пригласил не администратор, пропуск | пользователь', from.id, '| inviter', inviter?.id);
+    return;
+  }
+  const al = adminLang();
+  const lang = langOf(from.id);
+  const level = activeBotInvite(now);
+  if (level) {
+    if (!db.upsertUser({ user_id: from.id, username: from.username, first_name: from.first_name, level, added_by: ADMIN_ID })) {
+      log('доступ через botinvite не сохранён (ошибка базы)', from.id);
+      return say(ADMIN_ID, t('access.saveFail', al));
+    }
+    db.setRequestStatus(from.id, 'approved');
+    lastStrangerReply.delete(from.id);
+    log('подключён через botinvite', from.id, from.username, level);
+    await say(chatId, grantedText(level, lang, true));
+    return say(ADMIN_ID, t('adm.joinedByBotInvite', al, { who: who(from), level: levelName(level, al) }));
+  }
+  db.saveRequest(from);
+  const prev = db.getUser(from.id);
+  log('приглашён через botinvite (ожидание выбора уровня)', from.id, from.username);
+  return say(ADMIN_ID, t('adm.botInvitePick', al, { who: who(from), id: from.id, note: prev?.status === 'revoked' ? t('adm.reqRevokedBefore', al) : '' }), {
+    reply_markup: {
+      inline_keyboard: [
+        ...LEVEL_KEYS.map((key) => [{ text: t('adm.reqGrant', al, { level: levelName(key, al), hint: levelHint(key, al) }), callback_data: `adm:g:${from.id}:${key}` }]),
+        [{ text: t('btn.reject', al), callback_data: `adm:d:${from.id}` }],
+      ],
+    },
+  });
+}
 
 // ---------- незнакомые пользователи ----------
 
@@ -196,9 +250,13 @@ async function inviteAction({ al, a, ack, edit }) {
   if (!isLevel(a)) return ack();
   const code = randomBytes(9).toString('base64url');
   db.createInvite(code, a, ADMIN_ID, new Date(Date.now() + INVITE_TTL_MS).toISOString());
+  db.setSetting(BOT_INVITE_KEY, JSON.stringify({ level: a, until: Date.now() + BOT_INVITE_TTL_MS }));
   log('приглашение создано: уровень', a, '| администратор', ADMIN_ID);
   await ack();
-  return edit(t('adm.inviteMade', al, { level: levelName(a, al), bot: botInfo.username, code }));
+  const link = botInviteLink();
+  const text = `${t('adm.inviteMade', al, { level: levelName(a, al), bot: botInfo.username, code })}${link ? `\n\n${t('adm.inviteContactsNote', al)}` : ''}`;
+  const markup = link ? { inline_keyboard: [[{ text: t('adm.inviteContactsBtn', al), url: link }]] } : { inline_keyboard: [] };
+  return edit(text, markup);
 }
 
 async function requestAction({ action, al, id, b, ack, edit }) {

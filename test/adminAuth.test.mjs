@@ -67,9 +67,11 @@ test('/invite: администратор выбирает уровень, од�
 
   await admin.onAdminCallback(press('adm:i:normal'));
   calls = take();
-  const made = edits(calls)[0]?.body.text ?? '';
+  const editBody = edits(calls)[0]?.body;
+  const made = editBody?.text ?? '';
   assert.deepEqual(acks(calls), ['']);
   assert.ok(made.includes(t('adm.inviteMade', lang, { level: ctx.levelName('normal', lang), bot: ctx.botInfo.username, code: '' }).split('?start=')[0]));
+  assert.equal(editBody?.reply_markup?.inline_keyboard?.[0]?.[0]?.url, `https://t.me/botinvite/${ctx.botInfo.username}`);
   const code = /[?&]start=([A-Za-z0-9_-]+)/.exec(made)?.[1];
   assert.ok(code, 'в ответе администратору есть код приглашения');
 
@@ -174,6 +176,52 @@ test('решение администратора: выдача прав по з
   admin.sweepUnknownUsers(0);
   await admin.handleUnknownUser(from(rejected), rejected, 'можно ещё раз?');
   assert.deepEqual(take(), [], 'отклонённый запрос больше не отвечает');
+});
+
+test('handleBotInvite: массовое приглашение из контактов (окно /invite, прямой botinvite и чужой inviter)', async () => {
+  const autoUser = userId(40);
+  const pickUser = userId(41);
+  const strangerInviter = userId(42);
+  const fakeTarget = userId(43);
+  for (const id of [autoUser, pickUser, fakeTarget]) ctx.setLang(id, lang);
+
+  // чужой inviter (не ADMIN_ID) — игнорируется, доступ не выдаётся
+  await admin.handleBotInvite(from(fakeTarget), fakeTarget, from(strangerInviter));
+  assert.equal(ctx.db.getUser(fakeTarget), null);
+  assert.deepEqual(take(), []);
+
+  // после /invite (adm:i:read) открыто 15-минутное окно — приглашённый сразу получает уровень и приветствие
+  await admin.onAdminCallback(press('adm:i:read'));
+  take();
+  await admin.handleBotInvite(from(autoUser), autoUser, from(ADMIN));
+  let calls = take();
+  assert.equal(ctx.db.getUser(autoUser)?.level, 'read');
+  assert.ok(toUser(calls, autoUser).includes(ctx.levelName('read', lang)));
+  assert.ok(toUser(calls, ADMIN).includes(ctx.levelName('read', lang)));
+
+  // после истечения окна — администратору приходит выбор уровня, приглашённому «нет доступа» не шлётся
+  await admin.handleBotInvite(from(pickUser), pickUser, from(ADMIN), { now: Date.now() + 20 * 60_000 });
+  calls = take();
+  assert.equal(ctx.db.getUser(pickUser), null);
+  assert.equal(toUser(calls, pickUser), '');
+  assert.ok(toUser(calls, ADMIN).includes(`id ${pickUser}`));
+  assert.ok(buttons(calls).some((b) => b.callback_data === `adm:g:${pickUser}:normal`));
+
+  // администратор выбирает уровень — сотрудник сразу получает приветствие
+  await admin.onAdminCallback(press(`adm:g:${pickUser}:normal`));
+  calls = take();
+  assert.equal(ctx.db.getUser(pickUser)?.level, 'normal');
+  assert.ok(toUser(calls, pickUser).includes(ctx.levelName('normal', lang)));
+
+  // бот в поле from игнорируется; повторное приглашение ранее отозванного пользователя помечается в карточке
+  await admin.handleBotInvite({ ...from(userId(44)), is_bot: true }, userId(44), from(ADMIN));
+  assert.deepEqual(take(), []);
+  const revokedUser = userId(45);
+  ctx.db.upsertUser({ user_id: revokedUser, username: 'revoked_bi', first_name: 'Rev', level: 'normal', added_by: ADMIN });
+  ctx.db.revokeUser(revokedUser);
+  await admin.handleBotInvite(from(revokedUser), revokedUser, from(ADMIN), { now: Date.now() + 20 * 60_000 });
+  calls = take();
+  assert.ok(toUser(calls, ADMIN).includes(t('adm.reqRevokedBefore', lang).trim()));
 });
 
 test('уровень доступа: администратор меняет уровень, сотрудник получает сообщение, режим агента становится читающим', async () => {

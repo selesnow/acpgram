@@ -558,6 +558,7 @@ test('/git: «Изменения» — список файлов, diff в соо
   writeFileSync(join(proj, 'page.html'), '<p>hi</p>\n<p>новый абзац</p>\n');
   writeFileSync(join(proj, 'notes.txt'), 'заметка\n');
   writeFileSync(join(proj, '.env.local'), 'KEY=sekret-999\n');
+  writeFileSync(join(proj, 'mid.txt'), Array.from({ length: 25 }, (_, i) => `строка ${i}`).join('\n'));
   writeFileSync(join(proj, 'big.txt'), Array.from({ length: 900 }, (_, i) => `строка ${i}`).join('\n'));
   await U.handleGit(ann);
   const main = buttons(take());
@@ -565,7 +566,7 @@ test('/git: «Изменения» — список файлов, diff в соо
 
   await U.onGitCallback(ann, press(ANN, 'gt:ch:0'));
   const ch = take().filter((c) => c.method === 'editMessageText');
-  assert.match(texts(ch), /Изменено файлов: 4 · добавлено строк: 90\d · убрано: \d/);
+  assert.match(texts(ch), /Изменено файлов: 5 · добавлено строк: 92\d · убрано: \d/);
   const files = buttons(ch).filter((x) => x.callback_data.startsWith('gt:cf:'));
   assert.ok(files.some((x) => x.text === '✏️ page.html +2 −1') && files.some((x) => x.text === '🆕 notes.txt +1'), JSON.stringify(files.map((x) => x.text)));
   assert.ok(buttons(ch).some((x) => x.callback_data === 'gt:cm:o' && x.text === '⬆️ Не отправлено: 1'));
@@ -575,6 +576,33 @@ test('/git: «Изменения» — список файлов, diff в соо
   const diff = texts(take().filter((c) => c.method === 'editMessageText'));
   assert.match(diff, /^✏️ <code>page\.html<\/code>\n<pre><code class="language-diff">/);
   assert.match(diff, /\+&lt;p&gt;новый абзац&lt;\/p&gt;/, 'содержимое экранировано');
+
+  await U.onGitCallback(ann, press(ANN, cf('mid.txt')));
+  const midEdit = take().find((c) => c.method === 'editMessageText')?.body;
+  assert.match(midEdit?.rich_message?.html ?? '', /^<p>🆕 <code>mid\.txt<\/code><\/p><blockquote expandable><pre><code class="language-diff">/);
+
+  // дифф 3200..8000 символов идёт через rich_message, а при отказе Telegram — откатывается на отправку .diff файлом
+  writeFileSync(join(proj, 'rich_fb.txt'), Array.from({ length: 420 }, (_, i) => `строка ${i}`).join('\n'));
+  await U.onGitCallback(ann, press(ANN, 'gt:ch:0'));
+  const fbBtn = buttons(take()).find((x) => x.text.includes('rich_fb.txt')).callback_data;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/editMessageText') && typeof init.body === 'string' && JSON.parse(init.body).rich_message) {
+      return { json: async () => ({ ok: false, error_code: 400, description: 'Bad Request: rich rejected' }) };
+    }
+    return origFetch(url, init);
+  };
+  try {
+    await U.onGitCallback(ann, press(ANN, fbBtn));
+    const fbCalls = take();
+    assert.ok(fbCalls.some((c) => c.method === 'sendDocument'), 'при отказе rich_message длинный diff уходит файлом');
+    assert.match(texts(fbCalls), /большие — отправил их файлом/);
+  } finally {
+    globalThis.fetch = origFetch;
+    rmSync(join(proj, 'rich_fb.txt'));
+  }
+  await U.onGitCallback(ann, press(ANN, 'gt:ch:0'));
+  take();
 
   await U.onGitCallback(ann, press(ANN, cf('.env.local')));
   const secret = take();
@@ -603,11 +631,11 @@ test('/git: «Изменения» — список файлов, diff в соо
   // с несохранёнными изменениями не переключаемся
   await U.onGitCallback(ann, press(ANN, branchBtn('feature-x').callback_data));
   const dirty = take();
-  assert.match(texts(dirty), /есть несохранённые изменения \(файлов: 4\)/);
+  assert.match(texts(dirty), /есть несохранённые изменения \(файлов: 5\)/);
   assert.ok(buttons(dirty).some((x) => x.callback_data === 'gt:save'));
   assert.equal((await G.repoState(proj, { env })).branch, 'main');
 
-  for (const f of ['notes.txt', 'big.txt']) rmSync(join(proj, f));
+  for (const f of ['notes.txt', 'mid.txt', 'big.txt']) rmSync(join(proj, f));
   await git(proj, 'checkout', '--', 'page.html', '.env.local');
   // пока агент выполняет запрос — отказ; сессия агента после переключения не продолжается
   ann.busy = true;

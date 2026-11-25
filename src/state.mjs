@@ -106,8 +106,8 @@ export function levelLabel(userId) {
 
 // ---- темы в личном чате (Bot API 9.3): режим «диалоги» ----
 
-/** Включены ли у бота темы в личном чате (getMe: has_topics_enabled) и могут ли пользователи сами их создавать. Заполняется при старте. */
-export const topicsSupport = { enabled: false, usersCreate: false };
+/** Настройки тем и групп бота из getMe (BotFullInfo, Bot API 10.5). Заполняется при старте и при /topics. */
+export const topicsSupport = { enabled: false, usersCreate: false, sidebar: false, canJoinGroups: true };
 
 /**
  * Режим «диалоги» у пользователя: каждая тема чата с ботом — отдельный диалог со своей сессией агента, проектом и движком.

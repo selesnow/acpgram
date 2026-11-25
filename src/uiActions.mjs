@@ -10,12 +10,22 @@ export function cbCtx(st = {}, cb = {}, options = {}) {
     api('answerCallbackQuery', { callback_query_id: cb.id, ...(text ? { text, ...(alert ? { show_alert: true } : {}) } : {}) }).catch(() => {});
   const edit = (view, markup) => {
     const text = typeof view === 'string' ? view : view?.text;
+    const richHtml = view && typeof view === 'object' ? view.richHtml : null;
     const replyMarkup = markup ?? (typeof view === 'string' ? undefined : view?.markup) ?? { inline_keyboard: [] };
-    return api('editMessageText', { chat_id: chatId, message_id: messageId, text, ...(html ? { parse_mode: 'HTML' } : {}), reply_markup: replyMarkup }).catch((e) => {
-      const message = String(e?.message ?? e ?? '');
-      if (notModified && (notModified === 'loose' ? /not modified/i.test(message) : isNotModified(e))) return;
+    const isSame = (e) => notModified && (notModified === 'loose' ? /not modified/i.test(String(e?.message ?? e ?? '')) : isNotModified(e));
+    const onErr = (e) => {
+      if (isSame(e)) return;
       if (fallback) return typeof fallback === 'function' ? fallback(text, replyMarkup, view) : send(st.to, text, fallback);
       if (label) logger(label, e.message);
+    };
+    const sendPlain = () =>
+      api('editMessageText', { chat_id: chatId, message_id: messageId, text, ...(html ? { parse_mode: 'HTML' } : {}), reply_markup: replyMarkup }).catch(onErr);
+    if (!richHtml) return sendPlain();
+    return api('editMessageText', { chat_id: chatId, message_id: messageId, rich_message: { html: richHtml }, reply_markup: replyMarkup }).catch((e) => {
+      if (isSame(e)) return;
+      if (typeof view.onRichError === 'function') return view.onRichError(e);
+      if (text) return sendPlain();
+      return onErr(e);
     });
   };
   return { ack, edit, chatId, messageId };

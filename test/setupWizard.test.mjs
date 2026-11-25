@@ -287,17 +287,59 @@ result.env = env;
   assert.equal(result.env.DEFAULT_ENGINE, 'gemini');
 });
 
+test('setupBotSettings: setMySettings, пропуск готовых настроек и отказ API; active_usernames в setupToken', () => {
+  const h = harness({
+    prompts: [
+      { method: 'secret', answer: '123:ALIAS' },
+      { method: 'yes', answer: true },
+      { method: 'yes', answer: false },
+      { method: 'yes', answer: true },
+    ],
+    fetchRules: [
+      { match: '/getMe', result: { active_usernames: ['alias_bot'], first_name: 'Alias' } },
+      { match: '/setMySettings', result: true },
+      { match: '/setMySettings', ok: false, description: 'Bad Request' },
+    ],
+  });
+  const { result, calls, stdout } = h.run(`
+const p = P.prompter();
+const env = {};
+result.me = await S.setupToken(p, env);
+result.already = await S.setupBotSettings(p, env, { has_topics_enabled: true, has_topic_sidebar: true, can_join_groups: false });
+result.applied = await S.setupBotSettings(p, env, result.me);
+result.declined = await S.setupBotSettings(p, env, result.me);
+result.failed = await S.setupBotSettings(p, env, result.me);
+`);
+  assert.equal(result.me.username, 'alias_bot');
+  assert.equal(result.already, false);
+  assert.equal(result.applied, true);
+  assert.equal(result.declined, false);
+  assert.equal(result.failed, false);
+  const setCalls = calls.filter((c) => c.method === 'fetch' && c.args[0].includes('/setMySettings'));
+  assert.equal(setCalls.length, 2);
+  assert.deepEqual(setCalls[0].args[1], {
+    has_topics_enabled: true,
+    has_topic_sidebar: true,
+    allows_users_to_create_topics: true,
+    can_join_groups: false,
+  });
+  assert.match(stdout, /настройки бота уже заданы/);
+  assert.match(stdout, /настройки бота применены/);
+  assert.match(stdout, /не удалось применить настройки бота/);
+});
+
 test('runSetup: порядок шагов, сохранение .env, тестовое сообщение и отказ от службы', () => {
   const h = harness({
     prompts: [
       { method: 'secret', answer: '123:SECRET' },
+      { method: 'yes', answer: true }, // setMySettings
       { method: 'yes', answer: true },
       { method: 'ask', answer: '__ROOT__' },
       { method: 'yes', answer: false },
       { method: 'yes', answer: false },
       { method: 'yes', answer: false },
     ],
-    fetchRules: [...adminFetch(), { match: '/sendMessage', result: { message_id: 1 } }],
+    fetchRules: [ADMIN_ME, { match: '/setMySettings', result: true }, ...adminFetch().slice(1), { match: '/sendMessage', result: { message_id: 1 } }],
     engineChecks: [[]],
     serviceResult: { ok: true },
   });
@@ -313,9 +355,10 @@ result.db = existsSync(process.env.ACPGRAM_HOME + '/data/bot.db');
   assert.ok(result.envFile.toLowerCase().includes(('PROJECTS_ROOT=' + h.root).toLowerCase()), result.envFile);
   assert.match(result.envFile, /GIT_AGENT_AUTH=1/);
   assert.deepEqual(calls.filter((c) => ['secret', 'ask', 'yes', 'close'].includes(c.method)).map((c) => c.method), [
-    'secret', 'yes', 'ask', 'yes', 'yes', 'yes', 'close',
+    'secret', 'yes', 'yes', 'ask', 'yes', 'yes', 'yes', 'close',
   ]);
   assert.deepEqual(calls.filter((c) => c.method === 'installService'), []);
+  assert.ok(calls.some((c) => c.method === 'fetch' && c.args[0].includes('/setMySettings')));
   assert.ok(calls.some((c) => c.method === 'fetch' && c.args[0].includes('/sendMessage')));
 });
 
@@ -323,6 +366,7 @@ test('runSetup: отказ сохранить .env прерывает масте
   const h = harness({
     prompts: [
       { method: 'secret', answer: '123:TO\nKEN' },
+      { method: 'yes', answer: false }, // пропустить setMySettings
       { method: 'yes', answer: true },
       { method: 'ask', answer: '__ROOT__' },
       { method: 'yes', answer: false },
@@ -337,6 +381,7 @@ result.envFile = existsSync(process.env.ACPGRAM_HOME + '/.env');
 `);
   assert.deepEqual(result.setup, { ok: false, service: false });
   assert.equal(result.envFile, false);
+  assert.equal(calls.some((c) => c.method === 'fetch' && c.args[0].includes('/setMySettings')), false);
   assert.deepEqual(calls.filter((c) => c.method === 'installService'), []);
   assert.equal(calls.at(-1).method, 'close');
 });

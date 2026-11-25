@@ -85,7 +85,7 @@ function telegram(handlers = {}) {
   globalThis.fetch = async (url, init) => {
     const method = String(url).split('/').pop().split('?')[0];
     const body = init.body instanceof FormData ? Object.fromEntries([...init.body.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : '[file]'])) : JSON.parse(init.body);
-    const result = method === 'sendMessage' ? { message_id: messageId++ } : {};
+    const result = method === 'sendMessage' || method === 'sendRichMessage' ? { message_id: messageId++ } : {};
     calls.push({ method, body });
     await handlers[method]?.({ body, result, calls });
     return { json: async () => ({ ok: true, result }) };
@@ -229,6 +229,105 @@ test('runTurn: запрос разрешения, ответ кнопкой и �
     a.close();
     tg.restore();
     setGitAvailable(false);
+  }
+});
+
+test('runTurn: длинный дифф в запросе разрешения уходит сворачиваемой цитатой в sendRichMessage (Bot API 10.5)', async () => {
+  const st = state(null);
+  let resolveCallback;
+  const callbackDone = new Promise((r) => (resolveCallback = r));
+  const tg = telegram({
+    sendRichMessage: ({ body, result }) => {
+      if (!body.rich_message?.html) return;
+      const data = body.reply_markup.inline_keyboard[0][0].callback_data;
+      setTimeout(async () => {
+        try {
+          await onPermissionCallback(st, { id: 'cb-rich-perm', data, message: { chat: { id: 1 }, message_id: result.message_id } });
+          resolveCallback();
+        } catch (e) {
+          resolveCallback(e);
+        }
+      }, 0);
+    },
+  });
+  let outcome = null;
+  const oldText = Array.from({ length: 12 }, (_, i) => `old ${i}`).join('\n');
+  const newText = Array.from({ length: 12 }, (_, i) => `new ${i}`).join('\n');
+  const a = agent(st, 's-perm-rich', async (a, _blocks, st) => {
+    outcome = await a.onPermission({
+      sessionId: 's-perm-rich',
+      toolCall: { toolCallId: 'c2', kind: 'edit', title: 'app.js', content: [{ type: 'diff', path: 'app.js', oldText, newText }] },
+      options: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow' }],
+    });
+    st.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Изменено' } });
+    return { stopReason: 'end_turn' };
+  });
+  try {
+    await runTurn(st, 'обнови app.js');
+    const callbackError = await callbackDone;
+    if (callbackError) throw callbackError;
+    assert.deepEqual(outcome, { outcome: 'selected', optionId: 'allow-once' });
+    const ask = tg.calls.find((c) => c.method === 'sendRichMessage' && c.body.rich_message?.html);
+    assert.ok(ask, 'длинное разрешение ушло через sendRichMessage');
+    assert.match(ask.body.rich_message.html, /<blockquote expandable><pre><code class="language-diff">/);
+    assert.equal(ask.body.reply_markup.inline_keyboard[0][0].callback_data.startsWith('perm:'), true);
+  } finally {
+    a.close();
+    tg.restore();
+  }
+});
+
+test('runTurn: длинная команда в разрешении откатывается на sendMessage при ошибке sendRichMessage', async () => {
+  const st = state(null);
+  let resolveCallback;
+  const callbackDone = new Promise((r) => (resolveCallback = r));
+  const calls = [];
+  const original = globalThis.fetch;
+  let messageId = 300;
+  globalThis.fetch = async (url, init) => {
+    const method = String(url).split('/').pop().split('?')[0];
+    const body = init.body instanceof FormData ? {} : JSON.parse(init.body);
+    calls.push({ method, body });
+    if (method === 'sendRichMessage' && body.rich_message?.html) {
+      return { status: 400, json: async () => ({ ok: false, error_code: 400, description: 'Bad Request: rich unsupported' }) };
+    }
+    const result = method === 'sendMessage' || method === 'sendRichMessage' ? { message_id: messageId++ } : {};
+    if (method === 'sendMessage' && body.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data?.startsWith('perm:')) {
+      const data = body.reply_markup.inline_keyboard[0][0].callback_data;
+      setTimeout(async () => {
+        try {
+          await onPermissionCallback(st, { id: 'cb-fb-perm', data, message: { chat: { id: 1 }, message_id: result.message_id } });
+          resolveCallback();
+        } catch (e) {
+          resolveCallback(e);
+        }
+      }, 0);
+    }
+    return { status: 200, json: async () => ({ ok: true, result }) };
+  };
+  let outcome = null;
+  const longCmd = Array.from({ length: 12 }, (_, i) => `echo line_${i}`).join('\n');
+  const a = agent(st, 's-perm-cmd-fb', async (a, _blocks, st) => {
+    outcome = await a.onPermission({
+      sessionId: 's-perm-cmd-fb',
+      toolCall: { toolCallId: 'c3', kind: 'execute', title: longCmd, rawInput: { command: longCmd } },
+      options: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow' }],
+    });
+    st.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Выполнено' } });
+    return { stopReason: 'end_turn' };
+  });
+  try {
+    await runTurn(st, 'выполни скрипт');
+    const callbackError = await callbackDone;
+    if (callbackError) throw callbackError;
+    assert.deepEqual(outcome, { outcome: 'selected', optionId: 'allow-once' });
+    const richTry = calls.find((c) => c.method === 'sendRichMessage' && c.body.rich_message?.html);
+    assert.match(richTry?.body.rich_message?.html ?? '', /<blockquote expandable><pre>echo line_0/);
+    const fallbackMsg = calls.find((c) => c.method === 'sendMessage' && c.body.parse_mode === 'HTML');
+    assert.match(fallbackMsg?.body.text ?? '', /<pre>echo line_0/);
+  } finally {
+    a.close();
+    globalThis.fetch = original;
   }
 });
 

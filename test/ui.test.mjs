@@ -178,6 +178,7 @@ test('richToPlain: запасной обычный текст без служе�
   assert.ok(plain.includes('/project') && plain.includes('Ход работы'));
   assert.equal(richToPlain(`a ![💭](tg://emoji?id=${ANIM.thinking}) b`), 'a 💭 b');
   assert.equal(richToPlain(`a <tg-emoji emoji-id="${ANIM.thinking}">💭</tg-emoji> b`), 'a 💭 b');
+  assert.equal(richToPlain('<blockquote expandable>строка 1\nстрока 2<cite>автор</cite></blockquote>'), 'строка 1\nстрока 2автор');
 });
 
 test('fixTables: пустая строка перед таблицей после абзаца или пункта списка, код и готовые таблицы не трогает', () => {

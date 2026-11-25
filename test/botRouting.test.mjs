@@ -90,6 +90,7 @@ const depsFor = (overrides = {}) => {
       if (!states.has(key)) states.set(key, { userId, chatId, threadId, to: chatId, busy: false, agent: null, project: '/p' });
       return states.get(key);
     },
+    handleBotInvite: rec('handleBotInvite'),
     handleEngine: rec('handleEngine'),
     handleFiles: rec('handleFiles'),
     handleGit: rec('handleGit'),
@@ -210,6 +211,11 @@ test('чужой пользователь: текст уходит админи�
 
   await routing.handleUpdate(callback(STRANGER, 'ui:help'));
   assert.deepEqual(first(calls, 'tg'), ['tg', 'answerCallbackQuery', { callback_query_id: 'cb', text: t('access.denied', 'en') }]);
+  assert.equal(first(calls, 'handleUnknownUser'), undefined);
+  calls.length = 0;
+
+  await routing.handleUpdate({ message: { chat: { id: STRANGER, type: 'private' }, from: from(STRANGER), write_access_allowed: { inviter: from(ADMIN) } } });
+  assert.deepEqual(first(calls, 'handleBotInvite'), ['handleBotInvite', from(STRANGER), STRANGER, from(ADMIN)]);
   assert.equal(first(calls, 'handleUnknownUser'), undefined);
   calls.length = 0;
 
@@ -512,6 +518,10 @@ test('setupCommands и sweepUpdateLimits: меню всех языков и уб
   await routing.setupCommands();
   const tg = all(calls, 'tg');
   assert.equal(tg.filter((c) => c[1] === 'setMyCommands').length, 6);
+  const adminMenu = tg.find((c) => c[1] === 'setMyCommands' && c[2]?.scope?.chat_id === ADMIN)?.[2]?.commands?.map((x) => x.command) ?? [];
+  const userMenu = tg.find((c) => c[1] === 'setMyCommands' && !c[2]?.scope)?.[2]?.commands?.map((x) => x.command) ?? [];
+  assert.ok(adminMenu.includes('topics'), 'администратору /topics доступен даже при выключенных темах');
+  assert.ok(!userMenu.includes('topics'), 'обычным пользователям /topics скрыт при выключенных темах');
   assert.deepEqual(tg.at(-1), ['tg', 'setChatMenuButton', { menu_button: { type: 'link' } }]);
 
   const limited = depsFor({ UPDATE_WINDOW_MS: 1 });
