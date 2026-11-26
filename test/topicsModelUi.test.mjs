@@ -260,13 +260,22 @@ test('/new: создаёт тему, сохраняет её и показыва
   assert.equal(db.getTopic(USER, 77).name, saved.name);
 });
 
-test('темы, созданные агентом, получают reply-клавиатуру в приветствии', async () => {
+test('темы, созданные агентом, получают reply-клавиатуру в приветствии и уважают /keyboard off', async () => {
   const st = freshState();
   calls.length = 0;
   await offerAgentTopics(st, ['Design'], 'en');
   const hello = all('sendMessage').find((c) => c.body.message_thread_id === 77);
   assert.ok(hello);
   assert.deepEqual(hello.body.reply_markup, replyKeyboard('en', { admin: true, topics: 'on' }));
+  assert.equal(db.getSetting(`replyKb:${USER}:77`), '1');
+
+  db.setSetting(`replyKbOff:${USER}`, '1');
+  calls.length = 0;
+  await newTopic(st, { project });
+  const mutedHello = all('sendMessage').find((c) => c.body.message_thread_id === 77);
+  assert.ok(mutedHello);
+  assert.equal(mutedHello.body.reply_markup, undefined, 'при отключённой клавиатуре новая тема без reply_markup');
+  db.setSetting(`replyKbOff:${USER}`, '');
 });
 
 test('/model: виджет, обычное меню и поиск по каталогу', async () => {

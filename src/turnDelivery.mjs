@@ -3,11 +3,11 @@ import { db, dbg, log, say } from './ctx.mjs';
 import { FILE_PLACEHOLDER, attachFiles, outboxDir } from './files.mjs';
 import { offerGitActions } from './gitUi.mjs';
 import { errText, t } from './i18n.mjs';
-import { errorRootOf, topicProject, topicsOn, userPath } from './state.mjs';
+import { errorRootOf, markReplyKeyboard, needReplyKeyboard, replyKeyboardOpts, topicProject, topicsOn, userPath } from './state.mjs';
 import { mediaIdsOf, sendFile, sendRich } from './telegram.mjs';
 import { renameTopic, titleFromRequest, topicName } from './topics.mjs';
 import { offerAgentTopics } from './topicsUi.mjs';
-import { finalExtras, finalMessages } from './ui.mjs';
+import { finalExtras, finalMessages, replyKeyboard } from './ui.mjs';
 
 async function nameTopic(st, title) {
   if (!title) return;
@@ -53,15 +53,27 @@ export async function deliverTurn({ st, to, text, dbText, lang, engine, naming, 
       });
   const extras = limited ? '' : finalExtras({ steps, elapsedMs: Date.now() - startedAt, project: userPath(st.userId, st.project, lang), engine: engine.short, usage, lang });
   const loose = [];
+  const hasAsks = !limited && asked.asks.length > 0;
   const body = placeAsks(st, placed.text, limited ? [] : asked.asks);
-  for (const msg of finalMessages(body, extras)) {
+  const parts = finalMessages(body, extras);
+  const kbMarkup = !hasAsks && needReplyKeyboard(st.userId, st.topic) ? replyKeyboard(lang, replyKeyboardOpts(st.userId)) : undefined;
+  let kbAttached = false;
+  for (let i = 0; i < parts.length; i++) {
+    const msg = parts[i];
+    const reply_markup = i === parts.length - 1 ? kbMarkup : undefined;
     dbg(`final u${st.userId} stop=${stopReason}`, msg);
-    const left = await sendRich(to, msg, { media: placed.media }).catch((e) => {
-      log('sendRich:', e.message);
-      return mediaIdsOf(msg).map((id) => placed.media[id]).filter(Boolean);
-    });
+    const left = await sendRich(to, msg, { media: placed.media, ...(reply_markup ? { reply_markup } : {}) })
+      .then((res) => {
+        if (reply_markup) kbAttached = true;
+        return res;
+      })
+      .catch((e) => {
+        log('sendRich:', e.message);
+        return mediaIdsOf(msg).map((id) => placed.media[id]).filter(Boolean);
+      });
     loose.push(...left);
   }
+  if (kbAttached) markReplyKeyboard(st.userId, st.topic);
   const inAnswer = Object.entries(placed.media).filter(([, f]) => !loose.includes(f)).map(([, f]) => f.name ?? f.path);
   if (inAnswer.length) log('файлы в ответе:', inAnswer.join(', '), '| пользователь', st.userId);
   if (loose.length || placed.extra.length) await sendLooseFiles(st, [...loose, ...placed.extra], lang);

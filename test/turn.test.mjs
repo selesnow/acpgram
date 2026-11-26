@@ -373,3 +373,40 @@ test('runTurn: остановка во время хода гасит финал
     tg.restore();
   }
 });
+
+test('runTurn: первый ответ в теме без клавиатуры прикрепляет replyKeyboard один раз и уважает /keyboard off', async () => {
+  const st = state(91);
+  db.saveTopic(USER_ID, 91, { project, engine: 'claude', named: true });
+  const tg = telegram();
+  const a = agent(st, 's-kb', async (_a, _blocks, turnState) => {
+    turnState.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Готово.' } });
+    return { stopReason: 'end_turn' };
+  });
+  try {
+    await runTurn(st, 'первый запрос');
+    const firstRich = finalRichCall(tg.calls);
+    assert.equal(firstRich.body.reply_markup?.one_time_keyboard, true, 'в первом ответе темы прикреплена reply-клавиатура');
+    assert.equal(db.getSetting(`replyKb:${USER_ID}:91`), '1');
+
+    tg.calls.length = 0;
+    await runTurn(st, 'второй запрос');
+    const secondRich = finalRichCall(tg.calls);
+    assert.equal(secondRich.body.reply_markup, undefined, 'во втором ответе клавиатура повторно не шлётся');
+
+    const stMuted = state(92);
+    db.saveTopic(USER_ID, 92, { project, engine: 'claude', named: true });
+    db.setSetting(`replyKbOff:${USER_ID}`, '1');
+    const a2 = agent(stMuted, 's-kb-off', async (_a, _blocks, turnState) => {
+      turnState.onUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Готово.' } });
+      return { stopReason: 'end_turn' };
+    });
+    tg.calls.length = 0;
+    await runTurn(stMuted, 'запрос без клавиатуры');
+    assert.equal(finalRichCall(tg.calls).body.reply_markup, undefined, 'при /keyboard off клавиатура не прикрепляется');
+    a2.close();
+    db.setSetting(`replyKbOff:${USER_ID}`, '');
+  } finally {
+    a.close();
+    tg.restore();
+  }
+});

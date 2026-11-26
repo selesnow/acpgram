@@ -53,4 +53,4 @@ export {
 
 export { engineMenu, startView } from './uiStart.mjs';
 
-export { replyCommandOf, replyKeyboard } from './uiReply.mjs';
+export { removeReplyKeyboard, replyCommandOf, replyKeyboard } from './uiReply.mjs';

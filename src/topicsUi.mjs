@@ -2,13 +2,14 @@
 // новая тема вместо сброса текущего диалога.
 import { botInfo, db, langOf, log, say } from './ctx.mjs';
 import { errText, t } from './i18n.mjs';
-import { engineOf, errorRootOf, isAdmin, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
+import { engineOf, errorRootOf, isAdmin, markReplyKeyboard, replyKeyboardOff, setTopicsMode, statesOf, stopUser, topicProject, topicsOn, topicsSupport, userPath } from './state.mjs';
 import { tg } from './telegram.mjs';
 import { cbCtx } from './uiActions.mjs';
 import { cleanTitle, createTopic, topicLink, topicName } from './topics.mjs';
 import { replyKeyboard } from './ui.mjs';
 
-const topicKeyboard = (st, lang) => replyKeyboard(lang, { admin: isAdmin(st.userId), topics: 'on' });
+const topicKeyboardExtra = (st, lang) =>
+  replyKeyboardOff(st.userId) ? {} : { reply_markup: replyKeyboard(lang, { admin: isAdmin(st.userId), topics: 'on' }) };
 
 const modeKeyboard = (on, lang) => ({
   inline_keyboard: [
@@ -145,7 +146,9 @@ export async function newTopic(st, { project = st.project } = {}) {
   const engine = engineOf(st);
   db.saveTopic(st.userId, threadId, { name, named: false, project, engine: engine.id });
   log('тема создана', threadId, '| пользователь', st.userId);
-  await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: userPath(st.userId, project, lang) }), { reply_markup: topicKeyboard(st, lang) });
+  const extra = topicKeyboardExtra(st, lang);
+  const sent = await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.hello', lang, { engine: engine.label, project: userPath(st.userId, project, lang) }), extra);
+  if (extra.reply_markup && sent !== undefined) markReplyKeyboard(st.userId, threadId);
   const link = topicLink(botInfo.username, threadId);
   return say(st.to, t('topics.created', lang), link ? { reply_markup: { inline_keyboard: [[{ text: t('topics.open', lang), url: link }]] } } : {});
 }
@@ -167,7 +170,9 @@ export async function offerAgentTopics(st, names, lang) {
     }
     db.saveTopic(st.userId, threadId, { name, named: true, project: st.project, engine: engine.id });
     log('тема создана агентом', threadId, '| пользователь', st.userId);
-    await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.agentHello', lang, { engine: engine.label, project: userPath(st.userId, st.project, lang) }), { reply_markup: topicKeyboard(st, lang) }).catch((e) => log('приветствие в теме агента:', e.message));
+    const extra = topicKeyboardExtra(st, lang);
+    const sent = await say({ chat_id: st.chatId, message_thread_id: threadId }, t('topics.agentHello', lang, { engine: engine.label, project: userPath(st.userId, st.project, lang) }), extra).catch((e) => log('приветствие в теме агента:', e.message));
+    if (extra.reply_markup && sent !== undefined) markReplyKeyboard(st.userId, threadId);
     created.push({ name, threadId });
   }
   if (!created.length) return say(st.to, t('topics.agentCreateFail', lang));

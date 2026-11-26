@@ -5,9 +5,9 @@ import { allowAllModels, allowedCount, allowedModels, getCatalog, grantedEngines
 import { ADMIN_ID, LEVEL_KEYS, MAX_AGENTS, botInfo, db, isLevel, langOf, levelHint, levelName, log, say, who } from './ctx.mjs';
 import { DEFAULT_ENGINE, ENGINES } from './engines.mjs';
 import { t } from './i18n.mjs';
-import { activeSessions, closeSession, saveEngine, statesOf, stopUser } from './state.mjs';
+import { activeSessions, closeSession, markReplyKeyboard, needReplyKeyboard, replyKeyboardOpts, saveEngine, statesOf, stopUser } from './state.mjs';
 import { USER_WORKSPACES, showPath, userRoot } from './projects.mjs';
-import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, sessionStatus, usageView } from './ui.mjs';
+import { activeSessionsView, engineGrants, modelGrantsOverview, modelGrantsView, replyKeyboard, sessionStatus, usageView } from './ui.mjs';
 import { cbCtx } from './uiActions.mjs';
 
 const INVITE_TTL_MS = 24 * 3600_000;
@@ -46,6 +46,13 @@ export const welcomeNote = (lang) => t('welcome.note', lang);
 /** Текст о выданном доступе: при подключении по приглашению или по запросу. */
 const grantedText = (level, lang, byAdmin) => t(byAdmin ? 'access.grantedByAdmin' : 'access.granted', lang, { level: levelName(level, lang), hint: levelHint(level, lang), note: welcomeNote(lang) });
 
+async function sendGranted(chatId, userId, level, lang, byAdmin) {
+  const attach = needReplyKeyboard(userId, 0);
+  const extra = attach ? { reply_markup: replyKeyboard(lang, replyKeyboardOpts(userId)) } : {};
+  const sent = await say(chatId, grantedText(level, lang, byAdmin), extra);
+  if (attach && sent !== undefined) markReplyKeyboard(userId, 0);
+}
+
 const botInviteLink = () => (botInfo.username ? `https://t.me/botinvite/${botInfo.username}` : null);
 
 function activeBotInvite(now = Date.now()) {
@@ -82,7 +89,7 @@ export async function handleBotInvite(from, chatId, inviter, { now = Date.now() 
     db.setRequestStatus(from.id, 'approved');
     lastStrangerReply.delete(from.id);
     log('подключён через botinvite', from.id, from.username, level);
-    await say(chatId, grantedText(level, lang, true));
+    await sendGranted(chatId, from.id, level, lang, true);
     return say(ADMIN_ID, t('adm.joinedByBotInvite', al, { who: who(from), level: levelName(level, al) }));
   }
   db.saveRequest(from);
@@ -120,7 +127,7 @@ export async function handleUnknownUser(from, chatId, text) {
     }
     db.setRequestStatus(from.id, 'approved');
     log('подключён по приглашению', from.id, from.username, level);
-    await say(chatId, grantedText(level, lang, false));
+    await sendGranted(chatId, from.id, level, lang, false);
     return say(ADMIN_ID, t('adm.joinedByInvite', adminLang(), { who: who(from), level: levelName(level, adminLang()) }));
   }
   if (cooling) return;
@@ -279,7 +286,7 @@ async function requestAction({ action, al, id, b, ack, edit }) {
   db.setRequestStatus(id, 'approved');
   log('доступ выдан по запросу', id, b);
   await ack();
-  await say(id, grantedText(b, langOf(id), true));
+  await sendGranted(id, id, b, langOf(id), true);
   return edit(t('adm.reqGranted', al, { name, level: levelName(b, al) }));
 }
 

@@ -28,7 +28,7 @@ import { createAlbumBuffer } from './albums.mjs';
 import { dropQueue, enqueue, onAskCallback, onPermissionCallback, onQueueCallback, runTurn } from './turn.mjs';
 import { nearCommand, quoteOf, unsupportedKind } from './incoming.mjs';
 import { onWidgetQuery } from './widgetsUi.mjs';
-import { DOCS_URL, docsMenuButton, helpMarkup, replyCommandOf, replyKeyboard, startView } from './ui.mjs';
+import { DOCS_URL, docsMenuButton, helpMarkup, removeReplyKeyboard, replyCommandOf, replyKeyboard, startView } from './ui.mjs';
 import { fmtDate } from './uiActions.mjs';
 import { positiveEnv } from './app.mjs';
 import { createQueue } from './queue.mjs';
@@ -120,6 +120,7 @@ configureBotRouting({
   onTopicsCallback,
   onWidgetQuery,
   quoteOf,
+  removeReplyKeyboard,
   replyCommandOf,
   replyKeyboard,
   runTurn,

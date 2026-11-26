@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { replyKeyboardKey, replyKeyboardOffKey } from './uiReply.mjs';
 
 /** Есть ли у пользователя доступ: администратор или активный сотрудник. */
 const hasAccessWith = (d, id) => d.isAdmin(id) || d.db.getUser(id)?.status === 'active';
@@ -15,26 +16,37 @@ const sendLangPicker = (d, chatId) =>
   d.say(chatId, d.LANG_PICK, { reply_markup: { inline_keyboard: [d.LANG_CODES.map((code) => ({ text: d.LANGS[code], callback_data: `lang:${code}` }))] } });
 
 const replyOpts = (d, st) => ({ admin: d.isAdmin(st.userId), topics: d.topicsSupport.enabled ? (d.topicsOn(st.userId) ? 'on' : 'off') : null });
-const replySeenKey = (userId) => `replyKeyboard:${userId}`;
-const markReplyKeyboard = (d, userId) => d.db.setSetting(replySeenKey(userId), '1');
+const replyKbOff = (d, userId) => d.db.getSetting(replyKeyboardOffKey(userId)) === '1';
+const setReplyKbOff = (d, userId, off) => d.db.setSetting(replyKeyboardOffKey(userId), off ? '1' : '');
+const needReplyKb = (d, userId, topic = 0) => !replyKbOff(d, userId) && d.db.getSetting(replyKeyboardKey(userId, topic)) !== '1';
+const markReplyKb = (d, userId, topic = 0) => d.db.setSetting(replyKeyboardKey(userId, topic), '1');
 
-/** /keyboard: подключить reply-клавиатуру повторно (первый /start делает это сам). */
-const sendReplyKeyboard = async (d, st) => {
+/** /keyboard [off]: подключить или отключить reply-клавиатуру. */
+const sendReplyKeyboard = async (d, st, arg) => {
   const lang = d.langOf(st.userId);
+  if ((arg || '').trim().toLowerCase() === 'off') {
+    setReplyKbOff(d, st.userId, true);
+    await d.say(st.to, d.t('reply.keyboardOff', lang), { reply_markup: d.removeReplyKeyboard() });
+    return;
+  }
+  setReplyKbOff(d, st.userId, false);
   await d.say(st.to, d.t('reply.keyboardOn', lang), { reply_markup: d.replyKeyboard(lang, replyOpts(d, st)) });
-  markReplyKeyboard(d, st.userId);
+  markReplyKb(d, st.userId, st.topic ?? 0);
 };
 
-/** Экран /start: rich-сообщение с кнопками (если Telegram его не примет — уйдёт обычным текстом со списком команд). */
+/** Экран /start: rich-сообщение с кнопками; при первом запуске в диалоге следом подключает reply-клавиатуру обычным сообщением. */
 const sendStart = async (d, st) => {
   const lang = d.langOf(st.userId);
   const opts = replyOpts(d, st);
   const view = d.startView({ level: d.levelLabel(st.userId), project: d.userPath(st.userId, st.project, lang), engine: d.engineOf(st).label, model: modelLabel(d, st), isAdmin: opts.admin, note: opts.admin ? null : d.welcomeNote(lang), topics: opts.topics, lang });
-  const first = !d.db.getSetting(replySeenKey(st.userId));
-  const extra = first ? { reply_markup: d.replyKeyboard(lang, opts) } : {};
+  const topic = st.topic ?? 0;
+  const attach = needReplyKb(d, st.userId, topic);
   try {
-    await d.sendRich(st.to, view, extra);
-    if (first) markReplyKeyboard(d, st.userId);
+    await d.sendRich(st.to, view);
+    if (attach) {
+      await d.say(st.to, d.t('reply.keyboardOn', lang), { reply_markup: d.replyKeyboard(lang, opts) });
+      markReplyKb(d, st.userId, topic);
+    }
   } catch (e) {
     d.log('start:', e.message);
   }
@@ -58,8 +70,7 @@ async function onLangCallback(d, st, cb) {
   if (!d.LANG_CODES.includes(code)) return;
   d.setLang(st.userId, code);
   const text = d.t('lang.set', code, { name: d.LANGS[code] });
-  await d.tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => d.say(chatId, text));
-  return d.say(chatId, d.t('reply.updated', code));
+  await d.tg('editMessageText', { chat_id: chatId, message_id: cb.message?.message_id, text, reply_markup: { inline_keyboard: [] } }).catch(() => d.say(st.to, text));
 }
 
 /** /language [ru|uk|en] — без аргумента показываем выбор языка. */
@@ -116,7 +127,7 @@ export const COMMANDS = [
   { name: 'close', aliases: ['exit'], menu: true, button: true, run: closeCommand },
   { name: 'topics', menu: (d, admin) => admin || d.topicsSupport.enabled, button: true, run: (d, st) => d.handleTopics(st) },
   { name: 'language', aliases: ['lang'], menu: true, button: true, run: languageCommand },
-  { name: 'keyboard', menu: false, run: (d, st) => sendReplyKeyboard(d, st) },
+  { name: 'keyboard', menu: true, run: (d, st, arg) => sendReplyKeyboard(d, st, arg) },
   { name: 'help', menu: true, run: helpCommand },
   { name: 'start', menu: true, run: sendStart },
 ];
@@ -139,7 +150,7 @@ async function handleTextWith(d, st, text, { quote = null, messageId = null } = 
   const lang = d.langOf(st.userId);
   const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text);
   const label = text.trim();
-  const reply = label ? d.replyCommandOf(label, lang, { ...replyOpts(d, st), admin: true }) : null;
+  const reply = label ? d.replyCommandOf(label) : null;
   const name = m?.[1]?.toLowerCase() || reply?.name;
   const command = name ? commandsFor(d).find((c) => c.name === name || c.aliases?.includes(name)) : null;
   if (command) {
@@ -229,6 +240,20 @@ function noteTopic(d, userId, threadId, msg) {
     d.log('тема пользователя', threadId, info?.name ?? '', info?.implicit ? '(без названия)' : '', '| пользователь', userId);
   }
   return Boolean(msg.forum_topic_created);
+}
+
+/** Приветствие с reply-клавиатурой в теме, созданной пользователем вручную (для неявных тем клавиатура уйдёт с первым ответом). */
+async function greetUserTopic(d, userId, chatId, threadId, msg) {
+  const info = d.topicInfoOf(msg);
+  if (!msg.forum_topic_created || info?.implicit || !needReplyKb(d, userId, threadId)) return;
+  const st = d.getState(userId, chatId, threadId);
+  const lang = d.langOf(userId);
+  await d.say(
+    st.to,
+    d.t('topics.hello', lang, { engine: d.engineOf(st).label, project: d.userPath(userId, st.project, lang) }),
+    { reply_markup: d.replyKeyboard(lang, replyOpts(d, st)) },
+  );
+  markReplyKb(d, userId, threadId);
 }
 
 export const createBotRouting = (d) => {
@@ -454,10 +479,11 @@ export const createBotRouting = (d) => {
 
     const source = msg ?? cb?.message;
     const threadId = source?.is_topic_message && source.message_thread_id ? source.message_thread_id : null;
-    if (msg && threadId && d.topicsOn(from.id) && d.isAutoTopicCommand(msg, Boolean(d.db.getTopic(from.id, threadId)), BOT_COMMANDS)) {
+    const isReplyBtn = (text) => Boolean(d.replyCommandOf(text));
+    if (msg && threadId && d.topicsOn(from.id) && d.isAutoTopicCommand(msg, Boolean(d.db.getTopic(from.id, threadId)), BOT_COMMANDS, isReplyBtn)) {
       if (await dropAutoTopic(d, from.id, chatId, threadId)) return handleText(d.getState(from.id, chatId, null), msg.text);
     }
-    if (msg && threadId && noteTopic(d, from.id, threadId, msg)) return;
+    if (msg && threadId && noteTopic(d, from.id, threadId, msg)) return greetUserTopic(d, from.id, chatId, threadId, msg);
 
     if (cb) return callbackUpdate(from, cb, chatId, threadId);
     if (msg) return messageUpdate(from, msg, chatId, threadId);

@@ -114,15 +114,17 @@ export const commandName = (text) => /^\/(\w+)(?:@\w+)?(?:\s|$)/.exec(String(tex
 /**
  * Служебная команда, ради которой Telegram сам создал тему: пользователь отправил её из общего вида чата, а не изнутри
  * темы, и Telegram (если пользователям разрешено создавать темы) завёл новую тему с названием по тексту сообщения.
- * Признаки: тема боту ещё не известна, название дано неявно (is_name_implicit) и это известная боту команда.
+ * Признаки: тема боту ещё не известна, название дано неявно (is_name_implicit) и это известная боту команда или кнопка reply-меню.
  * @param {object} msg сообщение из темы
  * @param {boolean} known тема уже была известна боту до этого сообщения
  * @param {Set<string>} commands команды бота
+ * @param {(text: string) => boolean} [isCommandText] проверка текста кнопки reply-клавиатуры
  */
-export function isAutoTopicCommand(msg, known, commands) {
+export function isAutoTopicCommand(msg, known, commands, isCommandText = null) {
   if (known || !msg?.text) return false;
   const name = commandName(msg.text);
-  if (!name || !commands.has(name)) return false;
+  const hit = (name && commands.has(name)) || Boolean(isCommandText?.(msg.text.trim()));
+  if (!hit) return false;
   return Boolean(topicInfoOf(msg)?.implicit);
 }
 

@@ -79,8 +79,11 @@ test('/invite: администратор выбирает уровень, од�
   calls = take();
   assert.equal(ctx.db.getUser(invited)?.level, 'normal');
   assert.equal(ctx.db.getUser(invited)?.status, 'active');
-  assert.ok(toUser(calls, invited).includes(ctx.levelName('normal', lang)));
-  assert.ok(toUser(calls, invited).includes(ctx.levelHint('normal', lang)));
+  const welcome = messages(calls).find((c) => c.body.chat_id === invited);
+  assert.ok(welcome?.body.text.includes(ctx.levelName('normal', lang)));
+  assert.ok(welcome?.body.text.includes(ctx.levelHint('normal', lang)));
+  assert.equal(welcome?.body.reply_markup?.one_time_keyboard, true, 'новому пользователю сразу прикрепляется reply-клавиатура');
+  assert.equal(ctx.db.getSetting(`replyKb:${invited}:0`), '1');
   assert.ok(toUser(calls, ADMIN).includes(`@user${invited}`));
 
   admin.sweepUnknownUsers(0);

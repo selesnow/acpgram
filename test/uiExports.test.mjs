@@ -37,6 +37,7 @@ const EXPECTED = [
   'neutralizeTgTags',
   'pageNav',
   'planBlock',
+  'removeReplyKeyboard',
   'replyCommandOf',
   'replyKeyboard',
   'searchModels',

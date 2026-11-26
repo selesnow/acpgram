@@ -7,6 +7,7 @@ import { actualModelFromUpdate, DEFAULT_ENGINE, ENGINES, createAgent, engineComm
 import { HOME, ROOT, USER_WORKSPACES, insideRoot, isPersonalRoot, isWithin, pushRecent, samePath, showPath, userRoot } from './projects.mjs';
 import { SANDBOX, agentSandbox } from './sandbox.mjs';
 import { GIT_AGENT_AUTH, agentGitEnv, refreshAccounts } from './gitAccess.mjs';
+import { replyKeyboardKey, replyKeyboardOffKey } from './uiReply.mjs';
 
 export const STATE_FIELDS = Object.freeze([
   'userId', 'chatId', 'topic', 'threadId', 'to',
@@ -115,6 +116,17 @@ export const topicsSupport = { enabled: false, usersCreate: false, sidebar: fals
  */
 export const topicsOn = (userId) => topicsSupport.enabled && db.getSetting(`topics:${userId}`) !== 'off';
 export const setTopicsMode = (userId, on) => db.setSetting(`topics:${userId}`, on ? 'on' : 'off');
+
+/** Состояние reply-клавиатуры: per-topic (topic=0 — General/All) и глобальное отключение (/keyboard off). */
+export const replyKeyboardOff = (userId) => db.getSetting(replyKeyboardOffKey(userId)) === '1';
+export const setReplyKeyboardOff = (userId, off) => db.setSetting(replyKeyboardOffKey(userId), off ? '1' : '');
+export const hasReplyKeyboard = (userId, topic = 0) => db.getSetting(replyKeyboardKey(userId, topic)) === '1';
+export const markReplyKeyboard = (userId, topic = 0) => db.setSetting(replyKeyboardKey(userId, topic), '1');
+export const needReplyKeyboard = (userId, topic = 0) => !replyKeyboardOff(userId) && !hasReplyKeyboard(userId, topic);
+export const replyKeyboardOpts = (userId) => ({
+  admin: isAdmin(userId),
+  topics: topicsSupport.enabled ? (topicsOn(userId) ? 'on' : 'off') : null,
+});
 
 /** Номер диалога для сообщения из темы threadId: в режиме «диалоги» — сама тема, иначе 0 (один диалог на пользователя). */
 const topicOf = (userId, threadId) => (threadId && topicsOn(userId) ? threadId : 0);

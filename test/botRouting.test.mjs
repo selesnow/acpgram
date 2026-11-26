@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { BOT_COMMANDS, COMMANDS, configureBotRouting, createBotRouting, handleUpdate, hasAccess } from '../src/botRouting.mjs';
-import { replyCommandOf, replyKeyboard } from '../src/ui.mjs';
+import { removeReplyKeyboard, replyCommandOf, replyKeyboard } from '../src/ui.mjs';
 import { t as realT } from '../src/i18n.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -87,7 +87,7 @@ const depsFor = (overrides = {}) => {
     freeBytes: () => 1000,
     getState: (userId, chatId, threadId) => {
       const key = `${userId}:${chatId}:${threadId ?? ''}`;
-      if (!states.has(key)) states.set(key, { userId, chatId, threadId, to: chatId, busy: false, agent: null, project: '/p' });
+      if (!states.has(key)) states.set(key, { userId, chatId, threadId, topic: threadId ?? 0, to: threadId ? { chat_id: chatId, message_thread_id: threadId } : chatId, busy: false, agent: null, project: '/p' });
       return states.get(key);
     },
     handleBotInvite: rec('handleBotInvite'),
@@ -129,7 +129,8 @@ const depsFor = (overrides = {}) => {
     onTopicsCallback: rec('onTopicsCallback'),
     onWidgetQuery: rec('onWidgetQuery'),
     quoteOf: (msg) => msg.quote?.text ?? null,
-    replyCommandOf: (text, lang, opts) => replyCommandOf(text, lang, opts),
+    removeReplyKeyboard: () => removeReplyKeyboard(),
+    replyCommandOf: (text) => replyCommandOf(text),
     replyKeyboard: (lang, opts) => replyKeyboard(lang, opts),
     runTurn: rec('runTurn'),
     saveUpload: asyncRec('saveUpload', '/tmp/x'),
@@ -300,30 +301,42 @@ test('handleText: unknown command goes to agent, typo offers buttons, secret is 
   assert.deepEqual(first(calls, 'say'), ['say', USER, t('secret.detected', 'en')]);
 });
 
-test('/start: reply-клавиатура только при первом приветствии на языке пользователя', async () => {
+test('/start: reply-клавиатура подключается отдельным sendMessage один раз на каждый диалог/топик', async () => {
   const { deps, calls } = depsFor();
   deps.langOf = () => 'ru';
   const routing = createBotRouting(deps);
-  const st = deps.getState(USER, USER, null);
+  const stGeneral = deps.getState(USER, USER, null);
 
-  await routing.handleText(st, '/start');
+  await routing.handleText(stGeneral, '/start');
   const firstSend = first(calls, 'sendRich');
   assert.ok(firstSend, 'приветствие отправлено');
   assert.equal(firstSend[1], USER);
-  assert.deepEqual(firstSend[3], { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) });
-  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKeyboard:${USER}`, '1']);
+  assert.equal(firstSend[3], undefined, 'в rich-сообщение reply_markup не примешивается');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', USER, t('reply.keyboardOn', 'ru'),
+    { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) },
+  ]);
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKb:${USER}:0`, '1']);
 
   calls.length = 0;
-  await routing.handleText(st, '/start');
-  const secondSend = first(calls, 'sendRich');
-  assert.ok(secondSend, 'повторное приветствие отправлено');
-  assert.deepEqual(secondSend[3], {});
+  await routing.handleText(stGeneral, '/start');
+  assert.ok(first(calls, 'sendRich'), 'повторное приветствие отправлено');
+  assert.equal(first(calls, 'say'), undefined, 'повторный /start в General клавиатуру не дёргает');
   assert.equal(first(calls, 'setSetting'), undefined);
+
+  calls.length = 0;
+  const stTopic = deps.getState(USER, USER, 55);
+  await routing.handleText(stTopic, '/start');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', { chat_id: USER, message_thread_id: 55 }, t('reply.keyboardOn', 'ru'),
+    { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) },
+  ]);
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKb:${USER}:55`, '1']);
 });
 
-test('кнопки reply-меню: подписи выполняют команды, обычный текст уходит агенту', async () => {
+test('кнопки reply-меню: подписи выполняют команды на любом языке, обычный текст уходит агенту', async () => {
   const { deps, calls } = depsFor();
-  deps.langOf = () => 'ru';
+  deps.langOf = () => 'en';
   const routing = createBotRouting(deps);
   const st = deps.getState(USER, USER, null);
 
@@ -338,10 +351,10 @@ test('кнопки reply-меню: подписи выполняют коман�
   calls.length = 0;
 
   await routing.handleText(st, realT('reply.usage', 'ru'));
-  assert.deepEqual(first(calls, 'say'), ['say', USER, t('admin.only', 'ru')]);
+  assert.deepEqual(first(calls, 'say'), ['say', USER, t('admin.only', 'en')]);
 });
 
-test('смена языка не подключает reply-клавиатуру повторно', async () => {
+test('смена языка не подключает reply-клавиатуру повторно и не шлёт ложное уведомление', async () => {
   const { deps, calls } = depsFor();
   deps.langOf = () => 'en';
   const routing = createBotRouting(deps);
@@ -349,9 +362,14 @@ test('смена языка не подключает reply-клавиатуру
   await routing.handleText(st, '/language uk');
   assert.deepEqual(first(calls, 'setLang'), ['setLang', USER, 'uk']);
   assert.deepEqual(first(calls, 'say'), ['say', USER, t('lang.set', 'uk', { name: 'Українська' })]);
+
+  calls.length = 0;
+  await routing.handleUpdate(callback(USER, 'lang:ru'));
+  assert.deepEqual(first(calls, 'setLang'), ['setLang', USER, 'ru']);
+  assert.equal(first(calls, 'say'), undefined, 'при смене языка кнопкой ложное reply.updated не отправляется');
 });
 
-test('/keyboard: подключает reply-клавиатуру и ставит флаг показанной', async () => {
+test('/keyboard [off]: подключает, отключает (remove_keyboard) и управляет автоподключением', async () => {
   const { deps, calls } = depsFor();
   deps.langOf = () => 'ru';
   const routing = createBotRouting(deps);
@@ -362,11 +380,30 @@ test('/keyboard: подключает reply-клавиатуру и ставит
     'say', USER, t('reply.keyboardOn', 'ru'),
     { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) },
   ]);
-  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKeyboard:${USER}`, '1']);
+  assert.deepEqual(all(calls, 'setSetting'), [
+    ['setSetting', `replyKbOff:${USER}`, ''],
+    ['setSetting', `replyKb:${USER}:0`, '1'],
+  ]);
 
   calls.length = 0;
-  await routing.handleText(st, '/start');
-  assert.deepEqual(first(calls, 'sendRich')[3], {});
+  await routing.handleText(st, '/keyboard off');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', USER, t('reply.keyboardOff', 'ru'),
+    { reply_markup: { remove_keyboard: true } },
+  ]);
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKbOff:${USER}`, '1']);
+
+  calls.length = 0;
+  const stNewTopic = deps.getState(USER, USER, 99);
+  await routing.handleText(stNewTopic, '/start');
+  assert.equal(first(calls, 'say'), undefined, 'при /keyboard off автоподключение в новых темах отключено');
+
+  calls.length = 0;
+  await routing.handleText(stNewTopic, '/keyboard');
+  assert.deepEqual(first(calls, 'say'), [
+    'say', { chat_id: USER, message_thread_id: 99 }, t('reply.keyboardOn', 'ru'),
+    { reply_markup: replyKeyboard('ru', { admin: false, topics: null }) },
+  ]);
 });
 
 test('adm:-кнопки: администратор получает обработчик, чужой — только пустой answer', async () => {
@@ -465,7 +502,7 @@ test('команды /language, /start, /stop, /close, /new: аргументы 
   calls.length = 0;
 
   await routing.handleText(st, '/start');
-  assert.equal(first(calls, 'sendRich').length, 4);
+  assert.equal(first(calls, 'sendRich').length, 3);
   calls.length = 0;
 
   await routing.handleText(st, '/stop');
@@ -519,9 +556,10 @@ test('setupCommands и sweepUpdateLimits: меню всех языков и уб
   const tg = all(calls, 'tg');
   assert.equal(tg.filter((c) => c[1] === 'setMyCommands').length, 6);
   const adminMenu = tg.find((c) => c[1] === 'setMyCommands' && c[2]?.scope?.chat_id === ADMIN)?.[2]?.commands?.map((x) => x.command) ?? [];
-  const userMenu = tg.find((c) => c[1] === 'setMyCommands' && !c[2]?.scope)?.[2]?.commands?.map((x) => x.command) ?? [];
+  const userMenu = tg.find((c) => c[1] === 'setMyCommands' && c[2]?.scope?.type === 'default')?.[2]?.commands?.map((x) => x.command) ?? [];
   assert.ok(adminMenu.includes('topics'), 'администратору /topics доступен даже при выключенных темах');
   assert.ok(!userMenu.includes('topics'), 'обычным пользователям /topics скрыт при выключенных темах');
+  assert.ok(userMenu.includes('keyboard'), '/keyboard виден в меню команд');
   assert.deepEqual(tg.at(-1), ['tg', 'setChatMenuButton', { menu_button: { type: 'link' } }]);
 
   const limited = depsFor({ UPDATE_WINDOW_MS: 1 });
@@ -539,12 +577,27 @@ test('setupCommands и sweepUpdateLimits: меню всех языков и уб
   }
 });
 
-test('служебные сообщения тем: создание, переименование и перенос команды в General', async () => {
-  const { deps, calls } = depsFor({ topicsOn: () => true, isAutoTopicCommand: (msg) => Boolean(msg.text), topicInfoOf: () => ({ name: 'Новая', implicit: false }) });
+test('служебные сообщения тем: создание вручную (с клавиатурой), неявное создание, переименование и перенос команды/кнопки в General', async () => {
+  const { deps, calls } = depsFor({
+    topicsOn: () => true,
+    topicsSupport: { enabled: true, usersCreate: true },
+    isAutoTopicCommand: (msg, _known, _cmds, isBtn) => Boolean(msg.text && (msg.text.startsWith('/') || isBtn?.(msg.text.trim()))),
+    topicInfoOf: (msg) => (msg.forum_topic_created?.is_name_implicit ? { name: 'Авто', implicit: true } : { name: 'Новая', implicit: false }),
+  });
   const routing = createBotRouting(deps);
   await routing.handleUpdate(message(USER, '', { is_topic_message: true, message_thread_id: 55, forum_topic_created: {} }));
   assert.deepEqual(first(calls, 'saveTopic'), ['saveTopic', USER, 55, { name: 'Новая', named: true }]);
+  assert.deepEqual(first(calls, 'say'), [
+    'say', { chat_id: USER, message_thread_id: 55 },
+    t('topics.hello', 'en', { engine: 'Gemini', project: '/p' }),
+    { reply_markup: replyKeyboard('en', { admin: false, topics: 'on' }) },
+  ]);
+  assert.deepEqual(first(calls, 'setSetting'), ['setSetting', `replyKb:${USER}:55`, '1']);
   assert.equal(first(calls, 'runTurn'), undefined);
+  calls.length = 0;
+
+  await routing.handleUpdate(message(USER, '', { is_topic_message: true, message_thread_id: 56, forum_topic_created: { is_name_implicit: true } }));
+  assert.equal(first(calls, 'say'), undefined, 'неявно созданной теме приветствие не шлётся');
   calls.length = 0;
 
   await routing.handleUpdate(message(USER, '', { is_topic_message: true, message_thread_id: 55, forum_topic_edited: { name: 'Имя' } }));
@@ -556,6 +609,11 @@ test('служебные сообщения тем: создание, переи
   assert.equal(first(calls, 'deleteTopic')[1], USER);
   assert.equal(first(calls, 'runTurn'), undefined);
   assert.equal(first(calls, 'handleModel')[1], deps.getState(USER, USER, null));
+  calls.length = 0;
+
+  await routing.handleUpdate(message(USER, realT('start.btn.project', 'ru'), { is_topic_message: true, message_thread_id: 79 }));
+  assert.equal(first(calls, 'deleteTopic')[2], 79, 'авто-тема от кнопки reply-клавиатуры удаляется');
+  assert.equal(first(calls, 'handleProject')[1], deps.getState(USER, USER, null), 'кнопка выполняется в General');
 
   const failed = depsFor({ topicsOn: () => true, isAutoTopicCommand: () => true, deleteTopic: async () => { throw new Error('нет прав'); } });
   await createBotRouting(failed.deps).handleUpdate(message(USER, 'привет', { is_topic_message: true, message_thread_id: 78 }));

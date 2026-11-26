@@ -83,6 +83,10 @@ test('isAutoTopicCommand: команда в теме, которую Telegram с
   assert.equal(isAutoTopicCommand({ ...msg, text: '/unknown' }, false, cmds), false, 'неизвестная команда уходит агенту');
   assert.equal(isAutoTopicCommand({ ...msg, reply_to_message: { forum_topic_created: { name: 'Мой', is_name_implicit: false } } }, false, cmds), false, 'тему назвал пользователь');
   assert.equal(isAutoTopicCommand({ text: '/model' }, false, cmds), false, 'нет сведений о создании темы');
+  const isBtn = (s) => s === '📁 Проект';
+  assert.equal(isAutoTopicCommand({ ...msg, text: '📁 Проект' }, false, cmds, isBtn), true, 'кнопка reply-клавиатуры из All тоже удаляет авто-тему');
+  assert.equal(isAutoTopicCommand({ ...msg, text: '📁 Проект' }, true, cmds, isBtn), false, 'в известной теме кнопка выполняется в ней');
+  assert.equal(isAutoTopicCommand({ ...msg, text: 'обычный текст' }, false, cmds, isBtn), false);
   assert.equal(commandName('/Model arg'), 'model');
   assert.equal(commandName('text'), null);
 });
