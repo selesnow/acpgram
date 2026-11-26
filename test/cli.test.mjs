@@ -75,6 +75,15 @@ test('install.sh: обновление из релиза и строгая пр�
   assert.ok(sh.includes('^v[0-9]+\\.[0-9]+\\.[0-9]+$'), 'тег релиза проверяется полностью');
 });
 
+test('release.yml: установщики публикуются в assets релиза, попадают в SHA256SUMS и проверяются оттуда', () => {
+  const yml = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  assert.ok(yml.includes('cp install.ps1 install.sh dist/'), 'установщики копируются в dist для загрузки в релиз');
+  assert.ok(yml.includes('sha256sum acpgram-* install.ps1 install.sh > SHA256SUMS'), 'установщики включены в SHA256SUMS');
+  assert.ok(yml.includes('/releases/download/${GITHUB_REF_NAME}/install.sh'), 'Linux/macOS CI проверяет install.sh из assets релиза');
+  assert.ok(yml.includes('/releases/download/$($env:GITHUB_REF_NAME)/install.ps1'), 'Windows CI проверяет install.ps1 из assets релиза');
+  assert.ok(!yml.includes('raw.githubusercontent.com'), 'CI не должен маскировать отсутствие установщиков в assets');
+});
+
 test('cli.mjs как команда: version и код выхода при ошибке', () => {
   const ok = spawnSync(process.execPath, [CLI, 'version'], { encoding: 'utf8' });
   assert.equal(ok.status, 0);

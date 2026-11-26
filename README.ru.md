@@ -240,12 +240,12 @@ acpgram setup
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
+irm https://github.com/selesnow/acpgram/releases/latest/download/install.ps1 | iex
 ```
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
+curl -fsSL https://github.com/selesnow/acpgram/releases/latest/download/install.sh -o install.sh && bash install.sh
 ```
 
 Установщик скачивает последний [релиз](https://github.com/selesnow/acpgram/releases) (с проверкой контрольной суммы) в `%LOCALAPPDATA%\acpgram` или `~/.local/share/acpgram`, при необходимости ставит приватный Node.js 24 и приватный `nssm.exe` (менеджер служб Windows; обе сборки официальные, с проверкой SHA-256, без прав администратора), добавляет команду `acpgram` в PATH и запускает мастер настройки. Уже установленный nssm не перезаписывается; `ACPGRAM_NO_NSSM=1` отключает его установку. Повторный запуск или `acpgram update` — обновление; настройки и данные сохраняются. Команды: `acpgram` (запуск), `acpgram setup`, `acpgram service install | restart | stop | status | uninstall`, `acpgram update`.

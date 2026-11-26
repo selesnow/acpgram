@@ -46,7 +46,8 @@ jobs:
           mkdir dist
           git archive --format=tar.gz --prefix=acpgram/ -o "dist/acpgram-$GITHUB_REF_NAME.tar.gz" "$GITHUB_REF_NAME"
           git archive --format=zip --prefix=acpgram/ -o "dist/acpgram-$GITHUB_REF_NAME.zip" "$GITHUB_REF_NAME"
-          cd dist && sha256sum acpgram-* > SHA256SUMS && cat SHA256SUMS
+          cp install.ps1 install.sh dist/
+          cd dist && sha256sum acpgram-* install.ps1 install.sh > SHA256SUMS && cat SHA256SUMS
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,7 +92,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh"
           curl -fsSL "$URL" | bash
           echo 'KEEP=1' > "$HOME/.local/share/acpgram/.env"
           curl -fsSL "$URL" | bash
@@ -101,7 +102,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $url = "https://raw.githubusercontent.com/$($env:GITHUB_REPOSITORY)/$($env:GITHUB_REF_NAME)/install.ps1"
+          $url = "https://github.com/$($env:GITHUB_REPOSITORY)/releases/download/$($env:GITHUB_REF_NAME)/install.ps1"
           irm $url | iex
           Set-Content -Path "$env:LOCALAPPDATA\acpgram\.env" -Value 'KEEP=1'
           irm $url | iex

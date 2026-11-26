@@ -119,13 +119,13 @@ To switch:
 **Windows** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/selesnow/acpgram/main/install.ps1 | iex
+irm https://github.com/selesnow/acpgram/releases/latest/download/install.ps1 | iex
 ```
 
 **Linux / macOS**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/selesnow/acpgram/main/install.sh | bash
+curl -fsSL https://github.com/selesnow/acpgram/releases/latest/download/install.sh -o install.sh && bash install.sh
 ```
 
 The installer downloads the latest [release](https://github.com/selesnow/acpgram/releases) (checksum verified) into `%LOCALAPPDATA%\acpgram` or `~/.local/share/acpgram`, installs a private Node.js 24 if yours is missing or older and a private `nssm.exe` (Windows service manager) if it is not found — both official builds, SHA-256 verified, no admin rights — adds the `acpgram` command to your PATH and starts the setup wizard. An existing nssm is left alone; `ACPGRAM_NO_NSSM=1` skips it. Run it again — or `acpgram update` — to update; your settings and data are kept.
