@@ -16,7 +16,7 @@ export const DEPTH_MAX = 8;
 
 // В эти папки бот не пишет и их не показывает: служебные данные git и тяжёлые каталоги зависимостей
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'renv', 'packrat', 'site-packages']);
-const CONFIG_DIRS = new Set(['.claude', '.gemini', '.codex', '.opencode']);
+const CONFIG_DIRS = new Set(['.claude', '.gemini', '.codex', '.opencode', '.qwen']);
 const CONFIG_FILES = new Set(['opencode.json']);
 
 /** Ошибка операции с файлом проекта: code — причина для сообщения пользователю (ключ files.err.<code>). */

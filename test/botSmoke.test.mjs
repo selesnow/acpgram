@@ -34,6 +34,7 @@ const baseEnv = (home) => {
     CLAUDE_COMMAND: process.execPath,
     AGY_COMMAND: process.execPath,
     CODEX_COMMAND: process.execPath,
+    QWEN_COMMAND: process.execPath,
     OPENCODE_COMMAND: process.execPath,
   };
   for (const key of ['AGENT_SANDBOX', 'ADMIN_SANDBOX', 'USER_WORKSPACES', 'GIT_AGENT_AUTH', 'WIDGETS']) delete env[key];

@@ -114,7 +114,8 @@ export function probeCatalog(engine, timeoutMs = 120_000) {
   if (probes.has(engine.id)) return probes.get(engine.id);
   if (Date.now() - (probeFailedAt.get(engine.id) ?? 0) < PROBE_RETRY_MS) return Promise.reject(new Error('недавняя попытка не удалась, повтор позже'));
   const run = (async () => {
-    const a = createAgent(engine, { cwd: tmpdir(), onPermission: async () => ({ outcome: 'cancelled' }) });
+    // who обязателен движкам с настройками в процессе агента (Qwen: QWEN_HOME и settings.json); каталог моделей общий
+    const a = createAgent(engine, { cwd: tmpdir(), who: {}, onPermission: async () => ({ outcome: 'cancelled' }) });
     probeAgents.add(a);
     try {
       const res = await a.init(null, { timeoutMs });

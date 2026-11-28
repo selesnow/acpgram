@@ -56,6 +56,7 @@ test('install.ps1: acpgram.cmd обновляет сам, без node.exe (за�
   assert.ok(block.includes(String.raw`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"`), 'PowerShell по полному пути');
   assert.ok(block.includes('releases/latest/download/install.ps1 | iex'));
   assert.ok(block.includes(`'  exit /b'`), 'блок завершается exit /b: cmd.exe разобрал его целиком до перезаписи файла');
+  assert.ok(ps.includes('acpgram service install | restart | stop | status | uninstall'), 'итог установщика перечисляет все команды службы');
 });
 
 test('install.ps1: приватный nssm ставится до мастера с проверкой SHA-256', () => {
@@ -73,6 +74,7 @@ test('install.sh: обновление из релиза и строгая пр�
   assert.ok(sh.includes('releases/latest/download/install.sh'), 'установщик берётся из последнего релиза');
   assert.ok(!sh.includes('raw.githubusercontent.com/selesnow/acpgram/main'));
   assert.ok(sh.includes('^v[0-9]+\\.[0-9]+\\.[0-9]+$'), 'тег релиза проверяется полностью');
+  assert.ok(sh.includes('acpgram service install | restart | stop | status | uninstall'), 'итог установщика перечисляет все команды службы');
 });
 
 test('release.yml: установщики публикуются в assets релиза, попадают в SHA256SUMS и проверяются оттуда', () => {

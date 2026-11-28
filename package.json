@@ -1,8 +1,8 @@
 {
   "name": "acpgram",
-  "version": "1.35.2",
+  "version": "1.36.0",
   "type": "module",
-  "description": "Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) over the Agent Client Protocol",
+  "description": "Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode, Qwen Code) over the Agent Client Protocol",
   "license": "MIT",
   "author": "Alexey Seleznev",
   "keywords": [
@@ -15,6 +15,8 @@
     "antigravity",
     "codex",
     "opencode",
+    "qwen",
+    "qwen-code",
     "ai",
     "llm",
     "cli"

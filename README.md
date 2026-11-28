@@ -17,7 +17,7 @@
 
 **English** · [Русский](README.ru.md) · [Website](https://alexey-seleznev.pro/acpgram/)
 
-A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI**, **OpenAI Codex** and **OpenCode**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
+A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI**, **OpenAI Codex**, **OpenCode** and **Qwen Code**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
 
 - No runtime npm dependencies — plain Node.js 24 (built-in `node:sqlite`, `fetch`); ESLint is used for development only.
 - Windows, Linux and macOS. Tested on Windows Server and Linux (Ubuntu in WSL); macOS uses the same code as Linux.
@@ -37,7 +37,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 
 - **Streaming replies** in a Telegram draft with a stop button: the agent's thoughts, the steps it takes (reading files, running commands, searching, editing) and the elapsed time, then the answer itself.
 - **Rich final answer** — headings, lists, tables, code blocks — with a collapsible "work log" of every step and a footer showing the engine, the actual model, reasoning level, tokens, cost (Claude Code and OpenCode) and time.
-- **Five engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI, Codex and OpenCode; the default engine is set in `.env`.
+- **Six engines, one interface** — `/engine` switches between Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode and Qwen Code; the default engine is set in `.env`.
 - **Quick-reply buttons** — when the agent asks you to choose ("Which fix should I apply?"), buttons appear under its question; a tap sends the option to the agent as your message. The bot builds the buttons from the agent's `[[ask: Yes | No]]` marker; raw button tags in the agent's text do not work.
 - **See the edit before you allow it** — a permission request for a file edit shows the diff, not only the path.
 - **Plan** — if the agent keeps a plan, the draft shows "Plan: 3/7" and its items with check marks.
@@ -68,6 +68,7 @@ Check it yourself after installing: `npm audit signatures` verifies the registry
 | [Antigravity CLI](https://antigravity.google/docs/cli/acp/) 1.5+ | `agy acp` | see Antigravity docs | Google sign-in once (`agy acp --login`) or a Gemini API key: `GEMINI_API_KEY` plus `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json` |
 | [OpenCode](https://opencode.ai) | `opencode acp` | `npm i -g opencode-ai` | provider keys in the bot environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) or `opencode auth login`; free OpenCode Zen models need no key (they may use requests for training — keep secrets out) |
 | [OpenAI Codex](https://github.com/openai/codex) | `codex-acp` ([ACP bridge](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)) | `npm i -g @agentclientprotocol/codex-acp` (Codex CLI required) | `OPENAI_API_KEY` or `codex login`; on Windows `read-only`/`workspace-write` need a working Codex sandbox |
+| [Qwen Code](https://github.com/QwenLM/qwen-code) | `qwen --acp --auth-type openai` | `npm i -g @qwen-code/qwen-code` | `OPENROUTER_API_KEY` (free tool-capable OpenRouter models by default) or `OPENAI_API_KEY` with `QWEN_BASE_URL`; `QWEN_MODELS` sets the list. If Qwen Code is already configured, AcpGram imports models from `~/.qwen/settings.json` (or `QWEN_SETTINGS_FILE`) into the user sandbox without copying secrets; the selected model is preserved. |
 
 Only the default engine (`DEFAULT_ENGINE`, Gemini CLI unless set) is required; the others are optional — engines that are not installed are simply not offered.
 
@@ -146,7 +147,7 @@ The **setup wizard** (`acpgram setup` / `npm run setup`, safe to re-run — curr
 1. bot token — checked right away with `getMe`;
 2. main admin — just send any message to your bot, the wizard picks up your Telegram ID;
 3. projects root — optional (see `PROJECTS_ROOT` below);
-4. engines — finds installed Gemini CLI, Claude Code, Antigravity CLI, Codex and OpenCode, stores their full paths (so they are found under a service too), asks for the default engine — OpenCode is suggested first (works right away, no keys, on free models), then Gemini CLI; a re-run suggests the engine already chosen. For OpenCode the wizard asks whether to add provider keys now (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral) or shows the path to `.env` to add them later. If no engine is installed at all, the wizard offers to install OpenCode right away (`npm i -g opencode-ai` with the same Node installation), so the bot works without a single key;
+4. engines — finds installed Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode and Qwen Code, stores their full paths (so they are found under a service too), asks for the default engine — OpenCode is suggested first (works right away, no keys, on free models), then Gemini CLI; a re-run suggests the engine already chosen. For Qwen Code the wizard asks for the OpenRouter key (free models by default). For OpenCode the wizard asks whether to add provider keys now (Gemini, Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, Mistral) or shows the path to `.env` to add them later. If no engine is installed at all, the wizard offers to install OpenCode right away (`npm i -g opencode-ai` with the same Node installation), so the bot works without a single key;
 5. API keys — optional; the token, keys and passwords are typed hidden;
 6. writes `.env` (owner-only permissions; the previous one goes to `data/.env.bak`), creates the database and sends you a test message;
 7. offers to install the bot as a service.
@@ -174,11 +175,11 @@ cp .env.example .env     # set TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID, engine API k
 docker compose up -d --build
 ```
 
-In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all five engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge), Antigravity CLI and OpenCode (`opencode-ai`). To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
+In the container the agent sees only the mounted projects folder (`PROJECTS_DIR` → `/projects`). The image ships all six engines: Gemini CLI, Claude Code (`claude-agent-acp` bridge), OpenAI Codex (`codex` + `codex-acp` bridge), Antigravity CLI, OpenCode (`opencode-ai`) and Qwen Code (`@qwen-code/qwen-code`). To build a lighter image, list only the engines you need in `ENGINES` in `.env` (e.g. `ENGINES=gemini claude`); `DEFAULT_ENGINE` must be one of them.
 
-- Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY`; OpenCode - any of these keys (models of those providers) plus free models without a key (all from `.env`).
+- Authentication: Gemini - `GEMINI_API_KEY`, Claude Code - `ANTHROPIC_API_KEY`, Codex - `OPENAI_API_KEY`; OpenCode - any of these keys (models of those providers) plus free models without a key; Qwen Code - `OPENROUTER_API_KEY` (free OpenRouter models) or `OPENAI_API_KEY` with `QWEN_BASE_URL` (all from `.env`).
 - Antigravity CLI: either log in once with your Google account (a link and a code, no browser needed on the server): `docker compose exec -it bot agy acp --login`, or use a Gemini API key: set `GEMINI_API_KEY` in `.env` and add `"modelProvider": "gemini"` to `/home/node/.gemini/antigravity-cli/settings.json` inside the container (it lives in the `gemini-home` volume). The login and settings are kept in the `gemini-home` volume. The build fails if Antigravity cannot be installed or lacks the `acp` subcommand (1.5+) - then drop `agy` from `ENGINES`.
-- Volumes: `bot-data`, `gemini-home`, `claude-home`, `codex-home`, `opencode-home` survive container re-creation; `docker compose down -v` removes them.
+- Volumes: `bot-data` (also holds Qwen Code settings and sessions in `homes/<id>/.qwen`), `gemini-home`, `claude-home`, `codex-home`, `opencode-home` survive container re-creation; `docker compose down -v` removes them.
 - An engine that starts but is not authenticated is shown as "login needed" in `/engine`.
 
 ## Bot commands
@@ -188,7 +189,7 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 | `/start` | everyone | welcome screen: engine, model, access level, project |
 | `/help` | everyone | docs with an AI chat: link and mini app |
 | `/project [name or path]` | everyone | choose the working folder |
-| `/engine [gemini, claude, agy, codex, opencode]` | everyone | choose the engine |
+| `/engine [gemini, claude, agy, codex, opencode, qwen]` | everyone | choose the engine |
 | `/model [name]` | everyone | choose the model and reasoning level; with a name — search for a model (`/model sonnet`) |
 | `/new` | everyone | new session |
 | `/files` | everyone | project files: list, create, upload and delete — bypassing the agent |
@@ -206,14 +207,14 @@ In the container the agent sees only the mounted projects folder (`PROJECTS_DIR`
 
 The main admin is set by `ALLOWED_USER_ID`. Everyone else gets access through a single-use invite link from `/invite`, the bot owner's Telegram contact invite button (`https://t.me/botinvite/<bot>`, up to 10 users at once — auto-granted for 15 minutes after picking a level in `/invite`, or sent to the admin for level selection otherwise), or by asking (the request goes to the admin with buttons).
 
-| Level | Gemini CLI | Claude Code | Antigravity CLI | Codex | OpenCode | Meaning |
-|---|---|---|---|---|---|---|
-| Read | `plan` | `plan` | `plan` | `read-only` | `plan` | the agent only reads and analyzes |
-| Normal | `default` | `default` | `default` | `workspace-write` | `build` | permission requests go to the user |
-| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | edits without confirmation (Claude Code: no confirmations at all) |
-| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE` |
+| Level | Gemini CLI | Claude Code | Antigravity CLI | Codex | OpenCode | Qwen Code | Meaning |
+|---|---|---|---|---|---|---|---|
+| Read | `plan` | `plan` | `plan` | `read-only` | `plan` | `plan` | the agent only reads and analyzes |
+| Normal | `default` | `default` | `default` | `workspace-write` | `build` | `default` | permission requests go to the user |
+| Full | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | `auto` | edits without confirmation (Qwen also runs commands; Claude Code: no confirmations at all) |
+| Admin | `autoEdit` | `bypassPermissions` | `accept-edits` | `agent-full-access` | `build` | `yolo` | change with `ACP_MODE`/`GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE`, `QWEN_ADMIN_MODE` |
 
-OpenCode has only two modes (`plan` and `build`); what the agent may do is set by a permission config the bot passes to the agent process in `OPENCODE_CONFIG_CONTENT`: Read — edits and commands are denied (the model does not even see them), page fetches need confirmation; Normal — edits, commands and page fetches need confirmation; Full and admin — everything without confirmation, including folders outside the project.
+OpenCode has only two modes (`plan` and `build`); what the agent may do is set by a permission config the bot passes to the agent process in `OPENCODE_CONFIG_CONTENT`: Read — edits and commands are denied (the model does not even see them), page fetches need confirmation; Normal — edits, commands and page fetches need confirmation; Full and admin — everything without confirmation, including folders outside the project. Qwen Code has five modes (`plan`, `default`, `auto-edit`, `auto`, `yolo`); the bot always sets the mode itself because a Qwen session starts in `auto` by default.
 
 New teammates get only the default engine; the admin grants other engines and can restrict models per user and per engine. At most `MAX_AGENTS` (3) teammate agents run at once across all engines (the admin is not counted); idle sessions close after `IDLE_MINUTES` (30).
 
@@ -313,15 +314,17 @@ What the sandbox does not do:
 | `GIT_AGENT_AUTH` | `1` | `1` — the Git sign-in is also given to agents: they pull and push by themselves, but teammates' tokens are visible to them and may end up in a model request; `0` — the token stays with the bot, pulls and pushes are done with buttons in `/git` |
 | `GIT_COMMAND` | no | path to `git` if it is not in `PATH` |
 | `USER_WORKSPACES` | no | `1` — personal workspaces: each teammate chooses projects only inside their own folder `<root>/<Telegram ID>`, the administrator sees the whole root. Requires `PROJECTS_ROOT`; the bot does not start without it |
-| `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex` or `opencode`; the bot does not start if this engine is not installed |
+| `DEFAULT_ENGINE` | no | `gemini` (default), `claude`, `agy`, `codex`, `opencode` or `qwen`; the bot does not start if this engine is not installed |
 | `DEFAULT_LANG` | no | bot language when the user's Telegram language is not `ru`, `uk` or `en`: `en` (default), `ru` or `uk`. Each user can change it with `/language` |
 | `ACPGRAM_LANG` | no | language of the `acpgram` terminal commands: `ru`, `uk` or `en`. Usually not needed: the language comes from the system (for Docker and CI, where the system has none) |
 | `GEMINI_API_KEY` | no | Gemini API key, passed to the agent through the bot's environment |
 | `GOOGLE_API_KEY` | no | alternative Google key for the Google provider models in OpenCode (instead of `GEMINI_API_KEY`); the bot passes it to OpenCode as `GOOGLE_GENERATIVE_AI_API_KEY` |
 | `ANTHROPIC_API_KEY` | no | Anthropic API key for Claude Code (API billing instead of a subscription) |
-| `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY` | no | provider keys for OpenCode: each adds a group of models to `/model` (OpenRouter gives hundreds of models from different providers with one key). Other OpenCode providers work too with their own variables (`XAI_API_KEY`, `FIREWORKS_API_KEY`, etc.) |
-| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND`, `OPENCODE_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
-| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE` | no | admin session mode per engine |
+| `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY` | no | provider keys for OpenCode: each adds a group of models to `/model` (OpenRouter gives hundreds of models from different providers with one key). Other OpenCode providers work too with their own variables (`XAI_API_KEY`, `FIREWORKS_API_KEY`, etc.). `OPENROUTER_API_KEY` also gives Qwen Code its free OpenRouter models |
+| `GEMINI_COMMAND`, `CLAUDE_COMMAND`, `AGY_COMMAND`, `CODEX_COMMAND`, `OPENCODE_COMMAND`, `QWEN_COMMAND` | no | full paths to the engines if they are not in `PATH` (typical for services) |
+| `ACP_MODE` / `GEMINI_ADMIN_MODE`, `CLAUDE_ADMIN_MODE`, `AGY_ADMIN_MODE`, `CODEX_ADMIN_MODE`, `OPENCODE_ADMIN_MODE`, `QWEN_ADMIN_MODE` | no | admin session mode per engine |
+| `QWEN_MODELS` | no | Qwen Code model list: `id\|Name` separated by semicolons. Default: free OpenRouter models that can call tools |
+| `QWEN_BASE_URL` | no | another OpenAI-compatible API for Qwen Code (key: `OPENAI_API_KEY`); without it an OpenRouter key selects OpenRouter and an OpenAI key selects the OpenAI API |
 | `MAX_AGENTS` | no | concurrent teammate agents (3) |
 | `MAX_AGENTS_PER_USER` | no | concurrent agents of one teammate across topics (2) |
 | `ADMIN_MAX_AGENTS` | no | the same for the admin (4) |
@@ -357,6 +360,7 @@ src/
   service.mjs     service: nssm (Windows), systemd --user (Linux), launchd (macOS)
   bot.mjs         message and button routing, access checks
   engines.mjs     engine registry: commands, modes per level, catalogs, usage parsing
+qwen.mjs        Qwen Code: model list, settings.json in QWEN_HOME, API key in the environment
   acp.mjs         Agent Client Protocol client (agent subprocess)
   access.mjs      per-user engines and models, model catalogs, applying the choice
   turn.mjs        one request: streaming draft, work log, permissions, final answer

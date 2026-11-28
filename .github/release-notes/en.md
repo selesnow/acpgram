@@ -1,0 +1,5 @@
+- New engine: **Qwen Code** via ACP — pick it in `/engine` like any other agent.
+- Qwen Code works with free tool-capable OpenRouter models by default; a custom model list can be set with `QWEN_MODELS`.
+- If Qwen Code is already configured on the machine, AcpGram imports models from global `~/.qwen/settings.json` (or `QWEN_SETTINGS_FILE`) into the user sandbox without copying secrets; the selected model is preserved.
+- Another OpenAI-compatible API can be used with `QWEN_BASE_URL` and `OPENAI_API_KEY`.
+- The setup wizard offers the OpenRouter key for Qwen Code, and the Docker image can install Qwen Code with the other engines.

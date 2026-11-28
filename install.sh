@@ -158,8 +158,9 @@ EOF
   step "Done"
   say "  acpgram          start the bot"
   say "  acpgram setup    settings wizard"
-  say "  acpgram service install | status | uninstall"
+  say "  acpgram service install | restart | stop | status | uninstall"
   say "  acpgram update   update to the latest release"
+  say "  acpgram help     all commands and options"
 }
 
 say() { printf '%s\n' "$*"; }

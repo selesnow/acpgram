@@ -29,6 +29,7 @@ test('реестр: у каждого движка полный контракт
   assert.deepEqual(ENGINES.gemini.args, ['--acp']);
   assert.deepEqual(ENGINES.agy.args, ['acp']);
   assert.deepEqual(ENGINES.codex.args, []);
+  assert.deepEqual(ENGINES.qwen.args, ['--acp', '--auth-type', 'openai', '--channel', 'ACP']);
 });
 
 test('engineMode: уровни Gemini, неизвестный уровень — чтение, администратор — свой режим', () => {
@@ -49,6 +50,11 @@ test('engineMode: уровни Gemini, неизвестный уровень —
   assert.deepEqual(ENGINES.codex.modes, { read: 'read-only', normal: 'workspace-write', full: 'agent-full-access' });
   assert.equal(engineMode(ENGINES.codex, { level: 'неизвестный' }), 'read-only');
   assert.equal(engineMode(ENGINES.codex, { admin: true }), 'agent-full-access');
+  // Qwen Code: «Полный» — auto, администратор — yolo (по умолчанию)
+  assert.deepEqual(ENGINES.qwen.modes, { read: 'plan', normal: 'default', full: 'auto' });
+  assert.equal(engineMode(ENGINES.qwen, { level: 'read' }), 'plan');
+  assert.equal(engineMode(ENGINES.qwen, { level: 'full' }), 'auto');
+  assert.equal(engineMode(ENGINES.qwen, { admin: true }), 'yolo');
 });
 
 test('доступность: недоступный движок не выбирается, пользователь откатывается на движок по умолчанию', () => {
@@ -196,7 +202,7 @@ test('checkEngines: слишком старая версия движка — н
   assert.deepEqual(a.errorI18n, { key: 'err.engineOld.update', vars: { version: a.version, min: '99.0.0', update: 'old update' } });
   assert.equal(b.ok, true);
   assert.equal(ENGINES.agy.minVersion, '1.5.0');
-  assert.deepEqual(['agy', 'codex', 'opencode'].map((id) => ENGINES[id].installKey), ['install.agy', 'install.codex', 'install.opencode']);
+  assert.deepEqual(['agy', 'codex', 'opencode', 'qwen'].map((id) => ENGINES[id].installKey), ['install.agy', 'install.codex', 'install.opencode', 'install.qwen']);
 
   const noUpdate = { ...old, id: 'old-no-update', update: '' };
   const [c] = await checkEngines([noUpdate]);

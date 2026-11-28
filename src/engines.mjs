@@ -13,6 +13,7 @@
 // Окружение процесса агента (agentEnv) — окружение бота без токена бота и без ключей API чужих провайдеров
 // (apiKeys движка); движок может добавить свои переменные (processEnv) — например, конфиг прав OpenCode по уровню доступа.
 import { AcpAgent, checkCommand } from './acp.mjs';
+import { qwenProcessEnv } from './qwen.mjs';
 
 /** Служебная строка Gemini «[MODE_UPDATE] <режим>» приходит как текст ответа — убираем её из начала. */
 const stripGeminiModeUpdate = (s) => s.replace(/^\s*\[MODE_UPDATE\]\s*(?:default|autoEdit|auto_edit|yolo|plan)/, '');
@@ -33,7 +34,7 @@ const stripGeminiModeUpdate = (s) => s.replace(/^\s*\[MODE_UPDATE\]\s*(?:default
  * @property {(u:object)=>string} toolName             имя инструмента из события tool_call / tool_call_update
  * @property {(u:object)=>string} [toolDescription]    описание действия от агента (если движок присылает его отдельно)
  * @property {RegExp} [quietStderr]    служебные строки stderr агента, которые не пишутся в лог бота
- * @property {(who:{admin?:boolean, level?:string})=>Record<string,string>} [processEnv]  свои переменные окружения процесса агента
+ * @property {(who:{admin?:boolean, level?:string, userId?:number|string})=>Record<string,string>} [processEnv]  свои переменные окружения процесса агента
  * @property {string[]|null} apiKeys    ключи API провайдеров, которые видит процесс агента; null — все (OpenCode)
  * @property {boolean} [modelGroups]    модели «провайдер/модель»: в /model — по группам (бесплатные, провайдеры)
  * @property {{args: string[], parse: (out:string)=>Map<string,{free:boolean,tools:boolean}>}} [modelMeta]  команда со сведениями о моделях
@@ -256,6 +257,36 @@ export const ENGINES = Object.assign(Object.create(null), {
     toolName: genericToolName,
     toolDescription: (u) => u.rawInput?.description || '',
   },
+  qwen: {
+    id: 'qwen',
+    label: 'Qwen Code',
+    short: 'Qwen',
+    envVar: 'QWEN_COMMAND',
+    // OpenAI-совместимый API: OpenRouter (бесплатные модели) или OpenAI; ключ в файл настроек не пишется
+    apiKeys: ['OPENROUTER_API_KEY', 'OPENAI_API_KEY'],
+    defaultCommand: 'qwen',
+    args: ['--acp', '--auth-type', 'openai', '--channel', 'ACP'],
+    versionArgs: ['--version'],
+    install: 'npm i -g @qwen-code/qwen-code (OpenAI-совместимый API: OPENROUTER_API_KEY или OPENAI_API_KEY; список моделей — QWEN_MODELS)',
+    installKey: 'install.qwen',
+    update: 'npm i -g @qwen-code/qwen-code@latest',
+    // ACP-режимы Qwen: plan / default / auto-edit / auto (классификатор) / yolo; по умолчанию сессия стартует в auto,
+    // поэтому режим задаём всегда. «Полный» — auto (правки и команды без подтверждений классификатора).
+    modes: { read: 'plan', normal: 'default', full: 'auto' },
+    modeRank: ['plan', 'default', 'auto-edit', 'auto', 'yolo'],
+    // модели и режим — настройки сессии (configOptions model / mode); уровня рассуждений у OpenAI-совместимых моделей нет
+    modelSource: 'config',
+    effortConfig: null,
+    adminMode: process.env.QWEN_ADMIN_MODE || 'yolo',
+    // настройки моделей и каталог QWEN_HOME — на каждого сотрудника (файл создаёт бот, ключа в нём нет)
+    processEnv: (who) => qwenProcessEnv(who),
+    cleanText: (s) => s,
+    // имя инструмента — в _meta.toolName (read_file, run_shell_command…), иначе заголовок или вид действия
+    toolName: (u) => u._meta?.toolName || u.title || u.kind || u.toolCallId || 'tool',
+    toolDescription: (u) => u.rawInput?.description || '',
+    // Qwen предупреждает о неподдерживаемой версии Node и о непонятном шаблоне в Windows — к работе не относится
+    quietStderr: /^(?:Warning: Node\.js|INFO: Could not find files)/,
+  },
   opencode: {
     id: 'opencode',
     label: 'OpenCode',
@@ -289,7 +320,7 @@ export const ENGINES = Object.assign(Object.create(null), {
 });
 Object.freeze(ENGINES);
 
-/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy | codex | opencode), иначе Gemini. */
+/** Движок по умолчанию: DEFAULT_ENGINE из .env (gemini | claude | agy | codex | opencode | qwen), иначе Gemini. */
 export const DEFAULT_ENGINE = ENGINES[process.env.DEFAULT_ENGINE?.trim().toLowerCase()] ? process.env.DEFAULT_ENGINE.trim().toLowerCase() : 'gemini';
 
 /** Движок по умолчанию обязателен: без него бот не запускается. Остальные — по возможности. */
@@ -507,7 +538,7 @@ export function parseUsage(res, usageUpdate) {
 /**
  * Создаёт клиент агента (AgentClient) для движка.
  * @param {Engine} engine
- * @param {{cwd: string, who?: {admin?: boolean, level?: string}, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
+ * @param {{cwd: string, who?: {admin?: boolean, level?: string, userId?: number|string}, onUpdate?: Function, onPermission?: Function, onExit?: Function}} opts
  *   who — кто работает в сессии: от этого зависят переменные окружения движка (processEnv; у OpenCode — конфиг прав).
  *   Без who (запуск за списком моделей) — только общее окружение агента (agentEnv).
  *   wrap — запуск через программу-обёртку (песочница, sandbox.agentSandbox): {command, args, env}; её аргументы уже

@@ -396,7 +396,7 @@ async function startAgent(st, { resume } = {}) {
     wrap: sandboxFor(st, cwd, engine),
     extraEnv: agentGitEnv(st.userId),
     // уровень доступа — и в окружение процесса (у OpenCode права задаются конфигом, а не режимом сессии)
-    who: { admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
+    who: { userId: st.userId, admin: isAdmin(st.userId), level: db.getUser(st.userId)?.level },
     onUpdate: (u) => {
       // собственные команды агента («/compact» у Claude Code) — приходят и во время запуска; по ним бот отличает
       // команду агента от опечатки в команде бота

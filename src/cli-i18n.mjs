@@ -110,6 +110,11 @@ export const CLI_MESSAGES = {
     ru: 'npm i -g @agentclientprotocol/codex-acp (нужен установленный Codex CLI и вход: codex login)',
     uk: 'npm i -g @agentclientprotocol/codex-acp (потрібен встановлений Codex CLI та вхід: codex login)',
   },
+  'install.qwen': {
+    en: 'npm i -g @qwen-code/qwen-code (OpenAI-compatible API: OPENROUTER_API_KEY or OPENAI_API_KEY; model list in QWEN_MODELS)',
+    ru: 'npm i -g @qwen-code/qwen-code (OpenAI-совместимый API: OPENROUTER_API_KEY или OPENAI_API_KEY; список моделей — QWEN_MODELS)',
+    uk: 'npm i -g @qwen-code/qwen-code (OpenAI-сумісний API: OPENROUTER_API_KEY або OPENAI_API_KEY; список моделей — QWEN_MODELS)',
+  },
   'install.opencode': {
     en: 'npm i -g opencode-ai (models: provider API keys in the environment or opencode auth login; free OpenCode Zen models need no key)',
     ru: 'npm i -g opencode-ai (модели: ключи API провайдеров в окружении или opencode auth login; бесплатные модели OpenCode Zen — без ключа)',
@@ -117,7 +122,7 @@ export const CLI_MESSAGES = {
   },
   // ---------- acpgram (cli.mjs) ----------
   'cli.help': {
-    en: `AcpGram — Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
+    en: `AcpGram — Telegram gateway to AI coding agents (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode, Qwen Code)
 
   acpgram [start]          start the bot (the first run without settings opens the wizard)
   acpgram setup            setup wizard
@@ -130,7 +135,7 @@ export const CLI_MESSAGES = {
 
 Service options: --name <name>, --dry-run, --system (Windows: run as LocalSystem, no terminal).
 https://github.com/{repo}`,
-    ru: `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
+    ru: `AcpGram — Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode, Qwen Code)
 
   acpgram [start]          запустить бота (первый запуск без настроек откроет мастер)
   acpgram setup            мастер настройки
@@ -143,7 +148,7 @@ https://github.com/{repo}`,
 
 Параметры службы: --name <имя>, --dry-run, --system (Windows: от LocalSystem без терминала).
 https://github.com/{repo}`,
-    uk: `AcpGram — Telegram-шлюз до AI-агентів розробки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode)
+    uk: `AcpGram — Telegram-шлюз до AI-агентів розробки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode, Qwen Code)
 
   acpgram [start]          запустити бота (перший запуск без налаштувань відкриє майстер)
   acpgram setup            майстер налаштування
@@ -227,7 +232,7 @@ https://github.com/{repo}`,
     ru: 'Доступ агентов к Git: 1 — получают и отправляют изменения сами (токены Git видны агенту и могут попасть в запрос к модели); 0 — только кнопками в /git',
     uk: 'Доступ агентів до Git: 1 — самостійно отримують і надсилають зміни (токени Git видимі агенту та можуть потрапити до запиту до моделі); 0 — лише кнопками в /git',
   },
-  'env.c.engine': { en: 'Default engine: gemini | claude | agy | codex | opencode', ru: 'Движок по умолчанию: gemini | claude | agy | codex | opencode', uk: 'Рушій за замовчуванням: gemini | claude | agy | codex | opencode' },
+  'env.c.engine': { en: 'Default engine: gemini | claude | agy | codex | opencode | qwen', ru: 'Движок по умолчанию: gemini | claude | agy | codex | opencode | qwen', uk: 'Рушій за замовчуванням: gemini | claude | agy | codex | opencode | qwen' },
   'env.c.keys': { en: 'API keys are passed to the agents through the bot environment', ru: 'Ключи API передаются агентам через окружение бота', uk: 'Ключі API передаються агентам через оточення бота' },
   'env.rest': { en: 'Other settings', ru: 'Прочие настройки', uk: 'Інші налаштування' },
 
@@ -380,6 +385,46 @@ https://github.com/{repo}`,
   },
   'setup.keyClaude': { en: ' — Claude Code via API, without it via subscription', ru: ' — Claude Code по API, без него по подписке', uk: ' — Claude Code через API, без нього за підпискою' },
   'setup.keyCodex': { en: ' — Codex via API, without it via ChatGPT sign-in (codex login)', ru: ' — Codex по API, без него по входу ChatGPT (codex login)', uk: ' — Codex через API, без нього за входом ChatGPT (codex login)' },
+  'setup.keyQwen': {
+    en: ' — OpenRouter key for Qwen Code (free tool-capable models by default)',
+    ru: ' — ключ OpenRouter для Qwen Code (по умолчанию бесплатные модели с инструментами)',
+    uk: ' — ключ OpenRouter для Qwen Code (за замовчуванням безкоштовні моделі з інструментами)',
+  },
+  'setup.keyQwenOpenAi': {
+    en: ' — OPENAI_API_KEY for Qwen Code (if using OpenAI or another compatible API)',
+    ru: ' — OPENAI_API_KEY для Qwen Code (если используете OpenAI или другой совместимый API)',
+    uk: ' — OPENAI_API_KEY для Qwen Code (якщо використовуєте OpenAI або інший сумісний API)',
+  },
+  'setup.qwenNote': {
+    en: '\n  Qwen Code: AcpGram runs it as ACP with --auth-type openai, so native Qwen OAuth is not used here. Use an OpenAI-compatible API key, or keep existing local Qwen settings.',
+    ru: '\n  Qwen Code: AcpGram запускает его в ACP с --auth-type openai, поэтому нативный Qwen OAuth здесь не используется. Нужен OpenAI-совместимый API-ключ, либо можно оставить уже настроенный локальный Qwen.',
+    uk: '\n  Qwen Code: AcpGram запускає його в ACP з --auth-type openai, тому нативний Qwen OAuth тут не використовується. Потрібен OpenAI-сумісний API-ключ, або можна залишити вже налаштований локальний Qwen.',
+  },
+  'setup.qwenFound': {
+    en: '  Found existing Qwen settings: {path}. AcpGram can import models into the user sandbox without copying secrets.',
+    ru: '  Найдены настройки Qwen: {path}. AcpGram может импортировать модели в sandbox пользователя, не копируя секреты.',
+    uk: '  Знайдено налаштування Qwen: {path}. AcpGram може імпортувати моделі в sandbox користувача, не копіюючи секрети.',
+  },
+  'setup.qwenDetected': {
+    en: '  Detected Qwen-compatible credentials/env: {list}.',
+    ru: '  Обнаружены подходящие для Qwen ключи/env: {list}.',
+    uk: '  Виявлено сумісні для Qwen ключі/env: {list}.',
+  },
+  'setup.qwenModeAsk': {
+    en: '  Qwen auth for AcpGram: 1) OpenRouter key, 2) OPENAI_API_KEY + optional QWEN_BASE_URL, 3) skip (use existing env/settings)',
+    ru: '  Авторизация Qwen для AcpGram: 1) ключ OpenRouter, 2) OPENAI_API_KEY + опциональный QWEN_BASE_URL, 3) пропустить (использовать текущие env/настройки)',
+    uk: '  Авторизація Qwen для AcpGram: 1) ключ OpenRouter, 2) OPENAI_API_KEY + необов\'язковий QWEN_BASE_URL, 3) пропустити (використати поточні env/налаштування)',
+  },
+  'setup.qwenBaseUrlOptional': {
+    en: '  QWEN_BASE_URL (optional; leave empty for OpenAI API, or set for another compatible API)',
+    ru: '  QWEN_BASE_URL (необязательно; пусто — OpenAI API, или укажите другой совместимый API)',
+    uk: '  QWEN_BASE_URL (необов\'язково; порожньо — OpenAI API, або вкажіть інший сумісний API)',
+  },
+  'setup.qwenSkip': {
+    en: '  Skipped Qwen key setup. Make sure OPENAI_API_KEY/OPENROUTER_API_KEY and model settings are available in env or Qwen settings.',
+    ru: '  Настройка ключей Qwen пропущена. Убедитесь, что OPENAI_API_KEY/OPENROUTER_API_KEY и настройки моделей доступны в env или настройках Qwen.',
+    uk: '  Налаштування ключів Qwen пропущено. Переконайтеся, що OPENAI_API_KEY/OPENROUTER_API_KEY і налаштування моделей доступні в env або налаштуваннях Qwen.',
+  },
   'setup.opencodeNote': {
     en: '  OpenCode: free OpenCode Zen models work without a key; each provider key adds that provider’s models (a separate group in /model). OpenRouter gives hundreds of models from different providers with one key',
     ru: '  OpenCode: бесплатные модели OpenCode Zen работают без ключа; каждый ключ провайдера добавляет его модели (отдельная группа в /model). OpenRouter по одному ключу даёт сотни моделей разных провайдеров',

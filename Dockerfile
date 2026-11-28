@@ -1,12 +1,12 @@
-# Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode) в контейнере.
+# Telegram-шлюз к AI-агентам разработки (Gemini CLI, Claude Code, Antigravity CLI, Codex, OpenCode, Qwen Code) в контейнере.
 # Агент видит только смонтированную папку проектов (/projects) — в отличие от установки напрямую,
 # где он работает с правами учётной записи во всей системе.
 # Базовый образ закреплён по digest (воспроизводимая сборка); новый digest предлагает Dependabot.
 FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
-# Какие движки ставить в образ (через пробел): gemini claude codex agy opencode.
+# Какие движки ставить в образ (через пробел): gemini claude codex agy opencode qwen.
 # Облегчить образ: docker compose build --build-arg ENGINES="gemini claude"
-ARG ENGINES="gemini claude codex agy opencode"
+ARG ENGINES="gemini claude codex agy opencode qwen"
 
 # Версии фиксируются, чтобы обновление было осознанным:
 #   docker compose build --build-arg GEMINI_CLI_VERSION=... (и так же для остальных)
@@ -16,6 +16,7 @@ ARG CLAUDE_ACP_VERSION=latest
 ARG CODEX_CLI_VERSION=latest
 ARG CODEX_ACP_VERSION=latest
 ARG OPENCODE_VERSION=latest
+ARG QWEN_VERSION=latest
 
 # tini — init-процесс: передаёт сигналы боту и забирает завершённые процессы агентов (без «зомби»).
 # git и ripgrep нужны агенту для работы с кодом; curl — для установщика Antigravity CLI.
@@ -24,7 +25,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system --add safe.directory '*'
 
-# Движки на npm: Gemini CLI, мосты ACP для Claude Code и Codex (и сам Codex CLI, который мост запускает), OpenCode.
+# Движки на npm: Gemini CLI, мосты ACP для Claude Code и Codex (и сам Codex CLI, который мост запускает), OpenCode, Qwen Code.
 RUN set -eu; pkgs=""; \
     for e in $ENGINES; do \
       case "$e" in \
@@ -32,8 +33,9 @@ RUN set -eu; pkgs=""; \
         claude) pkgs="$pkgs @agentclientprotocol/claude-agent-acp@${CLAUDE_ACP_VERSION}" ;; \
         codex)  pkgs="$pkgs @openai/codex@${CODEX_CLI_VERSION} @agentclientprotocol/codex-acp@${CODEX_ACP_VERSION}" ;; \
         opencode) pkgs="$pkgs opencode-ai@${OPENCODE_VERSION}" ;; \
+        qwen)   pkgs="$pkgs @qwen-code/qwen-code@${QWEN_VERSION}" ;; \
         agy)    ;; \
-        *) echo "Неизвестный движок в ENGINES: $e (допустимо: gemini claude codex agy opencode)" >&2; exit 1 ;; \
+        *) echo "Неизвестный движок в ENGINES: $e (допустимо: gemini claude codex agy opencode qwen)" >&2; exit 1 ;; \
       esac; \
     done; \
     if [ -n "$pkgs" ]; then npm install -g $pkgs; fi; \
@@ -65,7 +67,8 @@ ENV PROJECTS_ROOT=/projects \
     CLAUDE_COMMAND=claude-agent-acp \
     CODEX_COMMAND=codex-acp \
     AGY_COMMAND=agy \
-    OPENCODE_COMMAND=opencode
+    OPENCODE_COMMAND=opencode \
+    QWEN_COMMAND=qwen
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "--disable-warning=ExperimentalWarning", "src/bot.mjs"]

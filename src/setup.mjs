@@ -50,6 +50,7 @@ const LAYOUT = [
   ['AGY_COMMAND', null],
   ['CODEX_COMMAND', null],
   ['OPENCODE_COMMAND', null],
+  ['QWEN_COMMAND', null],
   ['GEMINI_API_KEY', 'env.c.keys'],
   ['ANTHROPIC_API_KEY', null],
   ['OPENAI_API_KEY', null],
@@ -79,9 +80,10 @@ export function applySetupDefaults(env) {
 }
 
 /** Ключи для OpenCode, которые мастер ещё не спросил: ключи Gemini, Claude Code и Codex уже спрошены, если те установлены. */
-export function opencodeKeysToAsk(available) {
+export function opencodeKeysToAsk(available, skip = []) {
   const askedFor = { GEMINI_API_KEY: 'gemini', ANTHROPIC_API_KEY: 'claude', OPENAI_API_KEY: 'codex' };
-  return OPENCODE_KEYS.filter(([name]) => !available.includes(askedFor[name]));
+  const skipped = new Set(skip);
+  return OPENCODE_KEYS.filter(([name]) => !available.includes(askedFor[name]) && !skipped.has(name));
 }
 
 /**
@@ -169,7 +171,7 @@ async function api(token, method, body = {}) {
 }
 
 /** Предпочтение мастера для движка по умолчанию: OpenCode работает сразу, без ключей (бесплатные модели), затем остальные. */
-const DEFAULT_ENGINE_ORDER = ['opencode', 'gemini', 'claude', 'codex', 'agy'];
+const DEFAULT_ENGINE_ORDER = ['opencode', 'gemini', 'claude', 'codex', 'agy', 'qwen'];
 
 /**
  * Движок, который мастер предлагает по умолчанию: уже выбранный (повторный запуск не меняет настройку), иначе первый
@@ -464,10 +466,37 @@ export async function setupApiKeys(p, env, available) {
   if (available.includes('gemini')) await askKey('GEMINI_API_KEY', '');
   if (available.includes('claude')) await askKey('ANTHROPIC_API_KEY', tc('setup.keyClaude'));
   if (available.includes('codex')) await askKey('OPENAI_API_KEY', tc('setup.keyCodex'));
+  // Qwen Code: AcpGram использует ACP + OpenAI-compatible API. Нативный Qwen OAuth в этом режиме не используется.
+  if (available.includes('qwen')) {
+    const { existsSync: exists } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { homedir } = await import('node:os');
+    const globalQwen = env.QWEN_SETTINGS_FILE || process.env.QWEN_SETTINGS_FILE || join(homedir(), '.qwen', 'settings.json');
+    const hasGlobal = exists(globalQwen);
+    console.log(tc('setup.qwenNote'));
+    if (hasGlobal) console.log(tc('setup.qwenFound', { path: globalQwen }));
+    const hasOpenRouter = !!(env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY);
+    const hasOpenAi = !!(env.OPENAI_API_KEY || process.env.OPENAI_API_KEY);
+    const hasBase = !!(env.QWEN_BASE_URL || process.env.QWEN_BASE_URL);
+    const detected = [hasOpenRouter ? 'OpenRouter' : null, hasOpenAi ? 'OPENAI_API_KEY' : null, hasBase ? 'QWEN_BASE_URL' : null].filter(Boolean);
+    if (detected.length) console.log(tc('setup.qwenDetected', { list: detected.join(', ') }));
+    const def = hasOpenRouter ? '1' : (hasOpenAi || hasBase) ? '2' : hasGlobal ? '3' : '1';
+    let mode = (await p.ask(tc('setup.qwenModeAsk'), def)).trim();
+    if (!['1', '2', '3'].includes(mode)) mode = def;
+    if (mode === '1') {
+      await askKey('OPENROUTER_API_KEY', tc('setup.keyQwen'));
+    } else if (mode === '2') {
+      await askKey('OPENAI_API_KEY', tc('setup.keyQwenOpenAi'));
+      const base = await p.ask(tc('setup.qwenBaseUrlOptional'), env.QWEN_BASE_URL || process.env.QWEN_BASE_URL || '');
+      if (base) env.QWEN_BASE_URL = base;
+    } else {
+      console.log(tc('setup.qwenSkip'));
+    }
+  }
   // OpenCode работает с моделями тех провайдеров, чьи ключи есть в окружении: ключи — сейчас или позже в .env
   if (available.includes('opencode')) {
     console.log(tc('setup.opencodeNote'));
-    const keys = opencodeKeysToAsk(available);
+    const keys = opencodeKeysToAsk(available, available.includes('qwen') ? ['OPENROUTER_API_KEY'] : []);
     if (await p.yes(tc('setup.opencodeKeysAsk'), false)) for (const [name, label] of keys) await askKey(name, ` — ${label}`);
     else console.log(tc('setup.opencodeKeysLater', { path: ENV_PATH, list: keys.map(([name]) => name).join(', ') }));
   }

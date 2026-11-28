@@ -200,8 +200,9 @@
     Step 'Done'
     Write-Host "  acpgram          start the bot"
     Write-Host "  acpgram setup    settings wizard"
-    Write-Host "  acpgram service install | status | uninstall   (service install: terminal as administrator)"
+    Write-Host "  acpgram service install | restart | stop | status | uninstall   (terminal as administrator)"
     Write-Host "  acpgram update   update to the latest release"
+    Write-Host "  acpgram help     all commands and options"
   }
   finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

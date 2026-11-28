@@ -131,7 +131,7 @@ export function bwrapArgs({ cwd, rw, ro = [], system = SYSTEM_DIRS }) {
 
 // Переменные, указывающие на домашнюю папку и службы учётной записи бота: в песочнице их нет
 const HOST_ONLY_ENV = /^(XDG_(CONFIG|DATA|CACHE|STATE)_HOME|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|SSH_AUTH_SOCK|ACPGRAM_HOME)$/;
-const SANDBOX_ENV_EXACT = new Set(['PATH', 'PATHEXT', 'TMP', 'TEMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE']);
+const SANDBOX_ENV_EXACT = new Set(['PATH', 'PATHEXT', 'TMP', 'TEMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OPENAI_BASE_URL', 'QWEN_HOME']);
 const SANDBOX_ENV_MATCH = /^(LANG(UAGE)?|LC_|TERM|TZ|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE)/i;
 const envList = (value) => new Set(String(value ?? '').split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean));
 
