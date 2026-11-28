@@ -75,6 +75,15 @@ jobs:
           for f in *; do cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"; done
           gh release upload "$GITHUB_REF_NAME" ./*.sigstore.json --repo "$GITHUB_REPOSITORY"
 
+  notify:
+    name: Announce release
+    needs: release
+    uses: ./.github/workflows/release-notify.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+
   installers:
     name: Installer (${{ matrix.os }})
     needs: release

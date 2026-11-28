@@ -22,6 +22,23 @@ on:
           - en
           - ru
           - ua
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to announce (for example v1.36.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Print payloads without sending to Telegram'
+        type: boolean
+        default: false
+      chat:
+        description: 'Channel to announce to'
+        type: string
+        default: all
+    secrets:
+      BOT_TOKEN:
+        required: true
 
 permissions:
   contents: read
@@ -45,6 +62,6 @@ jobs:
           CHANNEL_RU: ${{ vars.CHANNEL_RU || secrets.CHANNEL_RU }}
           CHANNEL_UA: ${{ vars.CHANNEL_UA || secrets.CHANNEL_UA }}
           RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-          TARGET_CHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.chat || 'all' }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.dry_run }}
+          TARGET_CHAT: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.chat || 'all' }}
         run: node .github/scripts/notify-release.mjs
