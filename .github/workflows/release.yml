@@ -78,7 +78,7 @@ jobs:
   notify:
     name: Announce release
     needs: release
-    uses: ${{ github.repository }}/.github/workflows/release-notify.yml@${{ github.sha }}
+    uses: $/.github/workflows/release-notify.yml
     with:
       version: ${{ github.ref_name }}
     secrets:
