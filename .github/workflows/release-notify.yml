@@ -58,9 +58,9 @@ jobs:
       - name: Send rich messages
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHANNEL_EN: ${{ vars.CHANNEL || secrets.CHANNEL }}
-          CHANNEL_RU: ${{ vars.CHANNEL_RU || secrets.CHANNEL_RU }}
-          CHANNEL_UA: ${{ vars.CHANNEL_UA || secrets.CHANNEL_UA }}
+          CHANNEL_EN: ${{ vars.CHANNEL }}
+          CHANNEL_RU: ${{ vars.CHANNEL_RU }}
+          CHANNEL_UA: ${{ vars.CHANNEL_UA }}
           RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.dry_run }}
           TARGET_CHAT: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.chat || 'all' }}
