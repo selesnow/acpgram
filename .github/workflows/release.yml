@@ -104,7 +104,7 @@ jobs:
           cd assets
           for f in *; do
             gh attestation download "$f" --repo "$GITHUB_REPOSITORY" --predicate-type https://slsa.dev/provenance/v1 --limit 1
-            bundle=$(ls -1 *.jsonl 2>/dev/null | head -n 1)
+            bundle=$(find . -maxdepth 1 -type f -name '*.jsonl' -print -quit)
             if [ -z "$bundle" ]; then echo "::error::no provenance bundle for $f"; exit 1; fi
             mv "$bundle" "$f.intoto.jsonl"
           done
