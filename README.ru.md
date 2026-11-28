@@ -16,6 +16,8 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16722/badge)](https://www.bestpractices.dev/projects/16722)
 
 [English](README.md) · **Русский** · [Сайт](https://alexey-seleznev.pro/acpgram/)
+**Новостные каналы:** [@acpgram](https://t.me/acpgram) (English) · [@acpgram_ru](https://t.me/acpgram_ru) (русский) · [@acpgram_ua](https://t.me/acpgram_ua) (українська)
+
 
 Telegram-шлюз к AI-агентам разработки **Gemini CLI**, **Claude Code**, **Antigravity CLI**, **OpenAI Codex**, **OpenCode** и **Qwen Code**: бот запускает агента как подпроцесс на той машине, где он установлен, и общается с ним по [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC через stdin/stdout). Каждый пользователь выбирает движок сам (`/engine`), движок по умолчанию задаётся в `.env`. Ответы приходят со стримингом, ходом работы агента и кнопками подтверждения действий.
 

@@ -269,7 +269,7 @@ async function main() {
     const c = sweepUpdateLimits() + sweepUnknownUsers() + sweepLangCache();
     if (c) log(`удалено старых записей кэша обновлений: ${c}`);
   };
-  sweep();
+  await sweep();
   setInterval(sweep, 24 * 3600_000).unref();
   // токены доступа к Git истекают: владельцу аккаунта — напоминание за неделю, за день и по истечении
   const remind = () => {

@@ -12,11 +12,11 @@ ARG ENGINES="gemini claude codex agy opencode qwen"
 #   docker compose build --build-arg GEMINI_CLI_VERSION=... (и так же для остальных)
 # Antigravity CLI ставится официальным скриптом и всегда берёт последнюю версию (закрепить её нечем).
 ARG GEMINI_CLI_VERSION=0.67.0
-ARG CLAUDE_ACP_VERSION=latest
-ARG CODEX_CLI_VERSION=latest
-ARG CODEX_ACP_VERSION=latest
-ARG OPENCODE_VERSION=latest
-ARG QWEN_VERSION=latest
+ARG CLAUDE_ACP_VERSION=0.113.0
+ARG CODEX_CLI_VERSION=0.172.0
+ARG CODEX_ACP_VERSION=2.12.1
+ARG OPENCODE_VERSION=1.19.6
+ARG QWEN_VERSION=0.29.0
 
 # tini — init-процесс: передаёт сигналы боту и забирает завершённые процессы агентов (без «зомби»).
 # git и ripgrep нужны агенту для работы с кодом; curl — для установщика Antigravity CLI.
@@ -56,8 +56,13 @@ ENV PATH="/home/node/.local/bin:${PATH}"
 
 # Antigravity CLI (agy): официальный установщик кладёт бинарник в ~/.local/bin. Нужна версия 1.5+ с подкомандой acp.
 # Сборка падает, если установка не удалась или подкоманды acp нет, — без этого движок молча не работал бы.
+ARG AGY_INSTALLER_URL=https://antigravity.google/cli/install.sh
+ARG AGY_INSTALLER_SHA256=62966c07365423bd4dc209355060744058fb30d60f5323e2d360e39de64e5042
 RUN case " $ENGINES " in *" agy "*) \
-      curl -fsSL https://antigravity.google/cli/install.sh | bash \
+      curl -fsSL "$AGY_INSTALLER_URL" -o /tmp/agy-install.sh \
+      && echo "$AGY_INSTALLER_SHA256  /tmp/agy-install.sh" | sha256sum --check - \
+      && bash /tmp/agy-install.sh \
+      && rm -f /tmp/agy-install.sh \
       && agy --version \
       && agy acp --help >/dev/null ;; \
     esac

@@ -75,6 +75,41 @@ jobs:
           for f in *; do cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"; done
           gh release upload "$GITHUB_REF_NAME" ./*.sigstore.json --repo "$GITHUB_REPOSITORY"
 
+  # GitHub build provenance attestations, also exported as release assets (*.intoto.jsonl) so OpenSSF Scorecard's
+  # Signed-Releases check can detect provenance (it looks for release assets, not the attestations API/store).
+  provenance:
+    name: Attest release provenance
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload provenance assets to the release
+      id-token: write # GitHub attestation OIDC identity
+      attestations: write # create build provenance attestations
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir assets && cd assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          rm -f ./*.sigstore.json
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+      - name: Upload provenance to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd assets
+          for f in *; do
+            gh attestation download "$f" --repo "$GITHUB_REPOSITORY" --predicate-type https://slsa.dev/provenance/v1 --limit 1
+            bundle=$(ls -1 *.jsonl 2>/dev/null | head -n 1)
+            if [ -z "$bundle" ]; then echo "::error::no provenance bundle for $f"; exit 1; fi
+            mv "$bundle" "$f.intoto.jsonl"
+          done
+          gh release upload "$GITHUB_REF_NAME" ./*.intoto.jsonl --repo "$GITHUB_REPOSITORY" --clobber
+
   notify:
     name: Announce release
     needs: release

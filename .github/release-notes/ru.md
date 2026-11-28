@@ -1,5 +1,4 @@
-- Новый движок: **Qwen Code** через ACP — выбирается в `/engine`, как и другие агенты.
-- По умолчанию Qwen Code работает с бесплатными tool-capable моделями OpenRouter; свой список задаётся через `QWEN_MODELS`.
-- Если Qwen Code уже настроен на машине, AcpGram импортирует модели из глобального `~/.qwen/settings.json` (или `QWEN_SETTINGS_FILE`) в sandbox пользователя, не копируя секреты; выбранная модель сохраняется.
-- Другой OpenAI-совместимый API можно подключить через `QWEN_BASE_URL` и `OPENAI_API_KEY`.
-- Мастер настройки предлагает ключ OpenRouter для Qwen Code, а Docker-образ умеет ставить Qwen Code вместе с другими движками.
+- В артефакты релиза теперь добавляются GitHub build-provenance attestations (`*.intoto.jsonl`) рядом с Sigstore-подписями для OpenSSF Scorecard.
+- Docker-образ фиксирует версии npm-пакетов CLI-движков и проверяет SHA256 установщика Antigravity перед запуском.
+- В документации по безопасности добавлена проверка provenance через `gh attestation verify`.
+- В README добавлены ссылки на новостные Telegram-каналы AcpGram.

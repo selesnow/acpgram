@@ -28,13 +28,15 @@ security advisory and you are credited, if you wish.
 - The npm package is published from GitHub Actions with **provenance** (Trusted Publishing, no stored npm token),
   so the package can be traced back to the exact commit it was built from.
 - The package has no runtime npm dependencies (ESLint is a development-only tool and is not installed with the package).
-- Every GitHub Release file is signed with [Sigstore](https://www.sigstore.dev/) (keyless, `<file>.sigstore.json` next to it). To verify a download:
+- Every GitHub Release file is signed with [Sigstore](https://www.sigstore.dev/) (keyless, `<file>.sigstore.json` next to it) and has a GitHub build-provenance attestation attached as `<file>.intoto.jsonl` (for OpenSSF Scorecard Signed-Releases). To verify a download:
 
   ```sh
   cosign verify-blob --bundle acpgram-vX.Y.Z.tar.gz.sigstore.json \
     --certificate-identity-regexp '^https://github.com/selesnow/acpgram/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     acpgram-vX.Y.Z.tar.gz
+
+  gh attestation verify acpgram-vX.Y.Z.tar.gz -R selesnow/acpgram
   ```
 
 ## Scope and safety notes

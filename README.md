@@ -16,6 +16,8 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16722/badge)](https://www.bestpractices.dev/projects/16722)
 
 **English** · [Русский](README.ru.md) · [Website](https://alexey-seleznev.pro/acpgram/)
+**News channels:** [@acpgram](https://t.me/acpgram) (English) · [@acpgram_ru](https://t.me/acpgram_ru) (Russian) · [@acpgram_ua](https://t.me/acpgram_ua) (Ukrainian)
+
 
 A Telegram gateway to AI coding agents — **Gemini CLI**, **Claude Code**, **Antigravity CLI**, **OpenAI Codex**, **OpenCode** and **Qwen Code**. The bot runs the agent as a subprocess on the machine where it is installed and talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (JSON-RPC over stdin/stdout). You write a task in Telegram; the agent works in the selected project on your server, PC or laptop, and you watch its progress, approve its actions and get the answer right in the chat.
 
